@@ -1,0 +1,15 @@
+[package]
+name = "kokino-fuzz"
+description = "Mutation fuzzer for Kokino's evidence parsers (stable Rust, no sanitizers)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+kokino-image.workspace = true
+kokino-ntfs.workspace = true
+kokino-fat.workspace = true
+kokino-artifacts.workspace = true
+kokino-analysis.workspace = true

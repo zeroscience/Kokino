@@ -1,0 +1,15 @@
+//! Artifact parsers. Each works on bytes the caller read from the evidence,
+//! so the parsers never see or touch the image itself.
+
+#![forbid(unsafe_code)]
+
+pub mod bin;
+pub mod browser;
+pub mod cfb;
+pub mod evtx;
+pub mod jumplist;
+pub mod lnk;
+pub mod prefetch;
+pub mod registry;
+pub mod sqlite;
+pub mod xpress;

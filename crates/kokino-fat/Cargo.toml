@@ -1,0 +1,13 @@
+[package]
+name = "kokino-fat"
+description = "FAT12/16/32 and exFAT reader: live and deleted entries, long names, cluster chains"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+kokino-core.workspace = true
+kokino-ntfs.workspace = true
+anyhow.workspace = true
+chrono.workspace = true

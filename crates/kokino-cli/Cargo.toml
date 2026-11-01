@@ -1,0 +1,26 @@
+[package]
+name = "kokino-cli"
+description = "Kokino Forensic Toolkit command line and GUI launcher"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "kokino"
+path = "src/main.rs"
+
+[dependencies]
+kokino-core.workspace = true
+kokino-image.workspace = true
+kokino-ntfs.workspace = true
+kokino-analysis.workspace = true
+kokino-server.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+open.workspace = true
+rpassword.workspace = true

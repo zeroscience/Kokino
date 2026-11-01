@@ -1,0 +1,88 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/kokino-core",
+    "crates/kokino-image",
+    "crates/kokino-ntfs",
+    "crates/kokino-fat",
+    "crates/kokino-analysis",
+    "crates/kokino-artifacts",
+    "crates/kokino-server",
+    "crates/kokino-cli",
+    "crates/kokino-fuzz",
+]
+
+[workspace.package]
+version = "1.2.5"
+edition = "2021"
+authors = ["Zero Science Lab"]
+license = "Apache-2.0"
+repository = "https://github.com/zeroscience/Kokino"
+rust-version = "1.80"
+
+[workspace.dependencies]
+kokino-core = { path = "crates/kokino-core" }
+kokino-image = { path = "crates/kokino-image" }
+kokino-ntfs = { path = "crates/kokino-ntfs" }
+kokino-fat = { path = "crates/kokino-fat" }
+kokino-analysis = { path = "crates/kokino-analysis" }
+kokino-artifacts = { path = "crates/kokino-artifacts" }
+kokino-server = { path = "crates/kokino-server" }
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+sha2 = "0.10"
+sha1 = "0.10"
+md-5 = "0.10"
+hex = "0.4"
+uuid = { version = "1", features = ["v4", "serde"] }
+ntfs = "0.4"
+flate2 = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal"] }
+axum = "0.8"
+tower-http = { version = "0.6", features = ["set-header"] }
+rust-embed = "8"
+mime_guess = "2"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rand = "0.8"
+open = "5"
+argon2 = "0.5"
+# Bundled SQLite: no system library needed, same version on every platform.
+rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
+regex = "1"
+rpassword = "7"
+axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+
+# Keep debug builds small on disk: full debug info for our crates only,
+# line tables for dependencies, no incremental cache (it grew to GBs).
+[profile.dev]
+incremental = false
+[profile.dev.package."*"]
+debug = "line-tables-only"
+
+# Password hashing is deliberately expensive; keep debug builds usable.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# Parser fuzzing (crates/kokino-fuzz): optimized, but integer overflow and
+# debug assertions panic, so arithmetic on hostile length fields shows up.
+[profile.fuzz]
+inherits = "release"
+lto = false
+codegen-units = 16
+overflow-checks = true
+debug-assertions = true
+debug = "line-tables-only"

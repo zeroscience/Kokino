@@ -1,0 +1,10 @@
+# Test data and fuzz seeds are compared byte for byte: never convert line endings.
+tests/fixtures/** binary
+crates/kokino-fuzz/seeds/** binary
+# Run on macOS and Linux.
+*.command text eol=lf
+*.sh text eol=lf
+packaging/linux/kokino.desktop text eol=lf
+*.png binary
+*.ico binary
+*.jpg binary

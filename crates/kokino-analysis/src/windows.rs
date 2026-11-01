@@ -1,0 +1,1298 @@
+//! Windows system artifacts found on an NTFS volume.
+//!
+//! Locates the registry hives (SYSTEM, SOFTWARE, SAM, every NTUSER.DAT,
+//! Amcache.hve), event logs, Prefetch files, Recent-folder shortcuts and
+//! Jump Lists by their Windows paths, deleted copies included, reads them
+//! through the NTFS layer and turns them into what an examiner asks first:
+//! which computer and accounts, which USB devices and networks, what was
+//! installed and set to start automatically, what ran, which files and
+//! folders were opened, and the notable events (logons, log clearing,
+//! service and account creation, remote desktop, PowerShell).
+
+use crate::FileRow;
+use kokino_artifacts::registry::{Hive, Key};
+use kokino_artifacts::{evtx, jumplist, lnk, prefetch, registry};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::{BTreeMap, HashMap};
+use std::io::{Read, Seek};
+
+/// Files larger than this are listed with an error instead of parsed.
+const MAX_HIVE: u64 = 1 << 30;
+const MAX_LOG: u64 = 2 << 30;
+/// Notable events kept per log (counts are always complete).
+const MAX_EVENTS_PER_LOG: usize = 50_000;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WindowsArtifacts {
+    pub computer: Computer,
+    pub users: Vec<UserAccount>,
+    pub usb: Vec<UsbDevice>,
+    pub networks: Vec<NetworkProfile>,
+    pub interfaces: Vec<NetInterface>,
+    pub programs: Vec<InstalledProgram>,
+    pub autoruns: Vec<Autorun>,
+    pub execution: Vec<Execution>,
+    pub access: Vec<FileAccess>,
+    pub events: Vec<WinEvent>,
+    /// (channel, event id, count) over every record of every log.
+    pub event_counts: Vec<(String, u32, u64)>,
+    pub logs: Vec<LogSummary>,
+    /// Every artifact file that was read, with what happened.
+    pub sources: Vec<Source>,
+    pub timeline: Vec<WinTime>,
+}
+
+impl WindowsArtifacts {
+    pub fn is_empty(&self) -> bool {
+        self.sources.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Computer {
+    pub name: String,
+    pub os: String,
+    pub edition: String,
+    pub version: String,
+    pub build: String,
+    pub install_time: u64,
+    pub owner: String,
+    pub organization: String,
+    pub time_zone: String,
+    /// Minutes to add to local time to get UTC (Windows' ActiveTimeBias).
+    pub active_bias_minutes: Option<i32>,
+    pub last_shutdown: u64,
+    pub control_set: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UserAccount {
+    pub name: String,
+    pub rid: Option<u32>,
+    pub sid: String,
+    pub profile: String,
+    pub created: u64,
+    pub last_logon: u64,
+    pub password_set: u64,
+    pub last_failed: u64,
+    pub logon_count: u32,
+    pub failed_count: u32,
+    pub disabled: bool,
+    /// "SAM", "profile" or both.
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UsbDevice {
+    pub vendor: String,
+    pub product: String,
+    pub revision: String,
+    pub serial: String,
+    pub name: String,
+    pub drive_letter: String,
+    pub first_connected: u64,
+    pub last_connected: u64,
+    pub last_removed: u64,
+    pub key_written: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NetworkProfile {
+    pub name: String,
+    pub description: String,
+    pub kind: String,
+    pub category: String,
+    pub created: u64,
+    pub last_connected: u64,
+    pub gateway_mac: String,
+    pub dns_suffix: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NetInterface {
+    pub guid: String,
+    pub ip: String,
+    pub dhcp_server: String,
+    pub domain: String,
+    pub gateway: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InstalledProgram {
+    pub name: String,
+    pub version: String,
+    pub publisher: String,
+    pub install_date: u64,
+    pub location: String,
+    pub key_written: u64,
+    pub wow64: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Autorun {
+    /// "Run key" or "Service"
+    pub kind: String,
+    pub location: String,
+    pub name: String,
+    pub command: String,
+    pub user: String,
+    pub written: u64,
+    pub start: String,
+    /// Runs from a user-writable or otherwise unusual location.
+    pub unusual: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Execution {
+    /// Prefetch, UserAssist, ShimCache, Amcache or "Event 4688"
+    pub source: String,
+    pub program: String,
+    pub user: String,
+    pub count: Option<u32>,
+    /// Newest first.
+    pub times: Vec<u64>,
+    pub sha1: String,
+    pub detail: String,
+    /// Artifact file (index into the volume's files).
+    pub file: Option<u32>,
+    pub deleted: bool,
+    /// Matches a known wiping / anti-forensic tool.
+    pub tool: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FileAccess {
+    /// LNK, Jump List, RecentDocs, TypedPaths, RunMRU or "Explorer search"
+    pub source: String,
+    pub user: String,
+    pub path: String,
+    /// Last opened / used.
+    pub time: u64,
+    /// First opened, when known.
+    pub first: u64,
+    pub count: Option<u32>,
+    pub drive_type: String,
+    pub volume_label: String,
+    pub volume_serial: String,
+    pub machine: String,
+    pub mac: String,
+    pub app_id: String,
+    pub pinned: bool,
+    pub file: Option<u32>,
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WinEvent {
+    pub time: u64,
+    pub channel: String,
+    pub event_id: u32,
+    pub record_id: u64,
+    pub category: String,
+    pub title: String,
+    pub summary: String,
+    pub user: String,
+    pub ip: String,
+    pub computer: String,
+    pub data: Vec<(String, String)>,
+    pub file: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LogSummary {
+    pub file: u32,
+    pub path: String,
+    pub channel: String,
+    pub info: evtx::LogInfo,
+    pub notable: u64,
+    pub deleted: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Source {
+    pub file: u32,
+    pub path: String,
+    pub kind: String,
+    pub deleted: bool,
+    pub error: Option<String>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WinTime {
+    pub t: u64,
+    /// EXEC, OPEN, USB, INST, NET or EVT
+    pub kind: String,
+    pub what: String,
+    pub detail: String,
+}
+
+// ------------------------------------------------------------------ collect
+
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    System,
+    Software,
+    Sam,
+    NtUser,
+    Amcache,
+    Evtx,
+    Prefetch,
+    Lnk,
+    JumpList,
+}
+
+fn classify(path: &str) -> Option<Kind> {
+    let p = path.to_ascii_lowercase();
+    let parts: Vec<&str> = p.split('/').collect();
+    match p.as_str() {
+        "/windows/system32/config/system" => return Some(Kind::System),
+        "/windows/system32/config/software" => return Some(Kind::Software),
+        "/windows/system32/config/sam" => return Some(Kind::Sam),
+        "/windows/appcompat/programs/amcache.hve" => return Some(Kind::Amcache),
+        _ => {}
+    }
+    if parts.len() == 4 && parts[1] == "users" && parts[3] == "ntuser.dat" {
+        return Some(Kind::NtUser);
+    }
+    if p.starts_with("/windows/system32/winevt/logs/") && p.ends_with(".evtx") {
+        return Some(Kind::Evtx);
+    }
+    if p.starts_with("/windows/prefetch/") && p.ends_with(".pf") {
+        return Some(Kind::Prefetch);
+    }
+    if parts.len() >= 4 && parts[1] == "users" {
+        let rest = parts[3..].join("/");
+        if rest.starts_with("appdata/roaming/microsoft/windows/recent/automaticdestinations/") || rest.starts_with("appdata/roaming/microsoft/windows/recent/customdestinations/") {
+            return Some(Kind::JumpList);
+        }
+        if p.ends_with(".lnk") && (rest.starts_with("appdata/roaming/microsoft/windows/recent/") || rest.starts_with("appdata/roaming/microsoft/office/recent/")) {
+            return Some(Kind::Lnk);
+        }
+    }
+    None
+}
+
+fn user_of(path: &str) -> String {
+    let parts: Vec<&str> = path.split('/').collect();
+    if parts.len() > 2 && parts[1].eq_ignore_ascii_case("users") { parts[2].to_string() } else { String::new() }
+}
+
+pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow], progress: crate::Progress) -> WindowsArtifacts {
+    let mut w = WindowsArtifacts::default();
+    // Live copies first, so deleted ones never shadow them.
+    let mut found: Vec<(usize, Kind)> = files.iter().enumerate().filter(|(_, f)| !f.e.is_dir && f.e.size > 0).filter_map(|(i, f)| classify(&f.e.path).map(|k| (i, k))).collect();
+    found.sort_by_key(|(i, _)| (files[*i].e.deleted, *i));
+    let total = found.len() as u64;
+    let mut hives: Vec<(Kind, usize, Hive)> = vec![];
+    for (n, (i, kind)) in found.into_iter().enumerate() {
+        if !progress("Windows artifacts", n as u64, total) {
+            break;
+        }
+        let f = &files[i];
+        let limit = if kind == Kind::Evtx { MAX_LOG } else { MAX_HIVE };
+        let mut src = Source { file: i as u32, path: f.e.path.clone(), deleted: f.e.deleted, kind: kind_name(kind).into(), ..Default::default() };
+        let data = if f.e.size > limit {
+            Err(anyhow::anyhow!("{} bytes; larger than the {} byte limit", f.e.size, limit))
+        } else {
+            fs.read(r, &f.e, "", 0, f.e.size as usize)
+        };
+        let res = data.and_then(|d| match kind {
+            Kind::System | Kind::Software | Kind::Sam | Kind::NtUser | Kind::Amcache => {
+                // A deleted hive is reported but not used when a live one exists.
+                if f.e.deleted && hives.iter().any(|(k, j, _)| *k == kind && (kind != Kind::NtUser || user_of(&files[*j].e.path).eq_ignore_ascii_case(&user_of(&f.e.path)))) {
+                    src.note = Some("older deleted copy; the live hive is used".into());
+                    return Ok(());
+                }
+                let h = Hive::parse(d)?;
+                if h.dirty {
+                    src.note = Some("hive was not cleanly saved: recent changes may still be in its .LOG1/.LOG2 files, which are not applied".into());
+                }
+                hives.push((kind, i, h));
+                Ok(())
+            }
+            Kind::Evtx => {
+                events(&mut w, &d, i, f);
+                Ok(())
+            }
+            Kind::Prefetch => {
+                let pf = prefetch::parse(&d)?;
+                prefetch_exec(&mut w, pf, i, f);
+                Ok(())
+            }
+            Kind::Lnk => {
+                let l = lnk::parse(&d)?;
+                lnk_access(&mut w, l, i, f);
+                Ok(())
+            }
+            Kind::JumpList => {
+                let jl = jumplist::parse(&f.e.name, &d)?;
+                jump_access(&mut w, jl, i, f);
+                Ok(())
+            }
+        });
+        if let Err(e) = res {
+            src.error = Some(format!("{:#}", e));
+        }
+        w.sources.push(src);
+    }
+
+    // Hives in a fixed order: SYSTEM decides the control set, SOFTWARE gives
+    // profile SIDs that SAM accounts are matched against.
+    hives.sort_by_key(|(k, _, _)| match k {
+        Kind::System => 0,
+        Kind::Software => 1,
+        Kind::Sam => 2,
+        Kind::Amcache => 3,
+        _ => 4,
+    });
+    for (kind, i, h) in &hives {
+        let f = &files[*i];
+        match kind {
+            Kind::System => system_hive(&mut w, h),
+            Kind::Software => software_hive(&mut w, h),
+            Kind::Sam => sam_hive(&mut w, h),
+            Kind::Amcache => amcache_hive(&mut w, h, *i),
+            Kind::NtUser => ntuser_hive(&mut w, h, &user_of(&f.e.path), *i),
+            _ => {}
+        }
+    }
+    finish(&mut w);
+    w
+}
+
+fn kind_name(k: Kind) -> &'static str {
+    match k {
+        Kind::System => "SYSTEM hive",
+        Kind::Software => "SOFTWARE hive",
+        Kind::Sam => "SAM hive",
+        Kind::NtUser => "NTUSER.DAT",
+        Kind::Amcache => "Amcache.hve",
+        Kind::Evtx => "Event log",
+        Kind::Prefetch => "Prefetch",
+        Kind::Lnk => "Shortcut (LNK)",
+        Kind::JumpList => "Jump List",
+    }
+}
+
+fn base_name(p: &str) -> &str {
+    p.rsplit(['\\', '/']).next().unwrap_or(p)
+}
+
+fn is_tool(program: &str) -> bool {
+    crate::antiforensics::tool_name(base_name(program)).is_some()
+}
+
+// ------------------------------------------------------------------ registry
+
+fn system_hive(w: &mut WindowsArtifacts, h: &Hive) {
+    let current = h.open("Select").and_then(|k| k.u32("Current")).unwrap_or(1);
+    let cs_name = format!("ControlSet{:03}", current);
+    let Some(cs) = h.open(&cs_name) else { return };
+    w.computer.control_set = cs_name;
+    if let Some(n) = cs.open("Control\\ComputerName\\ComputerName").and_then(|k| k.string("ComputerName")) {
+        w.computer.name = n;
+    }
+    if let Some(tz) = cs.open("Control\\TimeZoneInformation") {
+        w.computer.time_zone = tz.string("TimeZoneKeyName").or_else(|| tz.string("StandardName")).unwrap_or_default();
+        w.computer.active_bias_minutes = tz.u32("ActiveTimeBias").map(|v| v as i32);
+    }
+    if let Some(t) = cs.open("Control\\Windows").and_then(|k| k.u64("ShutdownTime")) {
+        w.computer.last_shutdown = kokino_artifacts::bin::plausible(t);
+    }
+    // Drive letters from MountedDevices: "\DosDevices\E:" -> device path with the serial.
+    let mut letters: Vec<(String, String)> = vec![];
+    if let Some(md) = h.open("MountedDevices") {
+        for v in md.values() {
+            if let Some(l) = v.name.strip_prefix("\\DosDevices\\") {
+                letters.push((l.to_string(), kokino_artifacts::bin::utf16(&v.data).to_ascii_lowercase()));
+            }
+        }
+    }
+    if let Some(usbstor) = cs.open("Enum\\USBSTOR") {
+        for class in usbstor.subkeys() {
+            let cname = class.name();
+            let field = |tag: &str| cname.split('&').find_map(|p| p.strip_prefix(tag)).unwrap_or("").replace('_', " ");
+            for inst in class.subkeys() {
+                let serial_key = inst.name();
+                let prop = |id: &str| {
+                    inst.open(&format!("Properties\\{{83da6326-97a6-4088-9453-a1923f573b29}}\\{}", id))
+                        .and_then(|k| k.values().into_iter().next())
+                        .and_then(|v| kokino_artifacts::bin::u64_at(&v.data, 0))
+                        .map(kokino_artifacts::bin::plausible)
+                        .unwrap_or(0)
+                };
+                let serial = serial_key.strip_suffix("&0").unwrap_or(&serial_key).to_string();
+                let lc = serial_key.to_ascii_lowercase();
+                w.usb.push(UsbDevice {
+                    vendor: field("Ven_"),
+                    product: field("Prod_"),
+                    revision: field("Rev_"),
+                    name: inst.string("FriendlyName").unwrap_or_default(),
+                    drive_letter: letters.iter().find(|(_, dev)| dev.contains(&format!("#{}#", lc))).map(|(l, _)| l.clone()).unwrap_or_default(),
+                    first_connected: prop("0064"),
+                    last_connected: prop("0066"),
+                    last_removed: prop("0067"),
+                    key_written: inst.last_written(),
+                    serial,
+                });
+            }
+        }
+    }
+    if let Some(ifs) = cs.open("Services\\Tcpip\\Parameters\\Interfaces") {
+        for i in ifs.subkeys() {
+            let first = |names: &[&str]| names.iter().find_map(|n| i.value(n).map(|v| if v.kind == registry::REG_MULTI_SZ { v.multi().join(", ") } else { v.string() }).filter(|s| !s.is_empty() && s != "0.0.0.0")).unwrap_or_default();
+            let ip = first(&["DhcpIPAddress", "IPAddress"]);
+            if ip.is_empty() {
+                continue;
+            }
+            w.interfaces.push(NetInterface { guid: i.name(), ip, dhcp_server: first(&["DhcpServer"]), domain: first(&["DhcpDomain", "Domain"]), gateway: first(&["DhcpDefaultGateway", "DefaultGateway"]) });
+        }
+    }
+    if let Some(svcs) = cs.open("Services") {
+        for s in svcs.subkeys() {
+            let (Some(img), Some(start), Some(ty)) = (s.string("ImagePath"), s.u32("Start"), s.u32("Type")) else { continue };
+            // Auto-start user-mode services from unusual places; the rest is noise here.
+            if start > 2 || ty & 0x30 == 0 || !unusual_path(&img) {
+                continue;
+            }
+            w.autoruns.push(Autorun {
+                kind: "Service".into(),
+                location: format!("SYSTEM\\{}\\Services\\{}", w.computer.control_set, s.name()),
+                name: s.string("DisplayName").unwrap_or_else(|| s.name()),
+                command: img,
+                written: s.last_written(),
+                start: ["boot", "system", "automatic"].get(start as usize).unwrap_or(&"").to_string(),
+                unusual: true,
+                ..Default::default()
+            });
+        }
+    }
+    if let Some(v) = cs.open("Control\\Session Manager\\AppCompatCache").and_then(|k| k.value("AppCompatCache")) {
+        for (path, modified) in shimcache(&v.data) {
+            w.execution.push(Execution {
+                source: "ShimCache".into(),
+                tool: is_tool(&path),
+                program: path,
+                detail: format!("file last modified {}; on Windows 10+ an entry is not proof that it ran", iso(modified)),
+                ..Default::default()
+            });
+        }
+    }
+}
+
+/// Executables run from places normal software does not live.
+fn unusual_path(cmd: &str) -> bool {
+    let c = cmd.to_ascii_lowercase().replace('/', "\\");
+    let normal = [
+        "\\windows\\",
+        "%systemroot%",
+        "%windir%",
+        "system32\\",
+        "\\program files",
+        "\\programdata\\microsoft\\windows defender",
+        // Microsoft's own per-user installs
+        "\\appdata\\local\\microsoft\\onedrive\\",
+        "\\appdata\\local\\microsoft\\teams\\",
+    ];
+    !normal.iter().any(|n| c.contains(n)) || c.contains("\\users\\public") || c.contains("\\temp\\") || c.contains("\\appdata\\local\\temp")
+}
+
+/// Windows 8.1 / 10 / 11 AppCompatCache entries: (path, file modified time).
+fn shimcache(d: &[u8]) -> Vec<(String, u64)> {
+    use kokino_artifacts::bin::*;
+    let header = u32_at(d, 0).unwrap_or(0) as usize;
+    let win81 = header == 0x80;
+    if !(header == 0x30 || header == 0x34 || win81) {
+        return vec![];
+    }
+    let mut out = vec![];
+    let mut p = header;
+    while out.len() < 10_000 && (slice(d, p, 4) == Some(b"10ts") || slice(d, p, 4) == Some(b"00ts")) {
+        let size = u32_at(d, p + 8).unwrap_or(0) as usize;
+        let b = p + 12;
+        let plen = u16_at(d, b).unwrap_or(0) as usize;
+        let path = utf16(slice(d, b + 2, plen).unwrap_or(&[]));
+        let mut q = b + 2 + plen;
+        if win81 {
+            q += 2 + u16_at(d, q).unwrap_or(0) as usize + 8; // package name, flags + unknown
+        }
+        out.push((path, plausible(u64_at(d, q).unwrap_or(0))));
+        if size == 0 {
+            break;
+        }
+        p = b + size;
+    }
+    out
+}
+
+fn software_hive(w: &mut WindowsArtifacts, h: &Hive) {
+    if let Some(cv) = h.open("Microsoft\\Windows NT\\CurrentVersion") {
+        let build = cv.string("CurrentBuild").or_else(|| cv.string("CurrentBuildNumber")).unwrap_or_default();
+        let mut os = cv.string("ProductName").unwrap_or_default();
+        // Windows 11 still reports "Windows 10" in ProductName.
+        if build.parse::<u32>().map(|b| b >= 22_000).unwrap_or(false) && os.contains("Windows 10") {
+            os = os.replace("Windows 10", "Windows 11");
+        }
+        w.computer.os = os;
+        w.computer.edition = cv.string("EditionID").unwrap_or_default();
+        w.computer.version = cv.string("DisplayVersion").or_else(|| cv.string("ReleaseId")).unwrap_or_default();
+        w.computer.build = match cv.u32("UBR") {
+            Some(u) if !build.is_empty() => format!("{}.{}", build, u),
+            _ => build,
+        };
+        w.computer.install_time = cv
+            .u64("InstallTime")
+            .map(kokino_artifacts::bin::plausible)
+            .filter(|t| *t > 0)
+            .or_else(|| cv.u32("InstallDate").and_then(|s| kokino_artifacts::bin::unix_to_filetime(s as i64)))
+            .unwrap_or(0);
+        w.computer.owner = cv.string("RegisteredOwner").unwrap_or_default();
+        w.computer.organization = cv.string("RegisteredOrganization").unwrap_or_default();
+        if let Some(pl) = cv.subkey("ProfileList") {
+            for p in pl.subkeys() {
+                let sid = p.name();
+                if !sid.starts_with("S-1-5-21-") {
+                    continue;
+                }
+                let profile = p.string("ProfileImagePath").unwrap_or_default();
+                w.users.push(UserAccount {
+                    name: profile.rsplit('\\').next().unwrap_or("").to_string(),
+                    rid: sid.rsplit('-').next().and_then(|r| r.parse().ok()),
+                    sid,
+                    profile,
+                    created: p.last_written(),
+                    source: "profile".into(),
+                    ..Default::default()
+                });
+            }
+        }
+        if let Some(nl) = cv.subkey("NetworkList") {
+            let mut macs: HashMap<String, (String, String)> = HashMap::new();
+            for kind in ["Signatures\\Unmanaged", "Signatures\\Managed"] {
+                if let Some(s) = nl.open(kind) {
+                    for sig in s.subkeys() {
+                        let mac = sig.value("DefaultGatewayMac").map(|v| v.data.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(":")).unwrap_or_default();
+                        if let Some(g) = sig.string("ProfileGuid") {
+                            macs.insert(g.to_ascii_lowercase(), (mac, sig.string("DnsSuffix").unwrap_or_default()));
+                        }
+                    }
+                }
+            }
+            if let Some(profiles) = nl.subkey("Profiles") {
+                for p in profiles.subkeys() {
+                    let st = |n: &str| p.value(n).and_then(|v| kokino_artifacts::bin::systemtime(&v.data)).unwrap_or(0);
+                    let (gateway_mac, dns_suffix) = macs.get(&p.name().to_ascii_lowercase()).cloned().unwrap_or_default();
+                    w.networks.push(NetworkProfile {
+                        name: p.string("ProfileName").unwrap_or_default(),
+                        description: p.string("Description").unwrap_or_default(),
+                        kind: match p.u32("NameType") {
+                            Some(0x47) => "wireless",
+                            Some(0x06) => "wired",
+                            Some(0x17) => "mobile broadband",
+                            _ => "other",
+                        }
+                        .into(),
+                        category: match p.u32("Category") {
+                            Some(0) => "public",
+                            Some(1) => "private",
+                            Some(2) => "domain",
+                            _ => "",
+                        }
+                        .into(),
+                        created: st("DateCreated"),
+                        last_connected: st("DateLastConnected"),
+                        gateway_mac,
+                        dns_suffix,
+                    });
+                }
+            }
+        }
+    }
+    for (path, wow64) in [("Microsoft\\Windows\\CurrentVersion\\Uninstall", false), ("WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall", true)] {
+        let Some(u) = h.open(path) else { continue };
+        for p in u.subkeys() {
+            let Some(name) = p.string("DisplayName") else { continue };
+            if p.u32("SystemComponent") == Some(1) {
+                continue;
+            }
+            w.programs.push(InstalledProgram {
+                name,
+                version: p.string("DisplayVersion").unwrap_or_default(),
+                publisher: p.string("Publisher").unwrap_or_default(),
+                install_date: p.string("InstallDate").and_then(|s| yyyymmdd(&s)).unwrap_or(0),
+                location: p.string("InstallLocation").unwrap_or_default(),
+                key_written: p.last_written(),
+                wow64,
+            });
+        }
+    }
+    for path in ["Microsoft\\Windows\\CurrentVersion\\Run", "Microsoft\\Windows\\CurrentVersion\\RunOnce", "WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run", "WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\RunOnce"] {
+        run_key(w, h.open(path), &format!("SOFTWARE\\{}", path), "");
+    }
+}
+
+fn run_key(w: &mut WindowsArtifacts, k: Option<Key<'_>>, location: &str, user: &str) {
+    let Some(k) = k else { return };
+    for v in k.values() {
+        let command = v.string();
+        if command.is_empty() {
+            continue;
+        }
+        w.autoruns.push(Autorun {
+            kind: "Run key".into(),
+            location: location.into(),
+            name: v.name.clone(),
+            unusual: unusual_path(&command),
+            command,
+            user: user.into(),
+            written: k.last_written(),
+            start: "at logon".into(),
+        });
+    }
+}
+
+fn yyyymmdd(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.len() != 8 || !s.bytes().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let (y, m, d): (u16, u16, u16) = (s[0..4].parse().ok()?, s[4..6].parse().ok()?, s[6..8].parse().ok()?);
+    let st: Vec<u8> = [y, m, 0u16, d, 0, 0, 0, 0].iter().flat_map(|v| v.to_le_bytes()).collect();
+    kokino_artifacts::bin::systemtime(&st)
+}
+
+fn sam_hive(w: &mut WindowsArtifacts, h: &Hive) {
+    use kokino_artifacts::bin::*;
+    let Some(users) = h.open("SAM\\Domains\\Account\\Users") else { return };
+    let Some(names) = users.subkey("Names") else { return };
+    for n in names.subkeys() {
+        let name = n.name();
+        // The default value's type field holds the RID.
+        let Some(rid) = n.values().first().map(|v| v.kind) else { continue };
+        let f = users.subkey(&format!("{:08X}", rid)).and_then(|k| k.value("F")).map(|v| v.data).unwrap_or_default();
+        let acb = u16_at(&f, 56).unwrap_or(0);
+        let mut acct = UserAccount {
+            name: name.clone(),
+            rid: Some(rid),
+            created: n.last_written(),
+            last_logon: plausible(u64_at(&f, 8).unwrap_or(0)),
+            password_set: plausible(u64_at(&f, 24).unwrap_or(0)),
+            last_failed: plausible(u64_at(&f, 40).unwrap_or(0)),
+            failed_count: u16_at(&f, 64).unwrap_or(0) as u32,
+            logon_count: u16_at(&f, 66).unwrap_or(0) as u32,
+            disabled: acb & 0x0001 != 0,
+            source: "SAM".into(),
+            ..Default::default()
+        };
+        if let Some(p) = w.users.iter().position(|u| u.source == "profile" && u.rid == Some(rid)) {
+            let prof = w.users.remove(p);
+            acct.sid = prof.sid;
+            acct.profile = prof.profile;
+            acct.source = "SAM, profile".into();
+        }
+        w.users.push(acct);
+    }
+}
+
+fn amcache_hive(w: &mut WindowsArtifacts, h: &Hive, file: usize) {
+    let Some(inv) = h.open("Root\\InventoryApplicationFile") else { return };
+    for k in inv.subkeys() {
+        let path = k.string("LowerCaseLongPath").unwrap_or_default();
+        if path.is_empty() {
+            continue;
+        }
+        let sha1 = k.string("FileId").map(|s| s.trim_start_matches("0000").to_string()).unwrap_or_default();
+        let detail = [
+            k.string("Publisher").map(|p| format!("publisher {}", p)),
+            k.string("Version").map(|v| format!("version {}", v)),
+            k.string("LinkDate").map(|v| format!("compiled {}", v)),
+            k.u64("Size").map(|s| format!("{} bytes", s)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(", ");
+        w.execution.push(Execution {
+            source: "Amcache".into(),
+            tool: is_tool(&path),
+            program: path,
+            times: vec![k.last_written()],
+            sha1,
+            detail,
+            file: Some(file as u32),
+            ..Default::default()
+        });
+    }
+}
+
+/// Well-known folder GUIDs used in UserAssist value names.
+const KNOWN_FOLDERS: &[(&str, &str)] = &[
+    ("{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}", "C:\\Windows\\System32"),
+    ("{D65231B0-B2F1-4857-A4CE-A8E7C6EA7D27}", "C:\\Windows\\SysWOW64"),
+    ("{F38BF404-1D43-42F2-9305-67DE0B28FC23}", "C:\\Windows"),
+    ("{6D809377-6AF0-444B-8957-A3773F02200E}", "C:\\Program Files"),
+    ("{7C5A40EF-A0FB-4BFC-874A-C0F2E0B9FA8E}", "C:\\Program Files (x86)"),
+    ("{905E63B6-C1BF-494E-B29C-65B732D3D21A}", "C:\\Program Files"),
+];
+
+fn rot13(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'a'..='z' => (((c as u8 - b'a') + 13) % 26 + b'a') as char,
+            'A'..='Z' => (((c as u8 - b'A') + 13) % 26 + b'A') as char,
+            _ => c,
+        })
+        .collect()
+}
+
+fn mru_order(k: &Key<'_>) -> Vec<String> {
+    if let Some(v) = k.value("MRUListEx") {
+        return v.data.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).take_while(|&i| i != u32::MAX).map(|i| i.to_string()).collect();
+    }
+    if let Some(s) = k.string("MRUList") {
+        return s.chars().map(|c| c.to_string()).collect();
+    }
+    let mut v: Vec<String> = k.values().into_iter().map(|v| v.name).collect();
+    v.sort();
+    v
+}
+
+fn ntuser_hive(w: &mut WindowsArtifacts, h: &Hive, user: &str, file: usize) {
+    use kokino_artifacts::bin::*;
+    let exp = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer";
+    if let Some(ua) = h.open(&format!("{}\\UserAssist", exp)) {
+        for g in ua.subkeys() {
+            let Some(count) = g.subkey("Count") else { continue };
+            for v in count.values() {
+                let mut name = rot13(&v.name);
+                if name.starts_with("UEME_") || v.data.len() < 16 {
+                    continue;
+                }
+                for (guid, path) in KNOWN_FOLDERS {
+                    if name.len() >= guid.len() && name[..guid.len()].eq_ignore_ascii_case(guid) {
+                        name = format!("{}{}", path, &name[guid.len()..]);
+                    }
+                }
+                let (runs, last) = if v.data.len() >= 68 {
+                    (u32_at(&v.data, 4).unwrap_or(0), plausible(u64_at(&v.data, 60).unwrap_or(0)))
+                } else {
+                    (u32_at(&v.data, 4).unwrap_or(0).saturating_sub(5), plausible(u64_at(&v.data, 8).unwrap_or(0)))
+                };
+                let focus = u32_at(&v.data, 12).unwrap_or(0);
+                w.execution.push(Execution {
+                    source: "UserAssist".into(),
+                    tool: is_tool(&name),
+                    program: name,
+                    user: user.into(),
+                    count: Some(runs),
+                    times: if last > 0 { vec![last] } else { vec![] },
+                    detail: if v.data.len() >= 68 { format!("in focus {} s", focus / 1000) } else { String::new() },
+                    file: Some(file as u32),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+    let mru = |w: &mut WindowsArtifacts, key: &str, source: &str, decode: &dyn Fn(&registry::Value) -> String| {
+        let Some(k) = h.open(key) else { return };
+        let vals = k.values();
+        for (pos, name) in mru_order(&k).iter().enumerate() {
+            let Some(v) = vals.iter().find(|v| &v.name == name) else { continue };
+            let text = decode(v);
+            if text.is_empty() {
+                continue;
+            }
+            w.access.push(FileAccess {
+                source: source.into(),
+                user: user.into(),
+                path: text,
+                // Only the most recent entry's time is known: the key's last write.
+                time: if pos == 0 { k.last_written() } else { 0 },
+                file: Some(file as u32),
+                ..Default::default()
+            });
+        }
+    };
+    mru(w, &format!("{}\\RecentDocs", exp), "RecentDocs", &|v| utf16(&v.data));
+    mru(w, &format!("{}\\TypedPaths", exp), "TypedPaths", &|v| v.string());
+    mru(w, &format!("{}\\RunMRU", exp), "RunMRU", &|v| v.string().trim_end_matches("\\1").to_string());
+    mru(w, &format!("{}\\WordWheelQuery", exp), "Explorer search", &|v| utf16(&v.data));
+    for path in ["Software\\Microsoft\\Windows\\CurrentVersion\\Run", "Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce"] {
+        run_key(w, h.open(path), &format!("NTUSER.DAT ({})\\{}", user, path), user);
+    }
+}
+
+// ------------------------------------------------------------------ files
+
+fn prefetch_exec(w: &mut WindowsArtifacts, pf: prefetch::Prefetch, i: usize, f: &FileRow) {
+    let program = pf.path.clone().map(|p| strip_volume(&p)).unwrap_or_else(|| pf.executable.clone());
+    let vols: Vec<String> = pf.volumes.iter().map(|v| format!("{} (serial {})", v.device, v.serial)).collect();
+    w.execution.push(Execution {
+        source: "Prefetch".into(),
+        tool: is_tool(&pf.executable),
+        program,
+        count: Some(pf.run_count),
+        times: pf.last_runs.clone(),
+        detail: format!("version {}{}, {} files referenced, volume {}", pf.version, if pf.compressed { " (compressed)" } else { "" }, pf.files.len(), vols.join("; ")),
+        file: Some(i as u32),
+        deleted: f.e.deleted,
+        ..Default::default()
+    });
+}
+
+/// "\VOLUME{...}\USERS\ALICE\X.EXE" -> "\USERS\ALICE\X.EXE"
+fn strip_volume(p: &str) -> String {
+    if p.starts_with("\\VOLUME{") || p.starts_with("\\DEVICE\\") {
+        if let Some(i) = p[1..].find('\\') {
+            return p[i + 1..].to_string();
+        }
+    }
+    p.to_string()
+}
+
+fn lnk_access(w: &mut WindowsArtifacts, l: lnk::Lnk, i: usize, f: &FileRow) {
+    // The shortcut is created the first time the target is opened and
+    // updated each time after: its own $SI times give first and last open.
+    let si = f.e.si.unwrap_or_default();
+    w.access.push(FileAccess {
+        source: "LNK".into(),
+        user: user_of(&f.e.path),
+        path: l.target.clone(),
+        time: si.modified,
+        first: si.created,
+        drive_type: l.drive_type,
+        volume_label: l.volume_label,
+        volume_serial: l.volume_serial,
+        machine: l.machine_id,
+        mac: l.mac,
+        file: Some(i as u32),
+        deleted: f.e.deleted,
+        ..Default::default()
+    });
+}
+
+fn jump_access(w: &mut WindowsArtifacts, jl: jumplist::JumpList, i: usize, f: &FileRow) {
+    for e in jl.entries {
+        let l = e.lnk.clone().unwrap_or_default();
+        w.access.push(FileAccess {
+            source: "Jump List".into(),
+            user: user_of(&f.e.path),
+            path: e.path,
+            time: e.last_access,
+            count: (!jl.custom).then_some(e.access_count),
+            pinned: e.pinned,
+            app_id: jl.app_id.clone(),
+            drive_type: l.drive_type,
+            volume_label: l.volume_label,
+            volume_serial: l.volume_serial,
+            machine: if e.hostname.is_empty() { l.machine_id } else { e.hostname },
+            mac: l.mac,
+            file: Some(i as u32),
+            deleted: f.e.deleted,
+            ..Default::default()
+        });
+    }
+}
+
+// ------------------------------------------------------------------ events
+
+struct Notable {
+    channel: &'static str,
+    id: u32,
+    category: &'static str,
+    title: &'static str,
+}
+
+const TS_LSM: &str = "Microsoft-Windows-TerminalServices-LocalSessionManager/Operational";
+
+const NOTABLE: &[Notable] = &[
+    Notable { channel: "Security", id: 1102, category: "Log cleared", title: "Security log cleared" },
+    Notable { channel: "System", id: 104, category: "Log cleared", title: "Event log cleared" },
+    Notable { channel: "Security", id: 4624, category: "Logon", title: "Logon" },
+    Notable { channel: "Security", id: 4625, category: "Failed logon", title: "Failed logon" },
+    Notable { channel: "Security", id: 4647, category: "Logon", title: "User logged off" },
+    Notable { channel: "Security", id: 4648, category: "Logon", title: "Logon with explicit credentials" },
+    Notable { channel: "Security", id: 4672, category: "Logon", title: "Administrator-level logon" },
+    Notable { channel: "Security", id: 4688, category: "Process", title: "Process created" },
+    Notable { channel: "Security", id: 4697, category: "Service", title: "Service installed" },
+    Notable { channel: "Security", id: 4698, category: "Task", title: "Scheduled task created" },
+    Notable { channel: "Security", id: 4699, category: "Task", title: "Scheduled task deleted" },
+    Notable { channel: "Security", id: 4616, category: "Time change", title: "System time changed" },
+    Notable { channel: "Security", id: 4719, category: "Account", title: "Audit policy changed" },
+    Notable { channel: "Security", id: 4720, category: "Account", title: "User account created" },
+    Notable { channel: "Security", id: 4722, category: "Account", title: "User account enabled" },
+    Notable { channel: "Security", id: 4724, category: "Account", title: "Password reset" },
+    Notable { channel: "Security", id: 4725, category: "Account", title: "User account disabled" },
+    Notable { channel: "Security", id: 4726, category: "Account", title: "User account deleted" },
+    Notable { channel: "Security", id: 4728, category: "Account", title: "Member added to global group" },
+    Notable { channel: "Security", id: 4732, category: "Account", title: "Member added to local group" },
+    Notable { channel: "Security", id: 4756, category: "Account", title: "Member added to universal group" },
+    Notable { channel: "Security", id: 4740, category: "Account", title: "Account locked out" },
+    Notable { channel: "Security", id: 4778, category: "Remote desktop", title: "Session reconnected" },
+    Notable { channel: "Security", id: 4779, category: "Remote desktop", title: "Session disconnected" },
+    Notable { channel: "System", id: 6005, category: "System", title: "Event log service started (boot)" },
+    Notable { channel: "System", id: 6006, category: "System", title: "Event log service stopped (shutdown)" },
+    Notable { channel: "System", id: 6008, category: "System", title: "Unexpected shutdown" },
+    Notable { channel: "System", id: 1074, category: "System", title: "Shutdown or restart initiated" },
+    Notable { channel: "System", id: 41, category: "System", title: "Rebooted without clean shutdown" },
+    Notable { channel: "System", id: 7045, category: "Service", title: "Service installed" },
+    Notable { channel: TS_LSM, id: 21, category: "Remote desktop", title: "Remote desktop logon" },
+    Notable { channel: TS_LSM, id: 23, category: "Remote desktop", title: "Remote desktop logoff" },
+    Notable { channel: TS_LSM, id: 24, category: "Remote desktop", title: "Remote desktop disconnected" },
+    Notable { channel: TS_LSM, id: 25, category: "Remote desktop", title: "Remote desktop reconnected" },
+    Notable { channel: "Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational", id: 1149, category: "Remote desktop", title: "Remote desktop authentication succeeded" },
+    Notable { channel: "Microsoft-Windows-PowerShell/Operational", id: 4104, category: "PowerShell", title: "PowerShell script block" },
+    Notable { channel: "Microsoft-Windows-Windows Defender/Operational", id: 1116, category: "Defender", title: "Malware detected" },
+    Notable { channel: "Microsoft-Windows-Windows Defender/Operational", id: 1117, category: "Defender", title: "Malware action taken" },
+    Notable { channel: "Microsoft-Windows-Windows Defender/Operational", id: 5001, category: "Defender", title: "Real-time protection disabled" },
+    Notable { channel: "Microsoft-Windows-TaskScheduler/Operational", id: 106, category: "Task", title: "Scheduled task registered" },
+    Notable { channel: "Microsoft-Windows-TaskScheduler/Operational", id: 141, category: "Task", title: "Scheduled task deleted" },
+    Notable { channel: "Microsoft-Windows-WLAN-AutoConfig/Operational", id: 8001, category: "Network", title: "Connected to wireless network" },
+];
+
+fn logon_type(t: &str) -> &'static str {
+    match t {
+        "2" => "interactive",
+        "3" => "network",
+        "4" => "batch",
+        "5" => "service",
+        "7" => "unlock",
+        "8" => "network cleartext",
+        "9" => "new credentials",
+        "10" => "remote desktop",
+        "11" => "cached",
+        _ => "",
+    }
+}
+
+/// System and service accounts whose logons are routine noise.
+fn machine_account(e: &evtx::Event) -> bool {
+    let sid = e.get("TargetUserSid").unwrap_or("");
+    let name = e.get("TargetUserName").or(e.get("SubjectUserName")).unwrap_or("");
+    matches!(sid, "S-1-5-18" | "S-1-5-19" | "S-1-5-20" | "S-1-5-7")
+        || name.ends_with('$')
+        || name.starts_with("DWM-")
+        || name.starts_with("UMFD-")
+        || name.eq_ignore_ascii_case("SYSTEM")
+        || name.eq_ignore_ascii_case("LOCAL SERVICE")
+        || name.eq_ignore_ascii_case("NETWORK SERVICE")
+        || name.eq_ignore_ascii_case("ANONYMOUS LOGON")
+}
+
+fn summarize(e: &evtx::Event) -> (String, String, String) {
+    let g = |k: &str| e.get(k).unwrap_or("").to_string();
+    let who = |u: &str, d: &str| if d.is_empty() || d == "-" { u.to_string() } else { format!("{}\\{}", d, u) };
+    let target = who(&g("TargetUserName"), &g("TargetDomainName"));
+    let subject = g("SubjectUserName");
+    let ip = g("IpAddress");
+    let from = |ip: &str, ws: &str| match (ip, ws) {
+        ("", "") => String::new(),
+        (ip, "") => format!(" from {}", ip),
+        ("", ws) => format!(" from {}", ws),
+        (ip, ws) => format!(" from {} ({})", ip, ws),
+    };
+    let s = match (e.channel.as_str(), e.event_id) {
+        ("Security", 1102) => format!("Security log cleared by {}", if subject.is_empty() { "unknown" } else { &subject }),
+        ("System", 104) => format!("{} log cleared by {}", g("Channel"), subject),
+        ("Security", 4624) | ("Security", 4625) => {
+            let lt = g("LogonType");
+            let ip = if ip == "127.0.0.1" || ip == "::1" { String::new() } else { ip.clone() };
+            let kind = if logon_type(&lt).is_empty() { format!("(type {})", lt) } else { format!("({})", logon_type(&lt)) };
+            format!("{} {} {}{}", target, if e.event_id == 4624 { "logged on" } else { "failed to log on" }, kind, from(&ip, &g("WorkstationName")))
+        }
+        ("Security", 4672) => format!("{} received administrator privileges", subject),
+        ("Security", 4688) => format!("{} ran {}", subject, if g("CommandLine").is_empty() { g("NewProcessName") } else { g("CommandLine") }),
+        ("Security", 4720) => format!("{} created account {}", subject, target),
+        ("Security", 4732) | ("Security", 4728) | ("Security", 4756) => {
+            let member = if g("MemberName").is_empty() { g("MemberSid") } else { g("MemberName") };
+            format!("{} added {} to {}", subject, member, g("TargetUserName"))
+        }
+        ("Security", 4616) => format!("{} changed the time from {} to {}", subject, g("PreviousTime"), g("NewTime")),
+        ("System", 7045) => format!("{} ({}, {})", g("ServiceName"), g("ImagePath"), g("StartType")),
+        ("System", 1074) => format!("{} by {}: {}", g("param5"), g("param7"), g("param3")),
+        (_, 21) | (_, 23) | (_, 24) | (_, 25) => format!("{}{}", g("User"), from(&g("Address"), "")),
+        (_, 1149) => format!("{}{}", g("Param1"), from(&g("Param3"), "")),
+        (_, 4104) => g("ScriptBlockText").chars().take(400).collect(),
+        (_, 1116) | (_, 1117) => format!("{} in {}", g("Threat Name"), g("Path")),
+        (_, 8001) => format!("SSID {}", g("SSID")),
+        _ => e.data.iter().filter(|(_, v)| !v.is_empty()).take(4).map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join(", "),
+    };
+    let rdp_auth = e.event_id == 1149;
+    let user = [g("TargetUserName"), g("User"), if rdp_auth { g("Param1") } else { String::new() }, subject].into_iter().find(|u| !u.is_empty()).unwrap_or_default();
+    let ip = [ip, g("Address"), if rdp_auth { g("Param3") } else { String::new() }].into_iter().find(|v| !v.is_empty() && v != "-" && v != "127.0.0.1" && v != "::1").unwrap_or_default();
+    (s, user, ip)
+}
+
+fn events(w: &mut WindowsArtifacts, d: &[u8], i: usize, f: &FileRow) {
+    let mut counts: BTreeMap<(String, u32), u64> = BTreeMap::new();
+    let mut kept = 0usize;
+    let mut notable = 0u64;
+    let mut channel = String::new();
+    let mut new_events = vec![];
+    let mut execs = vec![];
+    let res = evtx::parse(d, &mut |e| {
+        if channel.is_empty() {
+            channel = e.channel.clone();
+        }
+        *counts.entry((e.channel.clone(), e.event_id)).or_default() += 1;
+        let Some(n) = NOTABLE.iter().find(|n| n.id == e.event_id && n.channel.eq_ignore_ascii_case(&e.channel)) else { return };
+        if e.channel == "Security" && matches!(e.event_id, 4624 | 4625 | 4672 | 4647 | 4648) && machine_account(&e) {
+            return;
+        }
+        if e.event_id == 4624 && e.get("LogonType") == Some("5") {
+            return;
+        }
+        if e.event_id == 4616 && matches!(e.user_sid.as_deref(), Some("S-1-5-19")) {
+            return;
+        }
+        notable += 1;
+        if kept >= MAX_EVENTS_PER_LOG {
+            return;
+        }
+        kept += 1;
+        if e.event_id == 4688 && e.channel == "Security" {
+            let program = e.get("NewProcessName").unwrap_or("").to_string();
+            execs.push(Execution {
+                source: "Event 4688".into(),
+                tool: is_tool(&program),
+                program,
+                user: e.get("SubjectUserName").unwrap_or("").into(),
+                times: vec![e.time],
+                detail: e.get("CommandLine").unwrap_or("").into(),
+                file: Some(i as u32),
+                deleted: f.e.deleted,
+                ..Default::default()
+            });
+        }
+        let (summary, user, ip) = summarize(&e);
+        new_events.push(WinEvent {
+            time: e.time,
+            channel: e.channel.clone(),
+            event_id: e.event_id,
+            record_id: e.record_id,
+            category: n.category.into(),
+            title: n.title.into(),
+            summary,
+            user,
+            ip,
+            computer: e.computer.clone(),
+            data: e.data.iter().filter(|(_, v)| !v.is_empty()).take(24).map(|(k, v)| (k.clone(), v.chars().take(2000).collect())).collect(),
+            file: i as u32,
+        });
+    });
+    let (info, error) = match res {
+        Ok(info) => (info, None),
+        Err(e) => (evtx::LogInfo::default(), Some(format!("{:#}", e))),
+    };
+    if channel.is_empty() {
+        channel = f.e.name.trim_end_matches(".evtx").replace("%4", "/");
+    }
+    w.events.extend(new_events);
+    w.execution.extend(execs);
+    for ((c, id), n) in counts {
+        match w.event_counts.iter_mut().find(|x| x.0 == c && x.1 == id) {
+            Some(x) => x.2 += n,
+            None => w.event_counts.push((c, id, n)),
+        }
+    }
+    w.logs.push(LogSummary { file: i as u32, path: f.e.path.clone(), channel, info, notable, deleted: f.e.deleted, error });
+}
+
+// ------------------------------------------------------------------ finish
+
+fn iso(ft: u64) -> String {
+    if ft == 0 { "unknown".into() } else { kokino_core::time::filetime_to_iso(ft) }
+}
+
+fn finish(w: &mut WindowsArtifacts) {
+    // Name accounts that events only identify by SID.
+    let names: Vec<(String, String)> = w.users.iter().filter(|u| !u.sid.is_empty()).map(|u| (u.sid.clone(), u.name.clone())).collect();
+    for e in &mut w.events {
+        for (sid, name) in &names {
+            if e.summary.contains(sid.as_str()) {
+                e.summary = e.summary.replace(sid.as_str(), &format!("{} ({})", name, sid));
+            }
+        }
+    }
+    w.events.sort_by(|a, b| a.time.cmp(&b.time).then(a.record_id.cmp(&b.record_id)));
+    w.execution.sort_by(|a, b| b.times.first().cmp(&a.times.first()).then(a.program.cmp(&b.program)));
+    w.access.sort_by(|a, b| b.time.cmp(&a.time));
+    w.usb.sort_by(|a, b| b.last_connected.max(b.key_written).cmp(&a.last_connected.max(a.key_written)));
+    w.programs.sort_by(|a, b| b.install_date.max(b.key_written).cmp(&a.install_date.max(a.key_written)));
+    w.event_counts.sort_by(|a, b| b.2.cmp(&a.2));
+    let mut t = vec![];
+    for x in &w.execution {
+        if x.source == "ShimCache" || x.source == "Event 4688" {
+            continue;
+        }
+        for &ts in &x.times {
+            let label = if x.source == "Amcache" { "first seen (Amcache)" } else { x.source.as_str() };
+            t.push(WinTime { t: ts, kind: "EXEC".into(), what: x.program.clone(), detail: format!("{}{}", label, if x.user.is_empty() { String::new() } else { format!(", user {}", x.user) }) });
+        }
+    }
+    for a in &w.access {
+        if a.time > 0 {
+            t.push(WinTime { t: a.time, kind: "OPEN".into(), what: a.path.clone(), detail: format!("{}{}", a.source, if a.user.is_empty() { String::new() } else { format!(", user {}", a.user) }) });
+        }
+        if a.first > 0 && a.first != a.time {
+            t.push(WinTime { t: a.first, kind: "OPEN".into(), what: a.path.clone(), detail: format!("first opened ({})", a.source) });
+        }
+    }
+    for u in &w.usb {
+        let name = if u.name.is_empty() { format!("{} {}", u.vendor, u.product) } else { u.name.clone() };
+        for (ts, what) in [(u.first_connected, "first connected"), (u.last_connected, "last connected"), (u.last_removed, "removed")] {
+            if ts > 0 {
+                t.push(WinTime { t: ts, kind: "USB".into(), what: name.clone(), detail: format!("{}, serial {}", what, u.serial) });
+            }
+        }
+    }
+    for p in &w.programs {
+        let ts = if p.install_date > 0 { p.install_date } else { p.key_written };
+        if ts > 0 {
+            t.push(WinTime { t: ts, kind: "INST".into(), what: p.name.clone(), detail: format!("installed{}", if p.publisher.is_empty() { String::new() } else { format!(", {}", p.publisher) }) });
+        }
+    }
+    for n in &w.networks {
+        for (ts, what) in [(n.created, "first connected"), (n.last_connected, "last connected")] {
+            if ts > 0 {
+                t.push(WinTime { t: ts, kind: "NET".into(), what: n.name.clone(), detail: what.into() });
+            }
+        }
+    }
+    for e in &w.events {
+        t.push(WinTime { t: e.time, kind: "EVT".into(), what: e.title.clone(), detail: e.summary.chars().take(300).collect() });
+    }
+    t.retain(|x| x.t > 0);
+    t.sort_by(|a, b| a.t.cmp(&b.t));
+    w.timeline = t;
+}
+
+/// Lines for the impact summary.
+pub fn impact(w: &WindowsArtifacts) -> Vec<String> {
+    let mut out = vec![];
+    let c = &w.computer;
+    if !c.name.is_empty() || !c.os.is_empty() {
+        out.push(format!("Computer {} running {} {} (build {}), installed {}.", or(&c.name, "unnamed"), c.os, c.version, or(&c.build, "unknown"), iso(c.install_time)));
+    }
+    for e in w.events.iter().filter(|e| e.category == "Log cleared") {
+        out.push(format!("{} at {} ({}).", e.summary, iso(e.time), e.channel));
+    }
+    let mut tools: Vec<String> = w.execution.iter().filter(|x| x.tool && x.source != "ShimCache").map(|x| format!("{} ({})", base_name(&x.program).to_ascii_lowercase(), x.source)).collect();
+    tools.sort();
+    tools.dedup();
+    if !tools.is_empty() {
+        out.push(format!("Execution records show anti-forensic tools ran: {}.", tools.join(", ")));
+    }
+    if !w.usb.is_empty() {
+        out.push(format!("{} USB storage device(s) connected: {}.", w.usb.len(), w.usb.iter().map(|u| if u.name.is_empty() { u.product.clone() } else { u.name.clone() }).collect::<Vec<_>>().join(", ")));
+    }
+    let rdp: Vec<&WinEvent> = w.events.iter().filter(|e| e.category == "Remote desktop" || (e.event_id == 4624 && e.data.iter().any(|(k, v)| k == "LogonType" && v == "10"))).collect();
+    if !rdp.is_empty() {
+        let ips: std::collections::BTreeSet<&str> = rdp.iter().map(|e| e.ip.as_str()).filter(|i| !i.is_empty()).collect();
+        out.push(format!("{} remote desktop event(s){}.", rdp.len(), if ips.is_empty() { String::new() } else { format!(" from {}", ips.into_iter().collect::<Vec<_>>().join(", ")) }));
+    }
+    let failed = w.events.iter().filter(|e| e.event_id == 4625).count();
+    if failed > 0 {
+        out.push(format!("{} failed logon(s) recorded.", failed));
+    }
+    let field = |e: &WinEvent, k: &str| e.data.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone()).unwrap_or_else(|| "?".into());
+    let created: Vec<String> = w.events.iter().filter(|e| e.event_id == 4720).map(|e| field(e, "TargetUserName")).collect();
+    if !created.is_empty() {
+        out.push(format!("User account(s) created: {}.", created.join(", ")));
+    }
+    let services: Vec<String> = w.events.iter().filter(|e| e.event_id == 7045 || e.event_id == 4697).map(|e| field(e, "ServiceName")).collect();
+    if !services.is_empty() {
+        out.push(format!("Service(s) installed: {}.", services.join(", ")));
+    }
+    let odd = w.autoruns.iter().filter(|a| a.unusual).count();
+    if odd > 0 {
+        out.push(format!("{} autostart entr{} run from unusual locations.", odd, if odd == 1 { "y" } else { "ies" }));
+    }
+    out
+}
+
+fn or<'a>(s: &'a str, d: &'a str) -> &'a str {
+    if s.is_empty() { d } else { s }
+}
+
+// ------------------------------------------------------------------ inspect
+
+/// What a single artifact file holds, for `kokino artifact`: detected by
+/// content, summarized (or dumped in full with `full`).
+pub fn inspect(name: &str, data: &[u8], full: bool) -> anyhow::Result<Value> {
+    if data.starts_with(b"ElfFile\0") {
+        let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+        let mut events = vec![];
+        let info = evtx::parse(data, &mut |e| {
+            *counts.entry(format!("{} {}", e.channel, e.event_id)).or_default() += 1;
+            if full {
+                events.push(e);
+            }
+        })?;
+        let mut top: Vec<(String, u64)> = counts.into_iter().collect();
+        top.sort_by(|a, b| b.1.cmp(&a.1));
+        let mut v = json!({"kind": "evtx", "file": name, "log": info, "event_ids": top.iter().take(40).map(|(k, n)| json!([k, n])).collect::<Vec<_>>()});
+        if full {
+            v["events"] = json!(events);
+        }
+        return Ok(v);
+    }
+    if data.starts_with(b"regf") {
+        let h = registry::Hive::parse(data.to_vec())?;
+        let (mut keys, mut values, mut max_depth) = (0u64, 0u64, 0usize);
+        let mut dump = vec![];
+        h.root().walk(&mut |k, depth| {
+            keys += 1;
+            max_depth = max_depth.max(depth);
+            let vs = k.values();
+            values += vs.len() as u64;
+            if full && dump.len() < 200_000 {
+                dump.push(json!({"depth": depth, "key": k.name(), "last_written": k.last_written(), "values": vs.iter().map(|v| json!({"name": v.name, "type": v.kind, "text": v.string(), "size": v.data.len()})).collect::<Vec<_>>()}));
+            }
+        });
+        let mut v = json!({"kind": "registry", "file": name, "root": h.root().name(), "dirty": h.dirty, "version": [h.version.0, h.version.1], "embedded_name": h.embedded_name, "keys": keys, "values": values, "max_depth": max_depth});
+        if full {
+            v["tree"] = json!(dump);
+        }
+        return Ok(v);
+    }
+    if lnk::is_lnk(data) {
+        return Ok(json!({"kind": "lnk", "file": name, "lnk": lnk::parse(data)?}));
+    }
+    if data.starts_with(b"MAM") || data.get(4..8) == Some(b"SCCA") {
+        let pf = prefetch::parse(data)?;
+        let mut v = json!({"kind": "prefetch", "file": name, "prefetch": pf});
+        if !full {
+            v["prefetch"]["files"] = json!(pf.files.len());
+        }
+        return Ok(v);
+    }
+    let lower = name.to_ascii_lowercase();
+    if lower.contains("destinations-ms") || kokino_artifacts::cfb::is_cfb(data) {
+        return Ok(json!({"kind": "jumplist", "file": name, "jumplist": jumplist::parse(name, data)?}));
+    }
+    anyhow::bail!("not a supported artifact (registry hive, EVTX, Prefetch, LNK, Jump List)")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn helpers() {
+        assert_eq!(rot13("P:\\Hfref"), "C:\\Users");
+        assert!(unusual_path("C:\\Users\\Public\\updsvc.exe -k netsvc"));
+        assert!(unusual_path("C:\\Users\\alice\\AppData\\Roaming\\x.exe"));
+        assert!(!unusual_path("%SystemRoot%\\System32\\spoolsv.exe"));
+        assert!(!unusual_path("\"C:\\Program Files\\App\\app.exe\""));
+        assert!(!unusual_path("\"C:\\Users\\alice\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe\" /background"));
+        assert_eq!(strip_volume("\\VOLUME{01d4-5a6b}\\USERS\\ALICE\\X.EXE"), "\\USERS\\ALICE\\X.EXE");
+        assert_eq!(classify("/Users/alice/NTUSER.DAT").map(kind_name), Some("NTUSER.DAT"));
+        assert_eq!(classify("/Users/alice/AppData/Roaming/Microsoft/Windows/Recent/CustomDestinations/x.temp").map(kind_name), Some("Jump List"));
+        assert!(classify("/Users/alice/Documents/NTUSER.DAT").is_none());
+        assert_eq!(yyyymmdd("20261019"), kokino_artifacts::bin::unix_to_filetime(1_792_368_000));
+    }
+}

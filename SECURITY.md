@@ -1,0 +1,170 @@
+# Security
+
+Kokino reads evidence that someone may have prepared to break forensic
+tools, and in lab mode it serves several examiners over the network. This
+page says how to report a problem, how Kokino defends itself, and what has
+been tested so far, with numbers.
+
+## Reporting a vulnerability
+
+Please write to **lab@zeroscience.mk** and do not open a public issue.
+
+Helpful to include:
+
+- the Kokino version and build (Help > About), and the operating system;
+- what you did and what happened (a crash, a hang, memory use, a wrong
+  result, access you should not have had);
+- if a file triggers it, the smallest file you can share. Never send real
+  case data: if the problem only shows on real evidence, describe it and we
+  will work out a way to reproduce it.
+
+We confirm receipt, keep you informed while we fix it, and credit you in the
+changelog unless you prefer otherwise. Fixes go into the next release; there
+are no separate patches for older versions.
+
+## Threat model in short
+
+| Who or what | What we assume | What Kokino does |
+|---|---|---|
+| Evidence images and the files inside them | Hostile: crafted to crash, hang or exhaust the examiner's machine, or to hide data | Read-only access; every parser bounds memory and time by the size of its input; `unsafe` Rust is forbidden in every Kokino crate; parsers fuzzed (below) |
+| Databases inside evidence (browser history) | Hostile SQL schema (views, triggers) and corrupt pages | SQLite in defensive mode, `trusted_schema=OFF`, cell size checks, no memory mapping, a time limit per database, views standing in for tables refused |
+| Signed-in examiners and reviewers | Honest but limited to their cases and role | Per-case membership and roles enforced on the server; every action in a hash-chained audit log |
+| Other machines on the lab network | Untrusted | LAN mode is HTTPS only; sign-in required; CSRF header and Host check on every request |
+| Other tabs in the examiner's browser | Untrusted | Strict Content-Security-Policy; HttpOnly, SameSite=Strict session cookies |
+
+## Fuzzing the parsers
+
+Every parser that reads bytes from evidence was fuzzed with a purpose-built
+mutation fuzzer (`crates/kokino-fuzz`), on stable Rust:
+
+- **Inputs:** small valid samples of each format (the test fixtures, plus
+  seeds made by `scripts/make_fuzz_seeds.py`), changed by 1 to 8 stacked
+  mutations: bit flips, random bytes, boundary values (0, 0x7F, 0x80, 0xFF,
+  0x7FFF_FFFF, 0xFFFF_FFFF and so on, little and big endian), filled
+  ranges, copied blocks, truncation, deletion and insertion. Mutations are
+  aimed mostly at the non-zero bytes, where the structures are.
+- **What counts as a failure:** a panic (integer overflow included: the
+  fuzz build checks arithmetic, which release builds do not), a stack
+  overflow on a 2 MiB stack (the size of the server's worker threads), one
+  allocation over 256 MiB or more than 1 GiB in use from a small input, and
+  any input that takes more than 20 seconds.
+- **Reproducible:** each input is a pure function of (run seed, input
+  number), so every failure is saved and replayed exactly.
+  `crates/kokino-fuzz/regress.txt` lists them all, and
+  `cargo test -p kokino-fuzz` replays them on every test run.
+
+### Targets and results
+
+| Target | What it covers | Round 1 (5 min) | Round 2 (20 min) | Round 3 (10 min) | Inputs in all | Distinct problems found |
+|---|---|--:|--:|--:|--:|---|
+| `volume` | MBR, extended and GPT partition tables, file system detection | 14,763 | 118,598 | 60,270 | 193,631 | none |
+| `ntfs` | NTFS: boot sector, every MFT record, attributes and attribute lists, data runs, stream reads, free-space bitmap | 59,258 | 90,332 | 43,555 | 193,145 | 3 (hang, memory, panic) |
+| `fat` | FAT12, FAT16, FAT32 and exFAT: boot sectors, FAT chains, directories, deleted entries, long names | 26,305 | 236,537 | 123,757 | 386,599 | 4 (memory, overflow) |
+| `ewf` | E01 (EWF) images: sections, chunk tables, zlib chunks, stored hashes | 1,825 | 24,544 | 16,317 | 42,686 | 1 (overflow) |
+| `registry` | Registry hives (SYSTEM, SOFTWARE, SAM, NTUSER.DAT, Amcache): cells, key and value lists, the whole key tree | 498,617 | 13,864,683 | 8,879,174 | 23,242,474 | 1 (hang) |
+| `evtx` | Windows event logs: chunks, binary XML templates and substitutions | 115,682 | 2,399,729 | 673,160 | 3,188,571 | none |
+| `lnk` | LNK shortcuts and shell item lists | 27,451,670 | 5,205,541 | 14,065,882 | 46,723,093 | none |
+| `prefetch` | Prefetch files, including Windows 10/11 compressed ones | 5,492,226 | 17,137,541 | 4,574,931 | 27,204,698 | none |
+| `jumplist` | Jump Lists: OLE compound files (automatic) and custom destinations | 112,454 | 9,454,092 | 10,774,058 | 20,340,604 | 1 (memory) |
+| `xpress` | LZXPRESS Huffman decompression | 157,035 | 1,262,012 | 902,504 | 2,321,551 | none |
+| `doc` | Text extraction: ZIP (nested), Word, Excel, PowerPoint, OpenDocument, GZIP, PDF | 8,186,311 | 6,616,068 | 6,774,250 | 21,576,629 | 1 (panic) |
+| `photo` | Picture forensics: JPEG decoder, EXIF and thumbnails, quantization tables, PNG, BMP | 167,622 | 2,404,315 | 629,991 | 7,614,505 | 5 (overflow, hang, crash) |
+| `carve` | File carving: header and end detection for every carved format | 748,261 | 5,243,806 | 13,246,883 | 19,238,950 | 1 (panic) |
+| `browser` | Browser history: Chromium and Firefox SQLite databases | 1,467 | 49,437 | 6,129 | 57,033 | none (1 hang found by review) |
+| `strings` | Strings and byte map | 578,058 | 16,647,346 | 4,912,367 | 22,137,771 | none |
+| **All** | 15 targets | **43,611,554** | **80,754,581** | **65,683,228** | **194,461,940** | **17, all fixed** |
+
+Each round ran all 15 targets at once, one process each, on an 8-core workstation (Windows 10). Rounds 2 and 3 ran after the fixes from the rounds before them, with new random seeds; two more 5-minute photo rounds followed the JPEG fixes: the first (2,244,470 inputs) found one more crash, fixed, and the second (2,168,107 inputs) found nothing. Those are included in the photo total. Fast targets (LNK, Prefetch, strings) reach millions of inputs a minute; whole-volume targets (NTFS, FAT, EWF, browser databases) parse a full image or database per input and run thousands.
+
+Follow-up rounds after the validation work (VALIDATION.md) added NTFS
+decompression and new checks in the NTFS and FAT walkers: a new `lznt1`
+target ran 1,938,929 inputs with no finding, and 10 more minutes each on
+`ntfs` (190,379 inputs) and `fat` (470,899) found one more crash in the
+`ntfs` crate, number 19 below. That brings the total to 197,062,147 inputs
+and 18 distinct problems found by fuzzing.
+
+### What was found and fixed
+
+| # | Parser | Problem | Found by | Cause | Fix |
+|---|---|---|---|---|---|
+| 1 | NTFS | Hang and runaway memory | Fuzzing | The MFT size declared in `$MFT` was trusted: a few changed bytes claimed billions of records | Bounded by the size of the volume |
+| 2 | NTFS | Hang | Fuzzing | The data-run iterator of the `ntfs` crate can return the same error for ever; `flatten()` kept asking | Stop at the first bad run, cap runs and attributes per record |
+| 3 | NTFS | Crash (panic in the `ntfs` crate) | Fuzzing | `unreachable!()` on a boot sector shorter than 512 bytes | Length checked first |
+| 4 | NTFS | Large allocations | Review (same pattern as 5) | Read buffers sized by the requested or declared length; the free-space bitmap sized by the boot sector | Buffers grow with the bytes read, bitmap bounded by the volume |
+| 5 | FAT, exFAT | 16 GB allocation from a 2.6 MB image | Fuzzing | The cluster count from the boot sector sized the in-memory FAT | Capped at the FAT entries really present; reads grow with the data |
+| 6 | exFAT | Allocation of up to 128 GiB per cluster | Review (while fixing 5) | Sector and cluster shifts not checked | The specification's limits enforced (512-byte to 4 KiB sectors, clusters up to 32 MiB) |
+| 7 | FAT, exFAT | Integer overflow (3 places) | Fuzzing | Offsets and sizes from the boot sector multiplied unchecked | Saturating arithmetic |
+| 8 | Jump Lists (OLE) | Over 500 MiB from a 3 KB file | Fuzzing | A DIFAT listing the same sector again and again; sector chains that loop; mini stream cutoff taken from the header | Each sector once per chain, FAT no larger than the file, cutoff fixed at 4096, 256 MiB in all |
+| 9 | Registry | Hang | Fuzzing | A key listed under itself made the tree walk grow exponentially | Each key visited once |
+| 10 | EWF (E01) | Integer overflow | Fuzzing | Chunk geometry multiplied unchecked | Checked arithmetic, image refused |
+| 11 | JPEG | Integer overflow (2 places) | Fuzzing | A DC difference size from the file's Huffman table could reach 255 (valid: 0 to 16) | Refused above 16 |
+| 12 | JPEG | Integer overflow | Fuzzing | Coefficient times quantizer on hostile values | Saturating arithmetic |
+| 13 | JPEG | 4.6 seconds on a 6.5 KB file | Fuzzing | A second frame header claimed 1.2 gigapixels and the decoder kept decoding padding | Decoding stops 1 KiB past the end of the data (truncated pictures still show what they have) |
+| 14 | PDF text | Crash | Fuzzing | A name sliced inside a multi-byte character | Sliced at a character boundary |
+| 15 | Carving | Crash | Fuzzing | A 7-byte `%PDF-1.` read as 8 bytes | Bounds checked |
+| 16 | Browser history | Hang | Review (proof of concept made) | A database can define `urls` as a never-ending view | SQLite hardening (threat model above); such databases refused |
+| 17 | JPEG | Integer overflow | Review (same as 12) | The same multiplication in the gray-level decoder | Saturating arithmetic |
+| 18 | JPEG | Crash | Fuzzing | A scan naming a component that a later frame header removed | Scans checked against the frame; DC plane needs a frame |
+| 19 | NTFS | Crash (panic in the `ntfs` crate) | Fuzzing (follow-up round) | `unreachable!()` on a `$STANDARD_INFORMATION` value shorter than its structure | Every call into the crate guarded: a bad record is reported as unreadable |
+
+Before the fixes, every one of these could stop or slow an ingest, a carving
+job or a picture scan, or exhaust the examiner's memory, on purpose-made
+evidence. None allowed code execution or wrote to evidence: Kokino has no
+`unsafe` code, so the worst a parser bug could do was crash, hang or use
+too much memory.
+
+## Server review
+
+Alongside the fuzzing, the server code that handles requests and runs jobs
+was reviewed. Fixed:
+
+- **Evidence paths inside the cases directory.** An examiner could add a
+  file from the cases directory as evidence (another case's exports or
+  audit log, the account file with its password hashes, the TLS key) and
+  read it in the hex view. Such paths are now refused (symbolic links
+  resolved, letter case ignored on Windows).
+- **A parser panic left its job "running" for ever,** which also blocked
+  deleting the case. Every background job now catches a panic and ends as
+  failed, with a message asking to report it.
+- **Reports served without a sandbox.** Case and evidence reports are HTML
+  built from evidence text. They were escaped, but now also carry
+  `Content-Security-Policy: default-src 'none'; sandbox`, so nothing in a
+  report can run script or act as the signed-in examiner.
+- **SQLite databases from evidence** are opened as described in the threat
+  model above.
+
+Checked and found sound: the server folder browser (examiners and admins
+only), export file names (no path separators survive),
+report file names (a fixed pattern), downloads (`nosniff`, attachment
+names from sanitized parts), session cookies and the CSRF and Host checks.
+
+## Limits of this testing
+
+- The fuzzer is not coverage-guided and runs without sanitizers (no
+  libFuzzer or AddressSanitizer, which need nightly Rust). Since Kokino has
+  no `unsafe` code, memory-safety bugs would have to come from a dependency;
+  the fuzzer looks for panics, hangs and runaway memory, which are what
+  safe Rust can still do wrong.
+- Third-party code is fuzzed only as Kokino uses it: the `ntfs` crate
+  through the NTFS target, zlib (`flate2`) through EWF, ZIP, GZIP and PDF,
+  and SQLite through the browser target (SQLite itself is fuzzed
+  continuously upstream by OSS-Fuzz).
+- The browser target is slow (each input is written to a temporary
+  database), so it saw far fewer inputs than the others.
+- There has been no external penetration test yet.
+- In lab mode, examiners can still add any image file the server can read
+  outside the cases directory. Labs that want to restrict this should run
+  Kokino under an account that can read only the evidence storage.
+
+## Running the fuzzer yourself
+
+```bash
+cargo build --profile fuzz -p kokino-fuzz
+./target/fuzz/kokino-fuzz list
+./target/fuzz/kokino-fuzz run all --secs 600 --seed 4
+./target/fuzz/kokino-fuzz run ntfs --secs 3600
+./target/fuzz/kokino-fuzz repro ntfs target/fuzz-findings/ntfs/<file>.bin
+```
+
+Findings land in `target/fuzz-findings/<target>/`. Add each to
+`crates/kokino-fuzz/regress.txt` once fixed.

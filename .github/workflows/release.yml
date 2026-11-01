@@ -1,0 +1,175 @@
+name: Release
+
+# Builds the installable packages:
+#   Windows  kokino-<v>-windows-x64.msi and .zip
+#   Linux    kokino-<v>-linux-x86_64.tar.gz and kokino_<v>_amd64.deb
+#   macOS    kokino-<v>-macos-universal.dmg (Intel and Apple Silicon)
+#
+# Publishing a release on GitHub with the tag v<version> (v1.2.5 for version
+# 1.2.5 in Cargo.toml) builds them and attaches them to that release with
+# SHA256SUMS.txt. "Run workflow" on the Actions tab builds them as downloadable
+# artifacts only, to try the packaging before a release.
+#
+# The packages are not code-signed: Windows SmartScreen and macOS Gatekeeper
+# warn on first start (README and the DMG's "READ ME FIRST" say what to do).
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: Version from Cargo.toml, checked against the release tag
+        shell: bash
+        run: |
+          v=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "release" ] && [ "${{ github.event.release.tag_name }}" != "v$v" ]; then
+            echo "::error::The release tag ${{ github.event.release.tag_name }} does not match the version in Cargo.toml (v$v)."
+            exit 1
+          fi
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked -p kokino-cli
+      - name: Install the WiX Toolset
+        run: dotnet tool install --global wix --version 4.0.5
+      - name: MSI and zip
+        shell: pwsh
+        run: |
+          $v = "${{ needs.version.outputs.version }}"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          wix build packaging/windows/kokino.wxs -arch x64 -d "Version=$v" -d "Root=$PWD" -d "Bin=$PWD\target\release" -o "dist\kokino-$v-windows-x64.msi"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item dist\*.wixpdb -ErrorAction SilentlyContinue
+          $z = "kokino-$v-windows-x64"
+          New-Item -ItemType Directory -Force $z | Out-Null
+          Copy-Item target\release\kokino.exe, README.md $z
+          Copy-Item LICENSE "$z\LICENSE.txt"
+          Copy-Item NOTICE "$z\NOTICE.txt"
+          Compress-Archive -Path $z -DestinationPath "dist\$z.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*
+
+  linux:
+    needs: version
+    # The oldest supported runner, so the binary runs on older glibc too.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked -p kokino-cli
+      - name: tar.gz and .deb
+        shell: bash
+        run: |
+          v="${{ needs.version.outputs.version }}"
+          mkdir -p dist
+          n="kokino-$v-linux-x86_64"
+          mkdir "$n"
+          cp target/release/kokino README.md LICENSE NOTICE "$n/"
+          tar -czf "dist/$n.tar.gz" "$n"
+          d=deb
+          mkdir -p $d/DEBIAN $d/usr/bin $d/usr/share/doc/kokino $d/usr/share/applications $d/usr/share/icons/hicolor/256x256/apps
+          install -m 0755 target/release/kokino $d/usr/bin/kokino
+          install -m 0644 LICENSE $d/usr/share/doc/kokino/copyright
+          install -m 0644 NOTICE README.md $d/usr/share/doc/kokino/
+          install -m 0644 packaging/linux/kokino.desktop $d/usr/share/applications/kokino.desktop
+          install -m 0644 packaging/linux/kokino.png $d/usr/share/icons/hicolor/256x256/apps/kokino.png
+          size=$(du -sk $d | cut -f1)
+          cat > $d/DEBIAN/control <<EOF
+          Package: kokino
+          Version: $v
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Depends: libc6 (>= 2.35)
+          Installed-Size: $size
+          Maintainer: Zero Science Lab <lab@zeroscience.mk>
+          Homepage: https://github.com/zeroscience/Kokino
+          Description: Kokino Forensic Toolkit: disk forensics with a browser GUI
+           Examines disk images (E01, raw, split raw, VHD): every NTFS MFT record and
+           FAT/exFAT directory entry, live and deleted, timestamps, signatures, browser
+           history, Windows artifacts, carving, picture forensics, hash sets and an
+           anti-forensics score. Run "kokino serve" and open the browser.
+          EOF
+          dpkg-deb --build --root-owner-group $d "dist/kokino_${v}_amd64.deb"
+          dpkg-deb --info "dist/kokino_${v}_amd64.deb"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*
+
+  macos:
+    needs: version
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Build for Apple Silicon and Intel
+        run: |
+          cargo build --release --locked -p kokino-cli --target aarch64-apple-darwin
+          cargo build --release --locked -p kokino-cli --target x86_64-apple-darwin
+      - name: Universal binary and DMG
+        shell: bash
+        run: |
+          v="${{ needs.version.outputs.version }}"
+          f="dmg/Kokino Forensic Toolkit"
+          mkdir -p "$f" dist
+          lipo -create -output "$f/kokino" target/aarch64-apple-darwin/release/kokino target/x86_64-apple-darwin/release/kokino
+          lipo -info "$f/kokino"
+          cp "packaging/macos/Start Kokino.command" "packaging/macos/READ ME FIRST.txt" README.md "$f/"
+          cp LICENSE "$f/LICENSE.txt"
+          cp NOTICE "$f/NOTICE.txt"
+          chmod +x "$f/kokino" "$f/Start Kokino.command"
+          hdiutil create -volname "Kokino Forensic Toolkit $v" -srcfolder dmg -ov -format UDZO "dist/kokino-$v-macos-universal.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*
+
+  publish:
+    needs: [version, windows, linux, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kokino-${{ needs.version.outputs.version }}-all
+          path: dist/*
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber --repo "${{ github.repository }}"

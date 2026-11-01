@@ -1,0 +1,14 @@
+[package]
+name = "kokino-ntfs"
+description = "NTFS volume walker: MFT records, deleted entries, SI/FN timestamps, streams"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+kokino-core.workspace = true
+ntfs.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+tracing.workspace = true

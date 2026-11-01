@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Windows installer for Kokino Forensic Toolkit (WiX Toolset v4).
+
+    wix build packaging/windows/kokino.wxs -arch x64 -d Version=1.2.5 -d Root=<repository> -d Bin=<folder with kokino.exe> -o kokino.msi
+
+  Installs kokino.exe to Program Files, adds it to the system PATH (for the
+  command line), and puts "Kokino Forensic Toolkit" in the Start menu, which
+  starts the server and opens the browser. Cases stay in the user's
+  KokinoCases folder and are not removed on uninstall; `kokino purge`
+  removes them. The UpgradeCode stays the same for every version so a newer
+  MSI replaces an older one.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="Kokino Forensic Toolkit"
+      Manufacturer="Zero Science Lab"
+      Version="$(var.Version)"
+      UpgradeCode="3C6F3571-67B7-4FBA-82F6-536D4C8165D4"
+      Scope="perMachine"
+      Compressed="yes">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Kokino Forensic Toolkit is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="KokinoIcon" SourceFile="$(var.Root)\packaging\windows\kokino.ico" />
+    <Property Id="ARPPRODUCTICON" Value="KokinoIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/zeroscience/Kokino" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/zeroscience/Kokino#readme" />
+    <Property Id="ARPCONTACT" Value="lab@zeroscience.mk" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Kokino Forensic Toolkit">
+        <Component Id="Program">
+          <File Id="KokinoExe" Source="$(var.Bin)\kokino.exe" KeyPath="yes" />
+          <Environment Id="AddToPath" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="yes" Permanent="no" />
+        </Component>
+        <Component Id="Documents">
+          <File Id="License" Source="$(var.Root)\LICENSE" Name="LICENSE.txt" KeyPath="yes" />
+          <File Id="Notice" Source="$(var.Root)\NOTICE" Name="NOTICE.txt" />
+          <File Id="Readme" Source="$(var.Root)\README.md" Name="README.md" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="MenuFolder" Name="Kokino Forensic Toolkit">
+        <Component Id="StartMenu">
+          <Shortcut Id="StartKokino" Name="Kokino Forensic Toolkit" Description="Start Kokino and open it in the browser"
+                    Target="[INSTALLFOLDER]kokino.exe" Arguments="serve" WorkingDirectory="INSTALLFOLDER" Icon="KokinoIcon" />
+          <RemoveFolder Id="RemoveMenuFolder" On="uninstall" />
+          <RegistryValue Root="HKLM" Key="Software\Zero Science Lab\Kokino Forensic Toolkit" Name="StartMenu" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Kokino" Title="Kokino Forensic Toolkit">
+      <ComponentRef Id="Program" />
+      <ComponentRef Id="Documents" />
+      <ComponentRef Id="StartMenu" />
+    </Feature>
+  </Package>
+</Wix>

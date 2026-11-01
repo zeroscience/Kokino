@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Kokino Forensic Toolkit
+Comment=Disk forensics with a browser interface
+Exec=kokino serve
+Icon=kokino
+Terminal=true
+Categories=Utility;Security;System;
+Keywords=forensics;disk;NTFS;FAT;E01;evidence;

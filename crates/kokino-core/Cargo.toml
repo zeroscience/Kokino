@@ -1,0 +1,21 @@
+[package]
+name = "kokino-core"
+description = "Case model, hash-chained audit log, evidence hashing and shared types"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+sha2.workspace = true
+sha1.workspace = true
+md-5.workspace = true
+hex.workspace = true
+uuid.workspace = true
+argon2.workspace = true
+rand.workspace = true

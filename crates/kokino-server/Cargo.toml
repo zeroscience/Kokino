@@ -1,0 +1,31 @@
+[package]
+name = "kokino-server"
+description = "Local HTTP API and embedded browser GUI"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+kokino-core.workspace = true
+kokino-image.workspace = true
+kokino-ntfs.workspace = true
+kokino-analysis.workspace = true
+kokino-artifacts.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tokio.workspace = true
+axum.workspace = true
+rust-embed.workspace = true
+mime_guess.workspace = true
+tracing.workspace = true
+rand.workspace = true
+hex.workspace = true
+uuid.workspace = true
+axum-server.workspace = true
+rustls.workspace = true
+rcgen.workspace = true
+sha2.workspace = true
+flate2.workspace = true

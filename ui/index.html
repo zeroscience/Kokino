@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kokino Forensic Toolkit</title>
+<link rel="icon" href="img/favicon.png" type="image/png">
+<link rel="stylesheet" href="css/app.css">
+<script type="module" src="js/app.js"></script>
+</head>
+<body>
+<div class="ambient" id="ambient" aria-hidden="true"></div>
+<div class="shell">
+  <aside class="side">
+    <a class="brand" href="#/">
+      <span class="eyes" role="img" aria-label="Kokino logo: detail of a painting by Siebe Boersma" style="width:40px;height:40px"></span>
+      <span class="wordmark" role="img" aria-label="Kokino Forensic Toolkit"><i class="wm-main"></i><i class="wm-sub"></i><i class="wm-acc"></i></span>
+    </a>
+    <nav id="nav"></nav>
+    <div id="me" class="me"></div>
+    <div class="side-foot">
+      <div class="themes"><button class="ghost sm" id="theme" title="Change theme">Theme</button><div id="theme-menu" class="theme-menu"></div></div>
+      <button class="ghost sm" id="tz" title="Time zone times are shown in">Time</button>
+      <span id="ver" class="muted"></span>
+    </div>
+  </aside>
+  <main>
+    <header class="top">
+      <div id="crumbs" class="crumbs"></div>
+      <div id="jobs" class="jobs"></div>
+      <button id="errlog" class="errlog" hidden title="Errors in this browser: click to read them"></button>
+    </header>
+    <section id="view" class="view"></section>
+    <footer id="foot" class="foot"></footer>
+  </main>
+</div>
+<div id="drawer" class="drawer" aria-hidden="true"><div class="drawer-head"><span id="drawer-bm"></span><button id="drawer-close" class="ghost sm" type="button" title="Close (Esc)">Close</button></div><div class="drawer-body"></div></div>
+<div id="modal" class="modal" aria-hidden="true"></div>
+<div id="auth" class="auth" aria-hidden="true"></div>
+<div id="toasts" class="toasts"></div>
+</body>
+</html>

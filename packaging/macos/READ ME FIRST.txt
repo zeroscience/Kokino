@@ -1,0 +1,20 @@
+Kokino Forensic Toolkit for macOS (Intel and Apple Silicon)
+
+1. Copy this folder anywhere, for example to Applications.
+2. Double-click "Start Kokino.command". Kokino starts in a Terminal window
+   and opens your browser. Close the Terminal window to stop it.
+
+This build is not signed with an Apple Developer ID, so the first time macOS
+says it cannot verify the developer. To allow it:
+
+  - Right-click (or Control-click) "Start Kokino.command", choose Open, then
+    Open again; or
+  - in Terminal, in this folder:  xattr -dr com.apple.quarantine .
+
+The command line works too:  ./kokino --help
+
+Cases are stored in ~/KokinoCases. "./kokino purge" removes everything Kokino
+stored on this Mac (it asks first).
+
+Source, documentation and SHA-256 checksums of this release:
+https://github.com/zeroscience/Kokino

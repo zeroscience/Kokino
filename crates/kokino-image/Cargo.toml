@@ -1,0 +1,17 @@
+[package]
+name = "kokino-image"
+description = "Read-only evidence sources (raw, split raw, VHD, E01) and volume systems (MBR, GPT)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+flate2.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true
+md-5.workspace = true
+sha1.workspace = true
