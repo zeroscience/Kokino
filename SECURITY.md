@@ -80,8 +80,19 @@ Follow-up rounds after the validation work (VALIDATION.md) added NTFS
 decompression and new checks in the NTFS and FAT walkers: a new `lznt1`
 target ran 1,938,929 inputs with no finding, and 10 more minutes each on
 `ntfs` (190,379 inputs) and `fat` (470,899) found one more crash in the
-`ntfs` crate, number 19 below. That brings the total to 197,062,147 inputs
+`ntfs` crate, number 19 below. That brought the total to 197,062,147 inputs
 and 18 distinct problems found by fuzzing.
+
+The ext2/3/4 reader and the Linux artifact parsers were fuzzed before they
+shipped (after 1.2.5):
+
+| Target | What it covers | Round 1 (10 min) | Round 2 | Inputs in all | Distinct problems found |
+|---|---|--:|--:|--:|---|
+| `ext` | ext2, ext3 and ext4: superblock, group descriptors, inodes, extent trees, indirect blocks, directories and their slack, orphan scan, journal copies, block bitmap | 311,223 | 710,567 (25 min) + 310,635 (10 min, after the validation fixes) | 1,332,425 | 1 (memory) |
+| `linuxlogs` | systemd journal files, wtmp/btmp, syslog lines and their dates, TZif time zones and POSIX rules, apt history, DHCP leases, dpkg status, shell command rules | 9,505,147 | 19,436,254 (15 min) | 28,941,401 | 3 (overflow) |
+
+In all: 227,335,973 inputs over 18 targets, and 22 distinct problems
+found by fuzzing, all fixed.
 
 ### What was found and fixed
 
@@ -106,6 +117,10 @@ and 18 distinct problems found by fuzzing.
 | 17 | JPEG | Integer overflow | Review (same as 12) | The same multiplication in the gray-level decoder | Saturating arithmetic |
 | 18 | JPEG | Crash | Fuzzing | A scan naming a component that a later frame header removed | Scans checked against the frame; DC plane needs a frame |
 | 19 | NTFS | Crash (panic in the `ntfs` crate) | Fuzzing (follow-up round) | `unreachable!()` on a `$STANDARD_INFORMATION` value shorter than its structure | Every call into the crate guarded: a bad record is reported as unreadable |
+| 20 | ext | 423 MB allocation from an 83 KB image | Fuzzing | A superblock claiming millions of block groups sized the group table and the block bitmap | Both bounded by what the image holds |
+| 21 | Time zones (TZif rule) | Integer overflow | Fuzzing | Hours in a POSIX rule string multiplied unchecked | POSIX limits enforced (hours up to 167, minutes and seconds up to 59) |
+| 22 | systemd journal | Integer overflow | Fuzzing | Object offsets near the top of the address range added to a header size | Checked arithmetic |
+| 23 | systemd journal | Integer overflow | Fuzzing | A data object's size added to its offset | Checked arithmetic |
 
 Before the fixes, every one of these could stop or slow an ingest, a carving
 job or a picture scan, or exhaust the examiner's memory, on purpose-made

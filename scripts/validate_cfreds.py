@@ -47,7 +47,7 @@ def layout_text(folder):
 
 def metadata_found(t):
     """Image name to (deleted files with metadata, without) from the layout."""
-    return {m.group(1): (int(m.group(2)), int(m.group(3))) for m in re.finditer(r"\n((?:fat|xfat|ntfs)-[0-9a-z-]+) Metadata found (\d+) files, not found (\d+)", t)}
+    return {m.group(1): (int(m.group(2)), int(m.group(3))) for m in re.finditer(r"\n((?:fat|xfat|ntfs|ext)-[0-9a-z-]+) Metadata found (\d+) files, not found (\d+)", t)}
 
 
 def tag(block):
@@ -89,7 +89,7 @@ def main():
     tmp = os.path.join(folder, "_tmp")
     results = []
     for f in sorted(os.listdir(folder)):
-        m = re.match(r"dfr-(\d+)(-[a-z]+)?-(fat|xfat|ntfs)\.dd\.bz2$", f)
+        m = re.match(r"dfr-(\d+)(-[a-z]+)?-(fat|xfat|ntfs|ext)\.dd\.bz2$", f)
         if not m:
             continue
         name = "%s-%s%s" % (m.group(3), m.group(1), m.group(2) or "")
@@ -101,11 +101,19 @@ def main():
         out = subprocess.run([exe, "files", "--json", "--extract", os.path.join(tmp, "x"), raw], capture_output=True, text=True, encoding="utf-8")
         rows = [json.loads(l) for l in out.stdout.splitlines() if l.startswith("{")]
         r = {"image": name, "nist_metadata_found": meta.get(name, (None, None))[0], "nist_metadata_lost": meta.get(name, (None, None))[1],
-             "listed": 0, "tagged": 0, "name_ok": 0, "blocks_good": 0, "blocks": 0, "complete": 0, "incomplete": 0, "incomplete_warned": 0, "untagged": 0, "other_file": 0, "wrong_unwarned": 0}
+             "listed": 0, "tagged": 0, "name_ok": 0, "blocks_good": 0, "blocks": 0, "complete": 0, "incomplete": 0, "incomplete_warned": 0, "untagged": 0, "other_file": 0, "wrong_unwarned": 0, "no_content": 0, "by_fs": {}}
         for row in rows:
             if not row["deleted"]:
                 continue
             r["listed"] += 1
+            fs = r["by_fs"].setdefault(str(row["fs"]), {"listed": 0, "complete": 0, "no_content": 0})
+            fs["listed"] += 1
+            if row["size"] == 0:
+                # ext3/ext4 clear a deleted file's size and block map; with no
+                # journal copy there is nothing to read (carving territory).
+                r["no_content"] += 1
+                fs["no_content"] += 1
+                continue
             base = os.path.basename(row["path"])
             hits = glob.glob(os.path.join(tmp, "x", "fs%d" % row["fs"], "%d-*" % row["record"]))
             data = open(hits[0], "rb").read() if hits else b""
@@ -119,7 +127,8 @@ def main():
                 continue
             r["tagged"] += 1
             # DFR-04 tags carry English names for files named in other scripts.
-            named = same_name(base, tname.decode("utf-8", "replace")) or "-04" in name
+            # Orphaned inodes (ext) have no name left: judged by their content alone.
+            named = same_name(base, tname.decode("utf-8", "replace")) or "-04" in name or (row["path"].startswith("$OrphanFiles/") and base.startswith("inode-"))
             r["name_ok"] += named
             if not named:
                 # The first block belongs to another file: wrong content.
@@ -132,14 +141,25 @@ def main():
             r["blocks"] += full
             if good == full:
                 r["complete"] += 1
+                fs["complete"] += 1
             else:
                 r["incomplete"] += 1
                 r["incomplete_warned"] += bool(row["note"])
                 r["wrong_unwarned"] += not row["note"]
+        if m.group(3) == "ext":
+            # Deleted names with no content left (ext3/ext4 clear the block
+            # map) are not in `kokino files`; the full analysis has them.
+            aj = os.path.join(tmp, "analysis.json")
+            subprocess.run([exe, "analyze", "--json", aj, raw], capture_output=True)
+            a = json.load(open(aj, encoding="utf-8")) if os.path.exists(aj) else {"filesystems": []}
+            r["names_found"] = sum(1 for fsa in a["filesystems"] for f in fsa["files"] if f["deleted"] and not f["is_dir"] and not f["orphan"])
+            r["journal_recovered"] = sum(1 for fsa in a["filesystems"] for f in fsa["files"] if f.get("unix", {}).get("journal_seq") is not None)
+            print("    deleted names found %d (NIST metadata found %s), recovered through the journal %d" % (r["names_found"], r["nist_metadata_found"], r["journal_recovered"]))
         results.append(r)
         shutil.rmtree(tmp, ignore_errors=True)
-        print("%-16s NIST metadata %5s  listed %5d  names ok %5d/%-5d  complete %5d  blocks %7d/%-7d  incomplete %4d (other file %d, warned %d, wrong unwarned %d, not test data %d)" % (
-            name, r["nist_metadata_found"], r["listed"], r["name_ok"], r["tagged"], r["complete"], r["blocks_good"], r["blocks"], r["incomplete"], r["other_file"], r["incomplete_warned"], r["wrong_unwarned"], r["untagged"]))
+        print("%-16s NIST metadata %5s  listed %5d  names ok %5d/%-5d  complete %5d  blocks %7d/%-7d  incomplete %4d (other file %d, warned %d, wrong unwarned %d, not test data %d)  no content %d  %s" % (
+            name, r["nist_metadata_found"], r["listed"], r["name_ok"], r["tagged"], r["complete"], r["blocks_good"], r["blocks"], r["incomplete"], r["other_file"], r["incomplete_warned"], r["wrong_unwarned"], r["untagged"], r["no_content"],
+            " ".join("fs%s:%d/%d/%d" % (k, v["listed"], v["complete"], v["no_content"]) for k, v in sorted(r["by_fs"].items()))))
     json.dump(results, open(os.path.join(folder, "cfreds-results.json"), "w"), indent=1)
 
 

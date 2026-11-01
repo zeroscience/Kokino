@@ -1,0 +1,12 @@
+[package]
+name = "kokino-ext"
+description = "ext2/ext3/ext4 reader: live and deleted entries, extents, journal recovery of deleted inodes"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+kokino-core.workspace = true
+kokino-ntfs.workspace = true
+anyhow.workspace = true

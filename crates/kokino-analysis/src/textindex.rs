@@ -383,7 +383,7 @@ pub fn build(ev: &Evidence, analysis: &Analysis, carved: Option<&crate::carve::C
             .files
             .iter()
             .enumerate()
-            .filter(|(_, f)| !f.e.is_dir && (fs.is_fat() || f.e.record >= FIRST_USER_RECORD) && !f.e.path.starts_with("/$Extend"))
+            .filter(|(_, f)| !f.e.is_dir && (!fs.is_ntfs() || f.e.record >= FIRST_USER_RECORD) && !f.e.path.starts_with("/$Extend"))
             .flat_map(|(i, f)| f.e.streams.iter().filter(|s| s.size > 0).map(move |s| (i, s.name.clone(), s.size)))
             .collect();
         let total: u64 = streams.iter().map(|s| s.2.min(MAX_STREAM_BYTES)).sum::<u64>() + free.iter().map(|f| f.1).sum::<u64>();

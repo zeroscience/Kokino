@@ -889,6 +889,7 @@ dependencies = [
  "flate2",
  "kokino-artifacts",
  "kokino-core",
+ "kokino-ext",
  "kokino-fat",
  "kokino-image",
  "kokino-ntfs",
@@ -948,6 +949,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kokino-ext"
+version = "1.2.5"
+dependencies = [
+ "anyhow",
+ "kokino-core",
+ "kokino-ntfs",
+]
+
+[[package]]
 name = "kokino-fat"
 version = "1.2.5"
 dependencies = [
@@ -963,6 +973,7 @@ version = "1.2.5"
 dependencies = [
  "kokino-analysis",
  "kokino-artifacts",
+ "kokino-ext",
  "kokino-fat",
  "kokino-image",
  "kokino-ntfs",

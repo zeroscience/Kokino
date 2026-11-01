@@ -56,6 +56,10 @@ pub fn hash_reader<R: Read>(mut r: R, mut progress: impl FnMut(u64) -> bool) -> 
     Ok((h.finish(), total))
 }
 
+pub fn sha256_bytes(data: &[u8]) -> [u8; 32] {
+    Sha256::digest(data).into()
+}
+
 pub fn sha256_hex(data: &[u8]) -> String {
     hex::encode(Sha256::digest(data))
 }

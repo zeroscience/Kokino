@@ -1,0 +1,11 @@
+Package: openssh-server
+Status: install ok installed
+Architecture: amd64
+Version: 1:9.2p1-2
+Description: secure shell (SSH) server
+
+Package: nmap
+Status: install ok installed
+Architecture: amd64
+Version: 7.93+dfsg1-1
+Description: The Network Mapper

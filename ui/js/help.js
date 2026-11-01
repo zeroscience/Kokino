@@ -51,7 +51,7 @@ export function aboutPage(info) {
     h("div.grid.g2",
       h("div.card.stack",
         h("h3", "What it is"),
-        p("Kokino examines disk images: it walks every NTFS MFT record and every FAT and exFAT directory entry (USB sticks, SD cards), live and deleted, compares $STANDARD_INFORMATION with $FILE_NAME timestamps, identifies content by signature, reads browser history, and scores the evidence for signs of anti-forensic activity. Every number comes with its explanation and the exact files behind it."),
+        p("Kokino examines disk images: it walks every NTFS MFT record, every FAT and exFAT directory entry (USB sticks, SD cards) and every ext2/3/4 inode (Linux), live and deleted, compares $STANDARD_INFORMATION with $FILE_NAME timestamps, identifies content by signature, reads browser history, and scores the evidence for signs of anti-forensic activity. Every number comes with its explanation and the exact files behind it."),
         p("One portable binary serves this browser interface on Windows, Linux and macOS, alone on a workstation or for a whole lab over HTTPS."),
         p("The name comes from the Kokino observatory, a Bronze Age megalithic site in North Macedonia (", link("https://en.wikipedia.org/wiki/Kokino", "Wikipedia"), "); the wiki has the story."),
       ),
@@ -149,6 +149,8 @@ const WIKI = [
         ["E01 (EWF)", "Pick the .E01; the other segments (.E02, ... .EAA) are found automatically. Compressed and uncompressed images both work."],
         ["Raw / dd", ".dd, .raw, .img, .bin, or split .001, .002, ..."],
         ["VHD", "Fixed-size VHD. Dynamic VHD, VHDX, VMDK and Ex01 are recognized and reported but not read yet: convert them to E01 or raw."],
+        ["Partitions", "MBR (with extended partitions) and GPT, or a single volume with no partition table."],
+        ["File systems", "NTFS, FAT12, FAT16, FAT32, exFAT, ext2, ext3 and ext4 are parsed, live and deleted files alike. APFS, HFS+ and BitLocker volumes are detected and reported; their space is still searched and carved."],
       ]),
       p("If you have the acquisition hash, paste it: Kokino reports whether the image still matches. For E01 it also checks the hash the imaging tool stored inside the file. Both results go into the audit log, and a mismatch is shown in red on the evidence card."),
       p("Hashing and analysis run in the background; progress shows at the top right. ", h("b", "Re-analyze"), " reruns the analysis after a Kokino upgrade; ", h("b", "Re-hash + analyze"), " also recomputes the hashes."),
@@ -186,6 +188,25 @@ const WIKI = [
     ],
   },
   {
+    id: "linux", title: "Linux disks (ext2, ext3, ext4)", icon: "disk",
+    body: [
+      p("ext2, ext3 and ext4 volumes are parsed like NTFS: Explorer, Timeline, signatures, full-text search, carving, hashes, bookmarks and exports all work on them. Open a file to see its inode, mode (as ls shows it), owner uid and gid, link target and hard link count."),
+      ul(
+        h("span", h("b", "Timestamps:"), " every inode has modified (M), accessed (A) and inode changed (C) times, in UTC; ext4 adds the creation time (B) and nanoseconds. A deleted inode also keeps its deletion time, shown as D in the file details and as DEL on the timeline. touch can set M and A to anything, but not C."),
+        h("span", h("b", "Deleted names:"), " removing a name only lengthens the entry before it, so the old name stays in the directory until it is reused. Kokino reads those names with strict checks. A deleted name whose inode is now in use (a rename, or the inode reused) is listed without content and says so. ext2 also erases the inode number of a deleted name: the name is listed with a note, its content under $OrphanFiles. Deleted folders are entered through their orphaned inode, or on ext3 and ext4 through their directory block, which Kokino finds by searching the free blocks nearby."),
+        h("span", h("b", "Deleted content:"), " ext2 keeps a deleted file's block pointers, so its content is read as is. ext3 and ext4 clear them (and the size). Their journal often still holds an older copy of the inode; when it is the same file (same generation), Kokino reads the content through it and the file shows ", h("i", "Recovered from the journal"), ". Otherwise only the Carved files page can bring the content back, and the summary says how many deleted files that leaves."),
+        h("span", h("b", "Orphans:"), " inodes no name points to (deleted files whose names are gone, or files unlinked while still open) are listed under $OrphanFiles as inode-N."),
+      ),
+      h("h4", "Linux system summary"),
+      p("The System summary page reads the machine's own files: os-release, hostname and time zone; accounts from passwd, shadow (only whether and how a password is set, never the hash), group and lastlog; logons, failures, reboots and shutdowns from wtmp, btmp, auth.log or secure and the systemd journal; shell histories; sudo and account changes; installed packages from dpkg, apt, dnf, yum, apk or pacman, with who installed them; persistence (cron, systemd units, rc.local, SSH authorized keys, sudoers, ld.so.preload, shell startup files); USB storage the kernel logged; networks from NetworkManager, DHCP leases, known_hosts and /etc/hosts."),
+      ul(
+        h("span", h("b", "Syslog times:"), " classic syslog lines (\"Oct 20 10:10:01\") have no year and no time zone. Kokino converts them with the image's own /etc/localtime and counts the year back from the log file's modification time; such events are marked with *. Newer RFC 3339 lines and the journal carry exact UTC times."),
+        h("span", h("b", "Shell histories:"), " bash writes its history when the shell exits and records times only when HISTTIMEFORMAT was set; zsh and fish always do. Commands that destroy evidence (shred, history -c, removing logs, touch -d, journal vacuum) are flagged."),
+        h("span", h("b", "Journal:"), " fields the journal stored compressed (long messages) are counted, not read, in this version."),
+      ),
+    ],
+  },
+  {
     id: "web", title: "Browser history", icon: "globe",
     body: [
       p("Kokino reads Chrome, Edge, Brave, Opera, Vivaldi and Firefox profiles it finds on any parsed volume, including history still waiting in the -wal file that the browser had not merged yet."),
@@ -199,7 +220,7 @@ const WIKI = [
     ],
   },
   {
-    id: "system", title: "System summary (Windows)", icon: "monitor",
+    id: "system", title: "System summary (Windows; Linux is under Linux disks)", icon: "monitor",
     body: [
       p("For a Windows volume, Kokino reads the registry hives (SYSTEM, SOFTWARE, SAM, each user's NTUSER.DAT, Amcache.hve), the event logs, Prefetch files, Recent-folder shortcuts and Jump Lists, deleted copies included, and shows them on the System summary page:"),
       ul(
@@ -256,7 +277,7 @@ const WIKI = [
   {
     id: "carving", title: "Carved files", icon: "layers",
     body: [
-      p("Carving recovers files that no file system record describes any more, by their content. It runs after analysis (or with ", h("b", "Carve unallocated space"), " on the Carved files page) over every free NTFS cluster, the space outside partitions and volumes Kokino cannot parse yet."),
+      p("Carving recovers files that no file system record describes any more, by their content. It runs after analysis (or with ", h("b", "Carve unallocated space"), " on the Carved files page) over every free cluster or block (NTFS, FAT, exFAT, ext2/3/4), the space outside partitions and volumes Kokino cannot parse yet. On ext3 and ext4 it is often the only way back to a deleted file's content."),
       ul(
         h("span", h("b", "Formats:"), " JPEG, PNG, GIF, BMP, WebP, PDF, Word, Excel and PowerPoint (DOCX/XLSX/PPTX and the older DOC/XLS/PPT), OpenDocument, EPUB, ZIP, JAR, APK, Outlook MSG, SQLite, Windows executables, DLLs and drivers, GZIP, 7-Zip, WAV, AVI, MP4/MOV, Jump Lists and 64 KiB event log chunks (with their record count and time range, often all that is left of a cleared log)."),
         h("span", h("b", "Whole files:"), " each format's own structure says where the file ends (JPEG markers, PNG chunks, the ZIP central directory, the PE section table, the SQLite page count, the end of a GZIP stream...), so random bytes that only resemble a header are not listed. A file whose end is missing is kept and marked incomplete."),
@@ -303,7 +324,7 @@ const WIKI = [
       p("What is indexed:"),
       ul(
         h("span", h("b", "Files:"), " every data stream (including alternate data streams) of live and deleted files, as long as the deleted record still describes its clusters. Streams over 512 MiB are indexed up to that size."),
-        h("span", h("b", "Unallocated clusters:"), " every cluster marked free in the NTFS $Bitmap, the FAT or the exFAT allocation bitmap. Content of deleted files usually shows up here too, once as the file and once as free space."),
+        h("span", h("b", "Unallocated clusters:"), " every cluster or block marked free in the NTFS $Bitmap, the FAT, the exFAT allocation bitmap or the ext block bitmaps. Content of deleted files usually shows up here too, once as the file and once as free space."),
         h("span", h("b", "Outside the volumes:"), " space between and after partitions, and volumes whose file system Kokino cannot parse yet, read raw."),
       ),
       p("Text is extracted like the classic strings tool: runs of at least 4 printable characters in UTF-8 (which covers ASCII) and in UTF-16LE (how Windows stores most text), including Cyrillic and Greek."),
@@ -415,6 +436,7 @@ const WIKI = [
         h("tbody", [
           ["Digital Corpora nps-2009-canon2 (FAT32 camera card)", "Image hashes; recovered pictures against the real files", "Hashes match the published SHA-1; 34 of 36 recoverable pictures byte for byte (33 from the file system, 1 carved); the 3 overwritten deleted pictures flagged"],
           ["Digital Corpora nps-2009-ntfs1 (NTFS)", "File list against DFXML; compressed and encrypted copies against the originals", "All files, names and sizes right; all 9 compressed copies identical to the originals; EFS files read as ciphertext and marked"],
+          ["NIST CFReDS deleted file recovery, 22 ext images (ext2, ext3, ext4)", "Every deleted file with content, block by block; deleted names against NIST's layout", "962 of 965 tagged files complete (99.9996% of blocks); 302 recovered through the ext3/ext4 journal; 2,782 deleted names listed; wrong content without a warning in 1 file"],
           ["NIST CFReDS deleted file recovery, 61 images", "Every deleted file, block by block, against each file's own tags", "3,048 of 3,323 deleted test files complete; 99.8% of blocks right (exFAT and NTFS 100%); wrong content without a warning in 4 files"],
         ].map(([a, b, c]) => h("tr", h("td", h("b", a)), h("td", b), h("td", c)))))),
       p("The checks found and fixed real problems: NTFS compressed files are now decompressed (they were read as stored), fragmented deleted exFAT files are followed along their surviving chain, and deleted files whose space was reused, or claimed by another deleted file, are flagged on NTFS as on FAT."),
@@ -422,6 +444,7 @@ const WIKI = [
       ul(
         "FAT erases a deleted file's cluster chain, so a fragmented deleted FAT file comes back only up to its first fragment; Kokino marks every deleted FAT file \"Recovered as contiguous\" and warns when the guess runs into another file.",
         "Names that survive only in NTFS directory index slack ($I30) are not listed yet; they carry names and times, not content.",
+        "ext3 and ext4 clear a deleted file's block map: its content comes back only through an older copy of its inode in the journal, or by carving. ext2 erases the inode number from the deleted name, so the name and the content (under $OrphanFiles) are listed separately.",
         "Carving assumes a file is stored in one piece, so fragmented pictures with no directory entry left are not rejoined.",
       ),
       p("VALIDATION.md in the source has every image's numbers, the method and how to repeat it; ", code("kokino files"), " and ", code("kokino carve"), " are the command-line tools it uses."),
@@ -432,13 +455,15 @@ const WIKI = [
     body: [
       p("Evidence can be made to attack the tool that reads it: a disk image, registry hive or picture crafted to crash Kokino, hang an ingest, or use up the examiner's memory. Kokino is written in Rust with ", code("unsafe"), " code forbidden in every crate, and every parser that reads evidence has been fuzzed."),
       h("h3", "Fuzzing"),
-      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression and the file system walkers ran ", h("b", "197,062,147 inputs"), " and found ", h("b", "18 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
+      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader and the Linux log parsers ran ", h("b", "227,335,973 inputs"), " and found ", h("b", "22 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
       h("div.scroll", h("table.tbl",
         h("thead", h("tr", h("th", "Target"), h("th", "Covers"), h("th", "Inputs"), h("th", "Found"))),
         h("tbody", [
         ["volume", "MBR, extended and GPT partition tables, file system detection", "193,631", "none"],
         ["ntfs", "NTFS: boot sector, every MFT record, attributes and attribute lists, data runs, stream reads, free-space bitmap", "193,145", "3 (hang, memory, panic)"],
         ["fat", "FAT12, FAT16, FAT32 and exFAT: boot sectors, FAT chains, directories, deleted entries, long names", "386,599", "4 (memory, overflow)"],
+        ["ext", "ext2, ext3 and ext4: superblock, group descriptors, inodes, extents, indirect blocks, directories and their slack, journal copies", "1,332,425", "1 (memory)"],
+        ["linuxlogs", "systemd journal, wtmp/btmp, syslog dates, TZif time zones, apt history, DHCP leases, dpkg status", "28,941,401", "3 (overflow)"],
         ["ewf", "E01 (EWF) images: sections, chunk tables, zlib chunks, stored hashes", "42,686", "1 (overflow)"],
         ["registry", "Registry hives (SYSTEM, SOFTWARE, SAM, NTUSER.DAT, Amcache): cells, key and value lists, the whole key tree", "23,242,474", "1 (hang)"],
         ["evtx", "Windows event logs: chunks, binary XML templates and substitutions", "3,188,571", "none"],

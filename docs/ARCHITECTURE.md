@@ -47,12 +47,12 @@ Mobile *extraction parsing* may be added later as plugins.
                 |   timestamp anomalies, anti-forensics scoring,  |
                 |   summary / impact                              |
                 +----------+------------------+-------------------+
-                           |                  |
-                +----------v------+   +-------v-------------------+
-                | kokino-ntfs     |   | kokino-fat                |
-                |  MFT walk, SI/FN|   |  FAT12/16/32, exFAT,      |
-                |  ADS, data runs |   |  deleted entries          |
-                +----------+------+   +---------------------------+
+                           |                  |                |
+                +----------v------+   +-------v---------+ +----v------------+
+                | kokino-ntfs     |   | kokino-fat      | | kokino-ext      |
+                |  MFT walk, SI/FN|   |  FAT12/16/32,   | |  ext2/3/4,      |
+                |  ADS, data runs |   |  exFAT, deleted | |  journal copies |
+                +----------+------+   +-----------------+ +-----------------+
                            |
                 +----------v--------------------------------------+
                 | kokino-image                                    |
@@ -72,9 +72,11 @@ Mobile *extraction parsing* may be added later as plugins.
 | `kokino-image` | `EvidenceSource` (read-only `Read + Seek`), raw / split raw / VHD footer, MBR and GPT parsing, `SubReader` for a volume window |
 | `kokino-ntfs` | Walks every MFT record including deleted ones, collects $STANDARD_INFORMATION and $FILE_NAME times, streams (ADS), data runs, resolves full paths and orphans |
 | `kokino-fat` | FAT12/16/32 and exFAT: boot sector, FAT and allocation bitmap, directory walk with long names and exFAT entry sets, deleted entries (long names restored from the checksum, contiguous content recovery, reuse detection), cluster extents and free runs. Produces the same `FsEntry` rows as `kokino-ntfs` |
+| `kokino-ext` | ext2, ext3 and ext4: superblock, group descriptors (meta_bg, 64-bit), inodes with nanosecond and creation times, extent trees and indirect block maps, inline data and fast symlinks, directory walk with deleted names recovered from record slack (htree index blocks skipped), orphaned inodes, block bitmap free runs. Deleted ext3/ext4 inodes are read through older copies of their inode-table block found in the JBD2 journal (generation checked). Owner, mode and inode go in `FsEntry::unix` |
+| `kokino-analysis::linux` | Linux artifacts: os-release, hostname, time zone (TZif with POSIX rules, used to date classic syslog lines), passwd/shadow/group/lastlog, wtmp/btmp, auth.log/secure/syslog/messages (rotations and .gz), journald files, shell histories, dpkg/apt/dnf/yum/apk/pacman, cron, systemd, rc.local, authorized_keys, sudoers, ld.so.preload, NetworkManager, DHCP leases, known_hosts, /etc/hosts; their events go on the timeline |
 | `kokino-analysis::photo` | Photo forensics: JPEG marker parser and baseline Huffman decoder (DCT coefficients, luminance), EXIF reader, PNG/BMP readers, double-compression score, thumbnail comparison, libjpeg table identification, trailing data, LSB chi-square test; evidence-wide scan with a same-camera cross-check. The pixel views (error level, noise, clones...) run in the browser (`ui/js/photo.js`) |
 | `kokino-analysis::hashsets` | Hash set store (one SQLite file per set, binary hashes per algorithm), importers (NSRL RDS v3/2.x, CSV, lists), per-evidence file hashing and set matching |
-| `kokino-analysis` | `fs::Fs` opens NTFS or FAT behind one interface (scan, read, extents, free runs) for every consumer below. File signature detection and extension mismatch, Shannon entropy, MACB timeline, timestamp anomaly rules, anti-forensics indicators and score, summary |
+| `kokino-analysis` | `fs::Fs` opens NTFS, FAT or ext behind one interface (scan, read, extents, free runs) for every consumer below. File signature detection and extension mismatch, Shannon entropy, MACB timeline, timestamp anomaly rules, anti-forensics indicators and score, summary |
 | `kokino-server` | HTTP API, sessions and access control, TLS, job runner with progress, hex reads, patch overlay, case reports (`casereport`: one document model rendered to HTML and .docx), embedded `ui/` |
 | `kokino-cli` | `kokino serve`, `kokino user`, `kokino analyze`, `kokino hash`, `kokino verify-audit` |
 

@@ -639,6 +639,11 @@ async fn file_detail(State(st): St, Path((cid, eid, fi, idx)): Path<(String, Str
         "record_image_offset": r.e.record_offset + vol,
         "data_image_offset": r.e.data_offset().map(|o| o + vol),
         "streams": streams, "indicators": indicators, "events": events, "hashes": hashes,
+        "unix": r.e.unix.as_ref().map(|u| json!({
+            "inode": u.inode, "mode": format!("{:o}", u.mode), "mode_string": u.mode_string(), "uid": u.uid, "gid": u.gid,
+            "deleted": filetime_to_iso(u.deleted_time), "deleted_raw": u.deleted_time,
+            "inode_image_offset": u.inode_offset + vol, "journal_seq": u.journal_seq, "link_target": u.link_target,
+        })),
     })))
 }
 
@@ -996,7 +1001,7 @@ async fn timeline(State(st): St, Path((cid, eid, fi)): Path<(String, String, usi
                 return (needle.is_empty() || text.contains(&needle)) && matches!(only.as_str(), "" | "web");
             }
             if kokino_analysis::timeline::is_windows(e.src) {
-                let Some(w) = f.windows.timeline.get(e.idx as usize) else { return false };
+                let Some(w) = kokino_analysis::timeline::system_event(&f.windows, &f.linux.timeline, e.idx as usize) else { return false };
                 let hit = needle.is_empty() || w.what.to_lowercase().contains(&needle) || w.detail.to_lowercase().contains(&needle);
                 return hit && matches!(only.as_str(), "" | "windows");
             }
@@ -1005,7 +1010,7 @@ async fn timeline(State(st): St, Path((cid, eid, fi)): Path<(String, String, usi
                 && match only.as_str() {
                     "flagged" => !r.flags.is_empty(),
                     "deleted" => r.e.deleted,
-                    "si" => e.src == "SI",
+                    "si" => e.src == "SI" || e.src == "DEL",
                     "fn" => e.src == "FN",
                     "web" | "windows" => false,
                     _ => true,
@@ -1025,7 +1030,7 @@ async fn timeline(State(st): St, Path((cid, eid, fi)): Path<(String, String, usi
                 return json!({"t": filetime_to_iso(e.t), "macb": e.macb, "src": e.src, "idx": e.idx, "path": text, "detail": detail, "deleted": false, "flags": [], "is_dir": false, "size": size, "web": true});
             }
             if kokino_analysis::timeline::is_windows(e.src) {
-                let w = &f.windows.timeline[e.idx as usize];
+                let Some(w) = kokino_analysis::timeline::system_event(&f.windows, &f.linux.timeline, e.idx as usize) else { return json!({}) };
                 return json!({"t": filetime_to_iso(e.t), "macb": "", "src": e.src, "idx": e.idx, "path": w.what, "detail": w.detail, "deleted": false, "flags": [], "is_dir": false, "size": 0, "windows": true});
             }
             let r = &f.files[e.idx as usize];
@@ -1059,10 +1064,19 @@ async fn windows(State(st): St, Path((cid, eid, fi)): Path<(String, String, usiz
         .map(|x| x.file)
         .chain(f.windows.access.iter().map(|x| x.file))
         .chain(f.windows.events.iter().map(|x| Some(x.file)))
+        .chain(f.linux.commands.iter().map(|x| Some(x.file)))
+        .chain(f.linux.logons.iter().map(|x| Some(x.file)))
+        .chain(f.linux.events.iter().map(|x| Some(x.file)))
+        .chain(f.linux.persistence.iter().map(|x| Some(x.file)))
         .flatten()
         .map(|i| (i, path(Some(i))))
         .collect();
-    Ok(Json(json!({"schema": l.analysis.schema, "windows": f.windows, "files": files})))
+    let mut linux = serde_json::to_value(&f.linux)?;
+    if let Some(o) = linux.as_object_mut() {
+        o.remove("timeline");
+        o.remove("hits");
+    }
+    Ok(Json(json!({"schema": l.analysis.schema, "fs": f.volume.fs_label, "windows": f.windows, "linux": linux, "files": files})))
 }
 
 #[derive(Deserialize)]

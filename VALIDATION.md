@@ -26,6 +26,7 @@ section. Run on Windows 10.
 |---|---|---|
 | Digital Corpora `nps-2009-canon2` (FAT32 camera card, E01) | Image hashes against the published SHA-1; recovered pictures against the real files | Both images verify (E01 stored MD5 and published SHA-1); 34 of 36 recoverable pictures recovered byte for byte; the 3 overwritten deleted pictures flagged |
 | Digital Corpora `nps-2009-ntfs1` (NTFS, E01) | File list against the DFXML; compressed and EFS-encrypted copies against the plain originals | All files with correct names and sizes; all 9 compressed copies identical to the originals (after adding NTFS decompression, see below); encrypted copies read as ciphertext and now flagged |
+| NIST CFReDS DFR, 22 ext images (ext2, ext3, ext4) | Every deleted file with content, block by block; deleted names against NIST's layout | 962 of 965 tagged files complete, 99.9996% of blocks right; 302 files recovered through the ext3/ext4 journal; 2,782 deleted names listed; wrong content without a warning in 1 file |
 | NIST CFReDS DFR, 61 images (FAT12/16/32, exFAT, NTFS) | Every deleted file Kokino lists, block by block, against the files' own tags; counts against NIST's layout | 3,048 of 3,323 deleted test files complete, 1,367,020 of 1,370,338 blocks right (99.8%); exFAT 100%, NTFS 100% of blocks; wrong content without a warning in 4 files |
 
 The validation found real problems in Kokino, all fixed before these
@@ -198,12 +199,97 @@ every block right. Blocks are full 512-byte blocks, as NIST counts them.
   fat-08, ntfs-08 and ntfs-14), each overwritten by a file that left no
   trace Kokino can see yet.
 
+## NIST CFReDS: deleted file recovery on ext2, ext3 and ext4
+
+The same NIST DFR set has 22 ext images (cases 01 to 17 and their
+variants). Each is a 1 GB disk with three partitions, ext2, ext3 and ext4,
+holding the same test story. `scripts/validate_cfreds.py` checks them the
+same way as the FAT and NTFS images, and for ext also runs the full
+analysis to count deleted names that have no content left.
+
+| Data | Result |
+|---|---|
+| Deleted names listed | 2,782 (NIST counts 3,032 deleted files with metadata in the cases that state a number) |
+| Deleted names matching NIST's count exactly | 11 of 19 cases with a stated count |
+| Deleted files with content | 1,013 (ext2 711, ext3 33, ext4 269) |
+| Tagged content complete | 962 of 965 files; 1,852,775 of 1,852,782 blocks right (99.9996%) |
+| Recovered through the journal (ext3, ext4) | 302 files |
+| Wrong content without a warning | 1 file (ext-07-one, see below) |
+
+| Image | NIST: deleted files with metadata | Deleted names Kokino lists | Deleted files with content | Complete | Through the journal | Wrong, no warning |
+|---|--:|--:|--:|--:|--:|--:|
+| ext-01 | 3 | 3 | 1 | 1 | 0 | 0 |
+| ext-01-recycle | 3 | 15 | 2 | 1 | 0 | 0 |
+| ext-02 | 3 | 3 | 1 | 1 | 0 | 0 |
+| ext-03 | 3 | 3 | 1 | 1 | 0 | 0 |
+| ext-04 | 0 | 36 | 12 | 12 | 0 | 0 |
+| ext-05-braid | 6 | 6 | 2 | 2 | 0 | 0 |
+| ext-05 | 6 | 6 | 2 | 2 | 0 | 0 |
+| ext-05-nest | 6 | 6 | 2 | 2 | 0 | 0 |
+| ext-06 | 3 | 3 | 3 | 3 | 2 | 0 |
+| ext-07 | 9 | 9 | 7 | 4 | 4 | 0 |
+| ext-07-one | 6 | 6 | 5 | 2 | 3 | 1 |
+| ext-07-two | 6 | 3 | 3 | 0 | 2 | 0 |
+| ext-08 | 26 | 25 | 20 | 15 | 7 | 0 |
+| ext-09 | 766 | 832 | 260 | 260 | 0 | 0 |
+| ext-10 | 1757 | 1181 | 539 | 539 | 279 | 0 |
+| ext-11 | 9 | 9 | 3 | 3 | 0 | 0 |
+| ext-12 | 30 | 30 | 12 | 12 | 3 | 0 |
+| ext-13 | 384 | 404 | 120 | 92 | 2 | 0 |
+| ext-14 | 6 | 24 | 18 | 10 | 0 | 0 |
+| ext-15 | - | 0 | 0 | 0 | 0 | 0 |
+| ext-16 | - | 178 | 0 | 0 | 0 | 0 |
+| ext-17 | - | 0 | 0 | 0 | 0 | 0 |
+
+### What the numbers mean
+
+- **ext2** keeps a deleted file's block pointers but erases the inode
+  number from its directory entry. Kokino lists the name (with a note) and
+  the content separately, as an orphaned inode under `$OrphanFiles`;
+  deleted folders are walked from their orphaned inode, so the files in
+  them keep their names. Content: 669 of 711 files complete, the rest
+  warned.
+- **ext3 and ext4** clear a deleted file's block map and size. The names
+  stay (Kokino lists them all), and the content comes back when the journal
+  still holds an older copy of the inode: 302 files here. Otherwise the
+  name is listed with no content, and only carving can help.
+- **Deleted folders on ext3 and ext4** (case 11, 12): the folder's block
+  map is cleared too, so Kokino searches the free blocks of its block group
+  for the directory block that starts with "." naming the folder's inode.
+  Case 11 and 12 names are all found that way.
+- **Counts above NIST's** (01-recycle, 04, 09, 13, 14): Kokino lists
+  every deleted name it can read, including names NIST counts as "not
+  found" (case 04, non-ASCII names whose inode number was erased) and the
+  desktop trash's own files (01-recycle). In large indexed folders (09)
+  an index split leaves old copies of names behind; those with the same
+  inode as a live name are dropped, a few with a reused inode remain.
+- **Counts below NIST's** (07-two, 08, 10): new files written after the
+  deletes reused the directory entries, so the names are gone; NIST counts
+  inode metadata, which survives without a name.
+- **Wrong content without a warning**: 1 file. In ext-07-one a deleted
+  ext4 file is read through its journal copy, but its blocks were used
+  afterwards by another file that was then deleted too. ext4 erased that
+  second file's block map, so nothing on the disk shows it ever owned
+  those blocks.
+
+The validation found real problems, all fixed before these results:
+
+1. ext2 deleted names whose inode number is erased were dropped.
+2. Deleted folders on ext2 were not entered (rmdir sets their size to 0)
+   and orphaned folders were listed without their files.
+3. Blocks of large indexed folders whose files were all deleted were
+   skipped as index blocks, losing every name in them.
+4. Old copies of names left by index splits were listed as deleted files.
+5. Deleted folders on ext3 and ext4 had no way back to their entries; the
+   directory block search was added.
+
 ## Repeating it
 
 Download (about 240 MB) into `target/validation/` (ignored by git):
 
 - CFReDS: `https://cfreds-archive.nist.gov/dfr-images/` the `dfr-*-fat`,
-  `-xfat` and `-ntfs` `.dd.bz2` images and `setup-july-10-2012.pdf`.
+  `-xfat`, `-ntfs` and `-ext` `.dd.bz2` images and `setup-july-10-2012.pdf`
+  (the ext images are about 55 MB more; keep them in their own folder).
 - Digital Corpora: `https://digitalcorpora.s3.amazonaws.com/corpora/drives/`
   `nps-2009-ntfs1/` (`ntfs1-gen1.E01`, `ntfs1-gen2.E01`, `ntfs1-gen2.xml`)
   and `nps-2009-canon2/` (`nps-2009-canon2-gen1.E01`, `-gen6.E01`,
@@ -214,6 +300,7 @@ Then:
 ```bash
 cargo build --release
 python scripts/validate_cfreds.py target/validation/cfreds
+python scripts/validate_cfreds.py target/validation/cfreds-ext
 ./target/release/kokino hash target/validation/canon2/nps-2009-canon2-gen6.E01
 ./target/release/kokino files target/validation/canon2/nps-2009-canon2-gen6.E01
 ./target/release/kokino carve target/validation/canon2/nps-2009-canon2-gen6.E01

@@ -5,6 +5,7 @@
 //! never what happened. See docs/ANTI-FORENSICS.md for the method.
 
 use crate::FileRow;
+use crate::linux::LinuxArtifacts;
 use crate::windows::WindowsArtifacts;
 use kokino_artifacts::browser::WebActivity;
 use kokino_core::time::is_whole_second;
@@ -50,6 +51,42 @@ struct Rule {
 }
 
 const RULES: &[Rule] = &[
+    Rule {
+        id: "linux_antiforensic_command",
+        title: "Shell history or sudo log shows evidence being destroyed",
+        category: "Tool presence",
+        weight: 0.6,
+        k: 2.0,
+        explanation: "A user's shell history, apt history or the sudo log contains commands that wipe files (shred, wipe, srm), clear or disable the shell history, remove log files, vacuum the journal, set file times by hand, change the system clock, open a reverse shell or load a kernel module.",
+        caveat: "Administrators run some of these routinely (log rotation clean-up, touch in build scripts). Read the command and its context on the System page.",
+    },
+    Rule {
+        id: "shell_history_cleared",
+        title: "Shell history emptied or sent to /dev/null",
+        category: "Log tampering",
+        weight: 0.45,
+        k: 1.0,
+        explanation: "A user's .bash_history is empty or is a symbolic link to /dev/null, so the shell keeps no record of the commands typed.",
+        caveat: "A new or rarely used account also has an empty history, and some hardened systems disable history on purpose.",
+    },
+    Rule {
+        id: "linux_log_emptied",
+        title: "Linux log file emptied",
+        category: "Log tampering",
+        weight: 0.5,
+        k: 1.0,
+        explanation: "wtmp is empty, or auth.log / secure is empty while older rotations still hold entries: the usual result of truncating a log to hide logons.",
+        caveat: "Log rotation leaves a fresh, empty file until the next entry is written; check the file's modification time against the last rotation.",
+    },
+    Rule {
+        id: "ld_preload",
+        title: "/etc/ld.so.preload loads a library into every program",
+        category: "Persistence",
+        weight: 0.6,
+        k: 1.0,
+        explanation: "Every program started on the system loads the libraries listed in /etc/ld.so.preload. User-mode rootkits (Azazel, Jynx, libprocesshider) use it to hide files, processes and network connections.",
+        caveat: "A few legitimate tools (some security agents, memory allocators) use it too. Check the listed library's path, hashes and package ownership.",
+    },
     Rule {
         id: "log_cleared_event",
         title: "Windows recorded that an event log was cleared",
@@ -263,12 +300,13 @@ fn sdelete_like(name: &str) -> bool {
 /// Runs every rule, tags matching files and returns indicators with count > 0.
 /// `fat`: FAT/exFAT volume, whose dates start in 1980, so only future times
 /// count as implausible there.
-pub fn evaluate(files: &mut [FileRow], now: u64, web: &WebActivity, win: &WindowsArtifacts, fat: bool) -> Vec<Indicator> {
+/// `any_epoch`: the file system is not NTFS, so only future times are implausible.
+pub fn evaluate(files: &mut [FileRow], now: u64, web: &WebActivity, win: &WindowsArtifacts, linux: &LinuxArtifacts, any_epoch: bool) -> Vec<Indicator> {
     let mut hits: HashMap<&'static str, Vec<usize>> = HashMap::new();
     const SECOND: u64 = 10_000_000;
     const NTFS_EPOCH_1993: u64 = 124_604_352_000_000_000;
     let future = now + 86_400 * SECOND;
-    let oldest = if fat { 0 } else { NTFS_EPOCH_1993 };
+    let oldest = if any_epoch { 0 } else { NTFS_EPOCH_1993 };
 
     let by_path: HashMap<String, usize> = files.iter().enumerate().filter(|(_, f)| !f.e.deleted).map(|(i, f)| (f.e.path.to_ascii_lowercase(), i)).collect();
     let windows_volume = by_path.contains_key("/windows/system32");
@@ -361,6 +399,14 @@ pub fn evaluate(files: &mut [FileRow], now: u64, web: &WebActivity, win: &Window
     for x in win.execution.iter().filter(|x| x.tool && !matches!(x.source.as_str(), "Prefetch" | "ShimCache")) {
         if let Some(f) = x.file {
             hits.entry("tool_execution_record").or_default().push(f as usize);
+        }
+    }
+
+    for (id, file) in &linux.hits {
+        if let Some(rule) = RULES.iter().find(|r| r.id == id) {
+            if (*file as usize) < files.len() {
+                hits.entry(rule.id).or_default().push(*file as usize);
+            }
         }
     }
 

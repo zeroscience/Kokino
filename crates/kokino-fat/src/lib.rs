@@ -485,6 +485,7 @@ pub fn scan<R: Read + Seek>(v: &FatVolume, r: &mut R, mut progress: impl FnMut(u
         has_reparse: false,
         record_offset: v.root_region.map(|x| x.0).unwrap_or_else(|| v.cluster_offset(v.root_cluster.max(2))),
         error: None,
+        unix: None,
     };
     let mut w = Walker { v, r, out: vec![root], next: FIRST_RECORD, seen_dirs: HashSet::new() };
     let root_data = match v.root_region {
@@ -578,6 +579,7 @@ impl<'a, R: Read + Seek> Walker<'a, R> {
             has_reparse: false,
             record_offset: entry_off,
             error,
+            unix: None,
         });
         rec
     }

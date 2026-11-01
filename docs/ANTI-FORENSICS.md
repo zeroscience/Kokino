@@ -33,6 +33,10 @@ Every indicator is a fixed, documented rule in
 | `browser_history_cleared` | Log tampering | 0.45 | 1 | a browser history database with no visits and no URLs, or a deleted history database |
 | `antiforensic_web` | Tool presence | 0.40 | 2 | a download of a known wiping/cleaning tool, or a search about wiping, shredding, permanent deletion, clearing traces or hidden volumes |
 | `log_cleared_event` | Log tampering | 0.60 | 1 | event 1102 (Security log cleared) or 104 (another log cleared), which names the account and time |
+| `linux_antiforensic_command` | Tool presence | 0.60 | 2 | shell, apt or sudo history shows shred / wipe / srm, history -c or HISTFILE disabled, log or history files removed, journal vacuumed, touch -d, clock changes, reverse shells or kernel modules loaded |
+| `shell_history_cleared` | Log tampering | 0.45 | 1 | a user's .bash_history is empty or a symbolic link to /dev/null |
+| `linux_log_emptied` | Log tampering | 0.50 | 1 | wtmp empty, or auth.log / secure empty while older rotations hold entries |
+| `ld_preload` | Persistence | 0.60 | 1 | /etc/ld.so.preload lists a library (user-mode rootkit technique) |
 | `tool_execution_record` | Tool presence | 0.50 | 1 | UserAssist, Amcache or a 4688 process-creation event shows a known wiping / cleaning tool started (independent of Prefetch) |
 
 ## Combination

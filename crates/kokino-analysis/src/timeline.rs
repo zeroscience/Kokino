@@ -7,10 +7,11 @@
 //! Browser activity joins the same timeline: page visits, download starts
 //! and searches, each pointing into `FsAnalysis::web`. So do Windows
 //! artifacts (program runs, files opened, USB devices, installs, networks
-//! and notable events), each pointing into `FsAnalysis::windows.timeline`.
+//! and notable events), each pointing into `FsAnalysis::windows.timeline` or, numbered after
+//! those, `FsAnalysis::linux.timeline`.
 
 use crate::FileRow;
-use crate::windows::WindowsArtifacts;
+use crate::windows::{WinTime, WindowsArtifacts};
 use kokino_artifacts::browser::WebActivity;
 use serde::Serialize;
 
@@ -39,7 +40,14 @@ pub fn is_artifact(src: &str) -> bool {
     is_web(src) || is_windows(src)
 }
 
-pub fn build(files: &[FileRow], web: &WebActivity, windows: &WindowsArtifacts) -> Vec<TimelineEvent> {
+/// `linux`: the Linux artifacts' timeline; its events are numbered after the
+/// Windows ones (see `system_event`).
+/// The Windows or Linux timeline entry behind a system event's index.
+pub fn system_event<'a>(windows: &'a WindowsArtifacts, linux: &'a [WinTime], idx: usize) -> Option<&'a WinTime> {
+    windows.timeline.get(idx).or_else(|| linux.get(idx.checked_sub(windows.timeline.len())?))
+}
+
+pub fn build(files: &[FileRow], web: &WebActivity, windows: &WindowsArtifacts, linux: &[WinTime]) -> Vec<TimelineEvent> {
     let mut out = Vec::with_capacity(files.len() * 3);
     for (i, f) in files.iter().enumerate() {
         for (src, times) in [("SI", f.e.si), ("FN", f.e.fname)] {
@@ -64,6 +72,10 @@ pub fn build(files: &[FileRow], web: &WebActivity, windows: &WindowsArtifacts) -
                 out.push(TimelineEvent { t: ts, macb, src, idx: i as u32 });
             }
         }
+        // ext2/3/4 record when an inode was deleted.
+        if let Some(u) = f.e.unix.as_ref().filter(|u| u.deleted_time != 0) {
+            out.push(TimelineEvent { t: u.deleted_time, macb: "D".into(), src: "DEL", idx: i as u32 });
+        }
     }
     for (i, v) in web.visits.iter().enumerate().filter(|(_, v)| v.t > 0) {
         out.push(TimelineEvent { t: v.t, macb: if v.typed { "typed".into() } else { String::new() }, src: "VISIT", idx: i as u32 });
@@ -74,7 +86,7 @@ pub fn build(files: &[FileRow], web: &WebActivity, windows: &WindowsArtifacts) -
     for (i, s) in web.searches.iter().enumerate().filter(|(_, s)| s.t > 0) {
         out.push(TimelineEvent { t: s.t, macb: String::new(), src: "SEARCH", idx: i as u32 });
     }
-    for (i, w) in windows.timeline.iter().enumerate() {
+    for (i, w) in windows.timeline.iter().chain(linux).enumerate() {
         let src = match w.kind.as_str() {
             "EXEC" => "EXEC",
             "OPEN" => "OPEN",

@@ -20,13 +20,17 @@ checked against public test images with known answers where they exist
 - [x] Accounts, roles and hash-chained audit logs; lab server mode over HTTPS
 - [x] Packages for Windows (MSI), Linux (.deb, .tar.gz) and macOS (DMG)
 
-## Next
+## Since 1.2.5 (unreleased)
 
 ### Linux: ext4 and Linux artifacts
-- [ ] ext2/3/4: inodes, extents, directories, deleted entries (recovered through the journal where possible)
-- [ ] Linux system summary: users and groups, logins (wtmp, btmp, lastlog), auth.log and syslog, journald, cron and systemd units, shell histories, SSH keys and known hosts, installed packages
-- [ ] Linux events on the timeline
-- [ ] Validation against the NIST CFReDS ext images
+- [x] ext2/3/4: inodes, extents, directories, deleted entries (recovered through the journal where possible)
+- [x] Linux system summary: users and groups, logins (wtmp, btmp, lastlog), auth.log and syslog, journald, cron and systemd units, shell histories, SSH keys and known hosts, installed packages
+- [x] Linux events on the timeline
+- [x] Validation against the NIST CFReDS ext images (22 images, VALIDATION.md)
+- [ ] journald: compressed fields (XZ, LZ4, zstd)
+- [ ] Older journal copies of whole directories (names of files deleted long ago)
+
+## Next
 
 ### Virtual and optical disks
 - [ ] VHDX and VMDK (virtual machines and cloud disks)

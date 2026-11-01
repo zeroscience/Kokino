@@ -1,0 +1,7 @@
+lease {
+  interface "eth0";
+  fixed-address 192.0.2.20;
+  option routers 192.0.2.1;
+  option dhcp-server-identifier 192.0.2.1;
+  option domain-name "lab.test";
+}

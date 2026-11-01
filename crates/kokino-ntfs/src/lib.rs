@@ -65,6 +65,60 @@ pub struct FsEntry {
     /// Volume-relative byte offset of the MFT record.
     pub record_offset: u64,
     pub error: Option<String>,
+    /// Owner, mode and inode on Unix file systems (ext2/3/4); None elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unix: Option<UnixMeta>,
+}
+
+/// What a Unix inode adds to an entry.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UnixMeta {
+    pub inode: u64,
+    /// st_mode: file type and permission bits.
+    pub mode: u32,
+    pub uid: u32,
+    pub gid: u32,
+    /// Deletion time (FILETIME), 0 when not set.
+    #[serde(default)]
+    pub deleted_time: u64,
+    /// Volume byte offset of the inode the content is read through: the
+    /// inode table, or a copy of the inode kept in the file-system journal.
+    pub inode_offset: u64,
+    /// Journal transaction the inode copy came from, when recovered from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub journal_seq: Option<u32>,
+    /// Symbolic link target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_target: Option<String>,
+}
+
+impl UnixMeta {
+    /// "-rw-r--r--" style, as ls prints it.
+    pub fn mode_string(&self) -> String {
+        let t = match self.mode & 0o170000 {
+            0o040000 => 'd',
+            0o120000 => 'l',
+            0o020000 => 'c',
+            0o060000 => 'b',
+            0o010000 => 'p',
+            0o140000 => 's',
+            _ => '-',
+        };
+        let mut s = String::from(t);
+        for (i, c) in "rwxrwxrwx".chars().enumerate() {
+            s.push(if self.mode & (0o400 >> i) != 0 { c } else { '-' });
+        }
+        let special = |s: &mut String, at: usize, bit: u32, on: char, off: char| {
+            if self.mode & bit != 0 {
+                let x = if s.as_bytes()[at] == b'x' { on } else { off };
+                s.replace_range(at..at + 1, &x.to_string());
+            }
+        };
+        special(&mut s, 3, 0o4000, 's', 'S');
+        special(&mut s, 6, 0o2000, 's', 'S');
+        special(&mut s, 9, 0o1000, 't', 'T');
+        s
+    }
 }
 
 impl FsEntry {
@@ -325,6 +379,7 @@ fn entry_from_file<R: Read + Seek>(file: &NtfsFile, r: &mut R) -> anyhow::Result
         has_reparse: false,
         record_offset: file.position().value().map(|v| v.get()).unwrap_or(0),
         error: None,
+        unix: None,
     };
     let mut best_ns: i32 = -1;
 

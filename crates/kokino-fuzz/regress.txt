@@ -35,3 +35,9 @@ photo 3 87437 hang
 photo 4 1260851 panic
 ntfs 8 39312 panic
 ntfs 8 44093 panic
+ext 1 100666 oom
+ext 1 102577 oom
+ext 1 105243 oom
+linuxlogs 1 3150 overflow
+linuxlogs 1 3907 overflow
+linuxlogs 1 3419575 overflow

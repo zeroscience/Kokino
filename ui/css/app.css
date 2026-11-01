@@ -496,6 +496,7 @@ button.chip.on { background: hsl(var(--h) 55% 50% / .2); border-color: hsl(var(-
 .macb b { color: var(--accent); font-weight: 700; }
 .src { font-size: 10.5px; padding: 1px 6px; border-radius: 5px; border: 1px solid var(--line2); }
 .src.FN { color: var(--info); border-color: color-mix(in srgb, var(--info) 40%, transparent); }
+.src.DEL { color: var(--del); border-color: color-mix(in srgb, var(--del) 40%, transparent); }
 
 /* ---------- modal / toasts ---------- */
 .modal { position: fixed; inset: 0; z-index: 60; display: none; place-items: center; background: rgba(5, 5, 10, .55); backdrop-filter: blur(6px); }

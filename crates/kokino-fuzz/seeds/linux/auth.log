@@ -1,0 +1,6 @@
+Oct 20 10:10:01 lab-srv sshd[811]: Accepted publickey for alice from 192.0.2.10 port 50122 ssh2: ED25519 SHA256:lab
+Oct 20 10:12:44 lab-srv sudo:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/apt install nmap
+Oct 20 10:20:03 lab-srv sshd[900]: Failed password for invalid user admin from 198.51.100.7 port 4242 ssh2
+Oct 20 10:20:09 lab-srv sshd[900]: Failed password for invalid user admin from 198.51.100.7 port 4242 ssh2
+Oct 20 10:31:15 lab-srv useradd[1001]: new user: name=svc-backup, UID=1001, GID=1001, home=/home/svc-backup, shell=/bin/bash, from=/dev/pts/0
+Oct 20 10:40:00 lab-srv sudo:    alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/shred -u /var/log/auth.log.1

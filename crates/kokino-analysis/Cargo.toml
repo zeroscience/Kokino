@@ -11,6 +11,7 @@ kokino-core.workspace = true
 kokino-image.workspace = true
 kokino-ntfs.workspace = true
 kokino-fat.workspace = true
+kokino-ext.workspace = true
 kokino-artifacts.workspace = true
 anyhow.workspace = true
 serde.workspace = true

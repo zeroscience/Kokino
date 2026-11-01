@@ -272,7 +272,7 @@ async function home() {
   render(
     h("div.hero",
       h("h1", "Every finding, ", h("em", "traceable to the byte.")),
-      h("p", "Open an image, and Kokino walks every NTFS MFT record and FAT/exFAT directory entry, live and deleted, compares $SI against $FN timestamps, checks signatures and scores the evidence for anti-forensic activity, with an explanation behind every number."),
+      h("p", "Open an image, and Kokino walks every NTFS MFT record, FAT/exFAT directory entry and ext2/3/4 inode, live and deleted, compares $SI against $FN timestamps, checks signatures and scores the evidence for anti-forensic activity, with an explanation behind every number."),
     ),
     h("div.grid.g3",
       canCreate()
@@ -577,7 +577,7 @@ async function workspace(cid, eid, tab, q) {
   if (tab === "photo") return photoViewer(ctx);
   if (tab === "hashes") return hashesTab(ctx);
   if (!ctx.fs) {
-    return render(h("div.card.stack", h("h2", "No supported filesystem found"), h("p.muted", "Kokino parses NTFS, FAT12, FAT16, FAT32 and exFAT. Detected volumes:"), volumeMap(s), ...s.errors.map((e) => h("p", e)), h("a.btn", { href: `#/c/${cid}/e/${eid}/hex` }, "Open in hex")));
+    return render(h("div.card.stack", h("h2", "No supported filesystem found"), h("p.muted", "Kokino parses NTFS, FAT12, FAT16, FAT32, exFAT, ext2, ext3 and ext4. Detected volumes:"), volumeMap(s), ...s.errors.map((e) => h("p", e)), h("a.btn", { href: `#/c/${cid}/e/${eid}/hex` }, "Open in hex")));
   }
   if (tab === "explorer") return explorerTab(ctx);
   if (tab === "timeline") return timelineTab(ctx);
@@ -594,6 +594,8 @@ function fsPicker(ctx, tab) {
 
 /** FAT12/16/32 and exFAT: one timestamp set, no MFT, no named streams. */
 const isFat = (label) => /fat/i.test(label || "");
+const isExt = (label) => /^ext/i.test(label || "");
+const isNtfs = (label) => !isFat(label) && !isExt(label);
 /** FAT12/16/32 store the device's local time with no zone: shown as stored, never converted. exFAT stores a UTC offset. */
 const deviceClock = (label) => isFat(label) && label !== "exFAT";
 const fsClock = (ctx) => ({ raw: !!(ctx.fs && deviceClock(ctx.fs.volume.fs_label)) });
@@ -679,7 +681,7 @@ function summaryTab(ctx) {
   const maxCat = Math.max(1, ...st.by_category.map((c) => c[1]));
   const maxExt = Math.max(1, ...st.top_ext.map((c) => c[1]));
   render(h("div.stack",
-    h("div.hd", h("div", h("h1", ev.record.name), h("div.muted", `${fs.volume.fs_label} "${fs.info.label}", serial ${fs.info.serial}, ${isFat(fs.volume.fs_label) ? "" : `NTFS ${fs.info.version}, `}cluster ${fs.info.cluster_size} B, analyzed ${ts(s.analyzed_at, 19, { label: true })} by Kokino ${s.tool_version}`)), h("span.sp"), fsPicker(ctx, "summary"),
+    h("div.hd", h("div", h("h1", ev.record.name), h("div.muted", `${fs.volume.fs_label} "${fs.info.label}", ${isExt(fs.volume.fs_label) ? `${fs.info.version}, UUID ${fs.info.serial}, block` : `serial ${fs.info.serial}, ${isFat(fs.volume.fs_label) ? "" : `NTFS ${fs.info.version}, `}cluster`} ${fs.info.cluster_size} B, analyzed ${ts(s.analyzed_at, 19, { label: true })} by Kokino ${s.tool_version}`)), h("span.sp"), fsPicker(ctx, "summary"),
       h("a.btn", { href: apiUrl(`/cases/${ctx.cid}/evidence/${ctx.eid}/report`), target: "_blank", rel: "noopener" }, "HTML report")),
     h("div.card.flat", h("div.hd", h("h3", "Disk layout"), h("span.sp"), h("span.muted", `${s.image_format}, ${bytes(s.image_size)}`)), volumeMap(s)),
     h("div.grid.g4.stagger",
@@ -695,7 +697,7 @@ function summaryTab(ctx) {
       h("div.card", { style: { gridColumn: "span 2" } }, h("h3", "Impact summary"), h("ul.impact.stagger", st.impact.map((l, i) => h("li", { style: { "--i": i } }, l))),
         st.users.length ? h("div.row.wrap", h("span.muted", "User profiles:"), st.users.map((u) => h("span.pill.info", u))) : null),
     ),
-    h("div.card", h("div.hd", h("h3", isFat(fs.volume.fs_label) ? "Activity (created + modified per day)" : "Activity ($SI created + modified per day)"), h("span.sp"), h("span.muted", "click a day to open the timeline")), histogram(ctx)),
+    h("div.card", h("div.hd", h("h3", isNtfs(fs.volume.fs_label) ? "Activity ($SI created + modified per day)" : "Activity (created + modified per day)"), h("span.sp"), h("span.muted", "click a day to open the timeline")), histogram(ctx)),
     h("div.grid.g2",
       h("div.card.bars", h("h3", { style: { marginBottom: "10px" } }, "Content by signature"), st.by_category.length ? st.by_category.map(([k, v], i) => h("div.b", h("span", k), h("div.t", h("i", { style: { width: (v / maxCat) * 100 + "%", "--i": i } })), h("span.n", num(v)))) : h("p.muted", "No recognised signatures.")),
       h("div.card.bars", h("h3", { style: { marginBottom: "10px" } }, "Top extensions"), st.top_ext.map(([k, v], i) => h("div.b", h("span.mono", "." + k), h("div.t", h("i", { style: { width: (v / maxExt) * 100 + "%", "--i": i } })), h("span.n", num(v))))),
@@ -838,17 +840,20 @@ async function fileDrawer(ctx, idx, startOffset) {
   const f = await api(base);
   const r = f.row;
   const fat = isFat(f.fs);
+  const ext = isExt(f.fs);
+  const u = f.unix;
   const names = fat ? ["created", "modified", "accessed"] : ["created", "modified", "accessed", "mft_modified"];
-  const labels = { created: "Born (B)", modified: "Modified (M)", accessed: fat ? "Accessed (A, date only)" : "Accessed (A)", mft_modified: "MFT changed (C)" };
-  const tsTable = h("table.ts", h("tr", h("th", ""), h("th", fat ? "Directory entry" : "$STANDARD_INFORMATION"), fat ? null : h("th", "$FILE_NAME")),
+  const labels = { created: "Born (B)", modified: "Modified (M)", accessed: fat ? "Accessed (A, date only)" : "Accessed (A)", mft_modified: ext ? "Inode changed (C)" : "MFT changed (C)" };
+  const tsTable = h("table.ts", h("tr", h("th", ""), h("th", fat ? "Directory entry" : ext ? "Inode" : "$STANDARD_INFORMATION"), fat || ext ? null : h("th", "$FILE_NAME")),
     names.map((n, i) => {
-      if (fat) return h("tr", h("td.muted", labels[n]), h("td.mono", ts((f.si && f.si[n]) || "", undefined, { raw: deviceClock(f.fs) })));
+      if (fat || ext) return h("tr", h("td.muted", labels[n]), h("td.mono", ts((f.si && f.si[n]) || "", undefined, { raw: deviceClock(f.fs) })));
       const a = f.si && f.si[n], b = f.fn && f.fn[n];
       const ra = f.si && f.si.raw[i], rb = f.fn && f.fn.raw[i];
       const back = n === "created" && ra && rb && ra + 10000000 < rb;
       const whole = ra && ra % 10000000 === 0 && rb && rb % 10000000 !== 0;
       return h("tr", h("td.muted", labels[n]), h("td.mono", { class: back ? "bad" : whole ? "diff" : null, title: back ? "$SI earlier than $FN: possible timestomping" : whole ? "whole-second $SI" : null }, ts(a || "")), h("td.mono", ts(b || "")));
-    }));
+    }),
+    u && u.deleted ? h("tr", h("td.muted", "Deleted (D)"), h("td.mono", { style: { color: "var(--del)" } }, ts(u.deleted))) : null);
   const hexBox = h("pre.mono", { style: { margin: 0, whiteSpace: "pre", overflow: "auto", maxHeight: "320px", fontSize: "12px" } });
   let page = startOffset ? Math.floor(startOffset / 4096) : 0;
   let stream = "";
@@ -887,7 +892,8 @@ async function fileDrawer(ctx, idx, startOffset) {
         r.deleted ? h("span.pill.bad", "Deleted") : h("span.pill.ok", "Allocated"),
         r.orphan ? h("span.pill.warn", "Orphan") : null,
         r.is_dir ? h("span.pill", "Directory") : null,
-        f.resident ? h("span.pill.info", "Resident in MFT") : null,
+        f.resident ? h("span.pill.info", ext ? "Stored in the inode" : "Resident in MFT") : null,
+        u && u.journal_seq != null ? h("span.pill.info", { title: "ext3/ext4 clear a deleted file's block map; this content was read through an older copy of its inode kept in the file-system journal" }, `Recovered from the journal (transaction ${u.journal_seq})`) : null,
         fat && r.deleted && !r.is_dir ? h("span.pill.warn", { title: "The FAT chain is cleared on delete, so the clusters after the first are assumed to follow it" }, "Recovered as contiguous") : null,
         f.attribute_names.map((a) => h("span.pill", a)),
       ),
@@ -896,18 +902,23 @@ async function fileDrawer(ctx, idx, startOffset) {
       f.indicators.length ? h("div.stack", f.indicators.map((i) => h("div.card.flat.ind.hot", h("b", i.title), h("p", { style: { margin: "6px 0 0" } }, i.explanation), h("div.cav", i.caveat)))) : null,
       f.hashes && f.hashes.sets.some((s) => s.kind === "notable") ? h("div.card.flat.ind.hot", h("b", "In a known-bad hash set"), h("p", { style: { margin: "6px 0 0" } }, f.hashes.sets.filter((s) => s.kind === "notable").map((s) => `${s.name} (${ALGO[s.algo]})`).join(", ")),
         h("div.cav", "A hash match means identical content, not how the file got here or whether anyone opened it.")) : null,
-      h("div.card.flat", h("h3", fat ? (f.fs === "exFAT" ? `Timestamps (${zoneName()}, from the stored UTC offset, 10 ms precision)` : "Timestamps (the device's local clock as stored, 2 s precision)") : `Timestamps (${zoneName()}, 100 ns precision)`), tsTable),
+      h("div.card.flat", h("h3", fat ? (f.fs === "exFAT" ? `Timestamps (${zoneName()}, from the stored UTC offset, 10 ms precision)` : "Timestamps (the device's local clock as stored, 2 s precision)") : ext ? `Timestamps (${zoneName()}, stored in UTC; ext4 to the nanosecond, ext2/ext3 to the second)` : `Timestamps (${zoneName()}, 100 ns precision)`), tsTable),
       h("div.card.flat", h("h3", "Identity"), h("div.kv", { style: { marginTop: "8px" } },
         fat ? [h("span", "Entry id / parent"), h("span.mono", { title: "Assigned by Kokino in directory order; FAT has no record numbers" }, `${r.record} / ${f.parent}`)]
+          : ext ? [h("span", "Inode / entry id"), h("span.mono", { title: "Entry ids are assigned by Kokino; hard links share one inode" }, `${u ? u.inode : ""} / ${r.record}`)]
           : [h("span", "MFT record / seq"), h("span.mono", `${r.record} / ${r.seq}`), h("span", "Parent record / seq"), h("span.mono", `${f.parent} / ${f.parent_seq}`)],
-        h("span", "8.3 name"), h("span.mono", f.dos_name || ""),
+        ext && u ? [h("span", "Mode"), h("span.mono", `${u.mode_string} (${u.mode.padStart(6, "0")})`), h("span", "Owner uid / gid"), h("span.mono", `${u.uid} / ${u.gid}`)] : null,
+        ext && u && u.link_target != null ? [h("span", "Link target"), h("span.mono", { style: { wordBreak: "break-all" } }, u.link_target)] : null,
+        ext ? null : [h("span", "8.3 name"), h("span.mono", f.dos_name || "")],
         h("span", "Logical / allocated"), h("span", `${num(r.size)} / ${num(f.alloc_size)} bytes`),
         h("span", "Signature"), h("span", { style: { color: r.mismatch ? "var(--bad)" : null } }, r.sig_label ? `${r.sig_label}${r.mismatch ? ", does not match ." + r.ext : ""}` : "unknown"),
         h("span", "Entropy"), ent != null ? h("div", h("div.entropy", cursor), h("span.muted", `${ent.toFixed(3)} bits/byte`)) : h("span.muted", "n/a"),
         f.uniform != null ? [h("span", "Sampled content"), h("span", { style: { color: "var(--warn)" } }, `every sampled byte is 0x${f.uniform.toString(16).padStart(2, "0")}`)] : null,
-        fat ? null : [h("span", "Hard links"), h("span", f.hard_links), h("span", "USN"), h("span.mono", f.usn ?? "")],
-        h("span", fat ? "Directory entry at" : "MFT record at"), h("a.mono", { href: "#", onclick: (e) => { e.preventDefault(); jump(f.record_image_offset); } }, `image offset ${num(f.record_image_offset)} -> hex`),
-        f.data_image_offset != null ? [h("span", "First data cluster"), h("a.mono", { href: "#", onclick: (e) => { e.preventDefault(); jump(f.data_image_offset); } }, `image offset ${num(f.data_image_offset)} -> hex`)] : null,
+        fat ? null : [h("span", "Hard links"), h("span", f.hard_links)],
+        fat || ext ? null : [h("span", "USN"), h("span.mono", f.usn ?? "")],
+        h("span", fat ? "Directory entry at" : ext ? "Inode at" : "MFT record at"), h("a.mono", { href: "#", onclick: (e) => { e.preventDefault(); jump(f.record_image_offset); } }, `image offset ${num(f.record_image_offset)} -> hex`),
+        u && u.journal_seq != null ? [h("span", "Inode copy in journal"), h("a.mono", { href: "#", onclick: (e) => { e.preventDefault(); jump(u.inode_image_offset); } }, `image offset ${num(u.inode_image_offset)} -> hex`)] : null,
+        f.data_image_offset != null ? [h("span", ext ? "First data block" : "First data cluster"), h("a.mono", { href: "#", onclick: (e) => { e.preventDefault(); jump(f.data_image_offset); } }, `image offset ${num(f.data_image_offset)} -> hex`)] : null,
         f.error ? [h("span", "Parser note"), h("span", { style: { color: "var(--warn)" } }, f.error)] : null,
       )),
       f.streams.length > 1 ? h("div.card.flat", h("h3", "Data streams"), h("table.ts", h("tr", h("th", "Name"), h("th", "Size"), h("th", "")),
@@ -927,7 +938,7 @@ async function fileDrawer(ctx, idx, startOffset) {
         h("span", "Hashed"), h("span.muted", ts(f.hashes.hashed_at, 19)))) : null,
       !r.is_dir && r.size > 0 ? lazy("Byte map", () => byteMap(`${base}/binmap`, showAt)) : null,
       !r.is_dir && r.size > 0 ? lazy("Strings", () => stringsPanel(`${base}/strings`, showAt)) : null,
-      f.events.length ? h("div.card.flat", h("h3", "Timeline events"), h("table.ts", f.events.map((e) => h("tr", h("td.mono", ts(e.t, undefined, { raw: deviceClock(f.fs) })), h("td", macb(e.macb)), h("td", h("span.src." + e.src, e.src)))))) : null,
+      f.events.length ? h("div.card.flat", h("h3", "Timeline events"), h("table.ts", f.events.map((e) => h("tr", h("td.mono", ts(e.t, undefined, { raw: deviceClock(f.fs) })), h("td", macb(e.macb)), h("td", h("span.src." + e.src, ext && e.src === "SI" ? "INODE" : e.src)))))) : null,
     ),
   );
   loadHex();
@@ -946,7 +957,8 @@ async function timelineTab(ctx) {
   const to = day(ctx.q.to, `to ${datePattern()}`);
   let only = ctx.q.only || "";
   const seg = h("div.seg");
-  const opts = [["", "All"], ["si", "$SI"], ["fn", "$FN"], ["web", "Web"], ["windows", "Windows"], ["deleted", "Deleted"], ["flagged", "Flagged"]];
+  const ntfs = !ctx.fs || isNtfs(ctx.fs.volume.fs_label);
+  const opts = [["", "All"], ...(ntfs ? [["si", "$SI"], ["fn", "$FN"]] : []), ["web", "Web"], ["windows", ntfs ? "Windows" : "System"], ["deleted", "Deleted"], ["flagged", "Flagged"]];
   const drawSeg = () => seg.replaceChildren(...opts.map(([k, l]) => h("button", { class: only === k ? "on" : null, onclick: () => { only = k; drawSeg(); reload(); } }, l)));
   drawSeg();
   const tbody = h("tbody");
@@ -973,7 +985,7 @@ async function timelineTab(ctx) {
         : e.windows ? () => webDetail(WIN[e.src] || e.src, [[`Time (${zoneName()})`, ts(e.t)], ["What", e.path], ["Detail", e.detail], ["More", h("a", { href: `#/c/${ctx.cid}/e/${ctx.eid}/system?fi=${ctx.fi}&sec=${{ EXEC: "exec", OPEN: "files", USB: "devices", NET: "devices", INST: "software" }[e.src] || "events"}`, onclick: closeModal }, "Open in the System summary")]])
         : () => fileDrawer(ctx, e.idx);
       return h("tr", { class: e.deleted ? "deleted" : null, onclick: click },
-        h("td.mono", ts(e.t, undefined, art ? {} : fsClock(ctx))), h("td", art ? h("span.muted", e.macb) : macb(e.macb)), h("td", h("span.src." + e.src, { title: WIN[e.src] || null }, e.src)),
+        h("td.mono", ts(e.t, undefined, art ? {} : fsClock(ctx))), h("td", art ? h("span.muted", e.macb) : macb(e.macb)), h("td", h("span.src." + e.src, { title: WIN[e.src] || (e.src === "DEL" ? "Inode deleted (dtime)" : null) }, !ntfs && e.src === "SI" ? "INODE" : e.src)),
         h("td.nm", { title: art ? `${e.path}
 ${e.detail}` : e.path }, e.flags.length ? h("span.flag", { title: e.flags.join(", ") }) : null, e.path, art ? h("div.muted.ell", e.detail) : null),
         h("td.num", e.is_dir || (art && !e.size) ? "" : bytes(e.size)));
@@ -990,7 +1002,9 @@ ${e.detail}` : e.path }, e.flags.length ? h("span.flag", { title: e.flags.join("
   more.onclick = () => load(true);
   render(h("div.stack",
     h("div.hd", h("h1", "Timeline"), h("span.sp"), fsPicker(ctx, "timeline")),
-    h("p.muted", "MACB events from $STANDARD_INFORMATION and $FILE_NAME, interleaved with browser visits (VISIT), downloads (DL) and searches (SEARCH). $FN times are set by the kernel and are much harder to forge, so compare the two sources when something looks off."),
+    h("p.muted", ntfs ? "MACB events from $STANDARD_INFORMATION and $FILE_NAME, interleaved with browser visits (VISIT), downloads (DL) and searches (SEARCH). $FN times are set by the kernel and are much harder to forge, so compare the two sources when something looks off."
+      : isExt(ctx.fs && ctx.fs.volume.fs_label) ? "MACB events from each inode (M modified, A accessed, C inode changed, B born; born times exist on ext4 only), deletion times (DEL), interleaved with browser visits (VISIT), downloads (DL) and searches (SEARCH). touch can set M and A to anything, but not C: the kernel sets C to the time of the change."
+      : "MACB events from the directory entries, interleaved with browser visits (VISIT), downloads (DL) and searches (SEARCH)."),
     h("div.row.wrap", q, h("label", "From", from), h("label", "To", to), seg, count),
     h("div.scroll", { style: { maxHeight: "calc(100vh - 290px)" } }, h("table.tbl", h("thead", h("tr", h("th", { title: raw ? "FAT stores the device's local clock with no zone: times are shown as stored" : null }, raw ? "Time (device clock)" : `Time (${zoneName()})`), h("th", "MACB"), h("th", "Src"), h("th", "Path"), h("th", { style: { textAlign: "right" } }, "Size"))), tbody)),
     h("div.row", h("span.sp"), more),
@@ -1310,6 +1324,123 @@ const SYS_SECTIONS = [["overview", "Overview"], ["exec", "Programs run"], ["file
 const ftIso = (t) => (t ? new Date(t / 10000 - 11644473600000).toISOString().replace(/\.\d+Z$/, "Z") : "");
 const t16 = (t) => (t ? ts(ftIso(t), 16) : "");
 
+const LINUX_SECTIONS = [["overview", "Overview"], ["exec", "Commands"], ["logons", "Accounts and logons"], ["events", "Events"], ["software", "Packages and persistence"], ["devices", "USB and networks"], ["sources", "Sources"]];
+
+// System summary of a Linux (ext) volume.
+function linuxSystem(ctx, r) {
+  const L = r.linux;
+  const intro = h("div.hd", h("div", h("h1", "System summary"), h("div.muted", "Accounts, logons, shell histories, logs, the journal, packages and persistence of this Linux volume. " + zoneSentence())), h("span.sp"), fsPicker(ctx, "system"));
+  const fileOf = (i) => (i == null ? "" : r.files[i] || "");
+  const open = (i) => (i != null ? fileDrawer(ctx, i) : null);
+  let section = LINUX_SECTIONS.some(([k]) => k === ctx.q.sec) ? ctx.q.sec : "overview";
+  const seg = h("div.seg.wrap");
+  const body = h("div.stack");
+  const drawSeg = () => seg.replaceChildren(...LINUX_SECTIONS.map(([k, l]) => h("button", { class: section === k ? "on" : null, onclick: () => { section = k; history.replaceState(null, "", `#/c/${ctx.cid}/e/${ctx.eid}/system?fi=${ctx.fi}&sec=${k}`); drawSeg(); draw(); } }, l)));
+  const table = (cols, rows, empty = "None found.") => rows.length
+    ? h("div.scroll", { style: { maxHeight: "calc(100vh - 300px)" } }, h("table.tbl.sys", h("thead", h("tr", cols.map((c) => h("th", c)))), h("tbody", rows)))
+    : h("div.card.empty", empty);
+  const filterBox = (ph, on) => { const i = h("input", { placeholder: ph, style: { flex: 1 } }); i.addEventListener("input", debounce(() => on(i.value.toLowerCase()), 150)); return i; };
+  const card = (title, ...kids) => h("div.card.flat.stack", h("h3", title), ...kids);
+  const kv = (rows) => h("div.kv", rows.filter(([, v]) => v).map(([k, v]) => [h("span", k), h("span", v)]));
+  const flagPill = (f) => (f ? h("span.pill.bad", { style: { marginLeft: "6px" } }, f) : null);
+  const users = () => table(["Account", "uid", "Shell", "Password", "Groups", "Last logon", "Logons", "Failed", "Home"],
+    L.users.map((u) => h("tr", { class: u.note ? "flagged" : null }, h("td", h("b", u.name), u.admin ? h("span.pill.warn", { style: { marginLeft: "6px" }, title: "uid 0, or member of sudo, wheel or admin" }, "admin") : null, u.gecos ? h("div.muted", u.gecos) : null, u.note ? h("div.bad-text", u.note) : null),
+      h("td.num", u.uid), h("td.mono", { class: u.login_shell ? null : "muted" }, u.shell), h("td", { class: u.password.startsWith("none") ? "bad-text" : null }, u.password), h("td.muted", u.groups.join(", ")),
+      h("td.mono", t16(u.last_logon), u.last_from ? h("div.muted", u.last_from) : null), h("td.num", u.logons ? num(u.logons) : ""), h("td.num", { class: u.failed ? "bad-text" : null }, u.failed ? num(u.failed) : ""), h("td.muted", u.home))));
+  const sections = {
+    overview: () => {
+      const c = L.computer;
+      const flagged = L.commands.filter((x) => x.flag);
+      const odd = L.persistence.filter((p) => p.unusual);
+      const failed = L.logons.filter((x) => x.kind === "failed").length;
+      const notes = L.users.filter((u) => u.note);
+      return [
+        h("div.grid.g4",
+          tile("Commands recorded", L.commands.length, `${num(flagged.length)} notable`, flagged.length ? ".bad" : ""),
+          tile("Logons", L.logons.filter((x) => x.kind === "logon").length, `${num(failed)} failed`),
+          tile("Persistence entries", L.persistence.length, `${num(odd.length)} stand out`, odd.length ? ".bad" : ""),
+          tile("Packages", L.packages.length, L.usb.length ? `${L.usb.length} USB device(s) seen` : "")),
+        h("div.grid.g2",
+          card("Computer", kv([["Host name", c.hostname], ["Distribution", c.os], ["Time zone", c.time_zone], ["Machine id", c.machine_id], ["File system created", t16(c.fs_created)],
+            ["Last mounted", [c.last_mounted, t16(c.last_mount_time)].filter(Boolean).join(" at ")], ["Last boot", t16(c.last_boot)], ["Last shutdown", t16(c.last_shutdown)], ["Kernels in /boot", c.kernels.join(", ")]])),
+          card("Highlights", flagged.length || odd.length || notes.length
+            ? h("ul.impact", [
+              ...notes.map((u) => h("li", "Account ", h("b", u.name), `: ${u.note}`)),
+              ...flagged.slice(0, 12).map((x) => h("li", h("b.bad-text", x.flag), ` (${x.user}, ${x.shell}): `, h("code", x.command))),
+              ...odd.slice(0, 12).map((p) => h("li", `${p.kind}: `, h("code", p.command), ` (${p.reason})`)),
+            ])
+            : h("p.muted", "Nothing that stands out. Review the sections for context."))),
+        card("Accounts", users()),
+      ];
+    },
+    exec: () => {
+      const shells = ["", ...new Set(L.commands.map((x) => x.shell))];
+      let sh = "", q = "", only = false;
+      const out = h("div");
+      const fill = () => out.replaceChildren(table([`Time (${zoneName()})`, "Command", "Shell", "User", "Line"],
+        L.commands.filter((x) => (!sh || x.shell === sh) && (!only || x.flag) && (!q || (x.command + " " + x.user).toLowerCase().includes(q))).slice(0, 5000).map((x) =>
+          h("tr", { class: x.deleted ? "deleted" : x.flag ? "flagged" : null, onclick: () => open(x.file), title: fileOf(x.file) },
+            h("td.mono", x.time ? t16(x.time) : h("span.muted", "no time")), h("td.nm.mono", x.command, flagPill(x.flag)), h("td", h("span.pill", x.shell)), h("td", x.user), h("td.num", x.line || "")))));
+      const s2 = h("div.seg");
+      const drawS = () => s2.replaceChildren(...shells.map((k) => h("button", { class: sh === k ? "on" : null, onclick: () => { sh = k; drawS(); fill(); } }, k || "All")),
+        h("button", { class: only ? "on" : null, onclick: () => { only = !only; drawS(); fill(); } }, "Notable only"));
+      drawS();
+      fill();
+      return [h("div.row.wrap", s2, filterBox("Filter commands...", (v) => { q = v; fill(); })),
+        h("p.muted", { style: { fontSize: "12.5px" } }, "Shell histories are written when a shell exits, so the newest commands of a session that is still open or was killed may be missing. bash records times only when HISTTIMEFORMAT was set; zsh and fish always do. sudo commands come from the auth log or journal, apt commands from apt's history log."), out];
+    },
+    logons: () => [
+      card("Logons, failures, reboots", table([`Time (${zoneName()})`, "What", "Account", "From", "Terminal", "Ended", "Source"],
+        L.logons.slice().reverse().slice(0, 5000).map((x) => h("tr", { onclick: () => open(x.file), title: fileOf(x.file) }, h("td.mono", t16(x.time)),
+          h("td", h("span.pill" + (x.kind === "failed" ? ".bad" : x.kind === "logon" ? ".ok" : ""), x.kind), x.how ? h("span.muted", ` ${x.how}`) : null), h("td", h("b", x.user)), h("td.mono", x.from), h("td.mono", x.tty), h("td.mono", t16(x.end)), h("td.muted", x.source))),
+        "No logon records (wtmp, btmp, auth log and journal may be missing or emptied).")),
+      card("Accounts (passwd, shadow, group, lastlog)", users()),
+    ],
+    events: () => {
+      const cats = ["", ...new Set(L.events.map((e) => e.category))];
+      let cat = "", q = "";
+      const out = h("div");
+      const fill = () => out.replaceChildren(table([`Time (${zoneName()})`, "Category", "What happened", "Program", "User", "IP"],
+        L.events.filter((e) => (!cat || e.category === cat) && (!q || (e.summary + " " + e.message + " " + e.user + " " + e.ip).toLowerCase().includes(q))).slice().reverse().slice(0, 3000).map((e) =>
+          h("tr", { onclick: () => webDetail(e.category, [[`Time (${zoneName()})`, ts(ftIso(e.time))], ["Summary", e.summary], ["Message", e.message], ["Program", e.program], ["Host", e.host], ["Source", `${e.source}: ${fileOf(e.file)}`], ...(e.year_guessed ? [["Note", "classic syslog line: year inferred, time converted from the image's time zone"]] : [])],
+            { cid: ctx.cid, eid: ctx.eid, kind: "event", key: `levent:${ctx.eid}:${ctx.fi}:${e.file}:${e.time}`, fi: ctx.fi, title: e.category, detail: e.summary, path: fileOf(e.file), time: ftIso(e.time) }) },
+            h("td.mono", t16(e.time), e.year_guessed ? h("span.muted", { title: "year inferred" }, " *") : null),
+            h("td", h("span.pill" + (/Failed/.test(e.category) ? ".bad" : e.category === "Account" || e.category === "Sudo" ? ".warn" : ""), e.category)),
+            h("td.nm", e.summary), h("td.muted", e.program), h("td", e.user), h("td.mono", e.ip)))));
+      const s2 = h("div.seg.wrap");
+      const drawC = () => s2.replaceChildren(...cats.map((k) => h("button", { class: cat === k ? "on" : null, onclick: () => { cat = k; drawC(); fill(); } }, k || "All")));
+      drawC();
+      fill();
+      return [h("div.row.wrap", s2, filterBox("Filter events...", (v) => { q = v; fill(); })), out,
+        card("Log files", table(["Log", "Entries", "Oldest", "Newest", "Notable", "State"],
+          L.logs.map((x) => h("tr", { onclick: () => open(x.file), title: x.path }, h("td.nm", h("b", x.kind), h("div.muted", x.path)), h("td.num", num(x.lines)), h("td.mono", t16(x.first)), h("td.mono", t16(x.last)), h("td.num", num(x.events)),
+            h("td", x.deleted ? h("span.pill.bad", "deleted") : null, x.note ? h("span.muted", ` ${x.note}`) : null)))))];
+    },
+    software: () => [
+      card("Persistence and privileges", table(["Kind", "Command or entry", "Name", "User", "Where", "File changed"],
+        L.persistence.map((p) => h("tr", { class: p.unusual ? "flagged" : p.deleted ? "deleted" : null, onclick: () => open(p.file) }, h("td", h("b", p.kind), p.unusual ? h("div.bad-text", p.reason) : null),
+          h("td.nm.mono", p.command), h("td", p.name), h("td", p.user), h("td.muted", p.location), h("td.mono", t16(p.written)))))),
+      card("Installed packages", table(["Name", "Version", "Manager", "Installed", "By", "Description"],
+        L.packages.map((p) => h("tr", h("td", h("b", p.name)), h("td.mono", p.version), h("td", p.manager), h("td.mono", t16(p.installed)), h("td", p.by), h("td.muted", p.description))))),
+    ],
+    devices: () => [
+      card("USB devices seen by the kernel", table(["Device", "Serial number", "Vendor:product id", "First seen", "Last seen"],
+        L.usb.map((u) => h("tr", h("td", h("b", u.name)), h("td.mono", u.serial), h("td.mono", u.revision), h("td.mono", t16(u.first_connected)), h("td.mono", t16(u.last_connected)))))),
+      card("Networks and hosts", table(["Name", "Kind", "Detail", "Last connected"],
+        L.networks.map((n) => h("tr", h("td.nm", h("b", n.name)), h("td", n.kind), h("td.muted.mono", [n.description, n.category, n.dns_suffix].filter(Boolean).join(" ")), h("td.mono", t16(n.last_connected)))))),
+      card("Addresses", table(["Address", "Gateway", "DHCP server", "Domain", "Interface or file"],
+        L.interfaces.map((i) => h("tr", h("td.mono", i.ip), h("td.mono", i.gateway), h("td.mono", i.dhcp_server), h("td", i.domain), h("td.muted.mono", i.guid))))),
+    ],
+    sources: () => [table(["Artifact file", "Kind", "State"],
+      L.sources.map((x) => h("tr", { class: x.deleted ? "deleted" : null, onclick: () => open(x.file) }, h("td.nm", x.path), h("td", x.kind),
+        h("td", x.error ? h("span.bad-text", x.error) : x.note ? h("span.muted", x.note) : h("span.pill.ok", "read"), x.deleted ? h("span.pill.bad", { style: { marginLeft: "6px" } }, "deleted") : null))))],
+  };
+  const draw = () => body.replaceChildren(...sections[section]());
+  drawSeg();
+  draw();
+  render(h("div.stack", intro, seg, body));
+}
+
 async function systemTab(ctx) {
   const r = await api(`/cases/${ctx.cid}/evidence/${ctx.eid}/fs/${ctx.fi}/windows`);
   const intro = h("div.hd", h("div", h("h1", "System summary"), h("div.muted", "Registry, event logs, Prefetch, shortcuts and Jump Lists of this Windows volume. " + zoneSentence() + "")), h("span.sp"), fsPicker(ctx, "system"));
@@ -1317,9 +1448,10 @@ async function systemTab(ctx) {
     return render(h("div.stack", intro, h("div.card.empty", h("p", "This evidence was analyzed by an earlier Kokino version, before Windows artifacts were read."),
       canWrite() ? h("button.primary", { onclick: () => reingest(ctx.cid, ctx.eid, false) }, "Re-analyze now") : h("p.muted", "Ask an examiner on this case to re-analyze it."))));
   }
+  if (r.linux && r.linux.sources && r.linux.sources.length) return linuxSystem(ctx, r);
   const w = r.windows;
   if (!w.sources.length) {
-    return render(h("div.stack", intro, h("div.card.empty", "No Windows registry hives, event logs, Prefetch files, shortcuts or Jump Lists on this volume.")));
+    return render(h("div.stack", intro, h("div.card.empty", isExt(r.fs) ? "No Linux system files (passwd, logs, shell histories, package databases) on this volume." : "No Windows registry hives, event logs, Prefetch files, shortcuts or Jump Lists on this volume.")));
   }
   const fileOf = (i) => (i == null ? "" : r.files[i] || "");
   const open = (i) => (i != null ? fileDrawer(ctx, i) : null);

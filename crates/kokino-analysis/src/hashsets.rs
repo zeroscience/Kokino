@@ -684,7 +684,7 @@ pub fn hash_files(ev: &Evidence, analysis: &Analysis, progress: Progress) -> any
         let mut r = volume_reader(ev, &fsa.volume)?;
         let Ok(fs) = crate::fs::Fs::open(&mut r, &fsa.volume) else { continue };
         for f in &fsa.files {
-            if f.e.is_dir || f.e.size == 0 || (!fs.is_fat() && (f.e.record < FIRST_USER_RECORD || f.e.path.starts_with("/$Extend"))) {
+            if f.e.is_dir || f.e.size == 0 || (fs.is_ntfs() && (f.e.record < FIRST_USER_RECORD || f.e.path.starts_with("/$Extend"))) {
                 continue;
             }
             let mut h = MultiHasher::default();

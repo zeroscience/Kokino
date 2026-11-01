@@ -1,0 +1,5 @@
+Oct 20 09:59:58 lab-srv kernel: [    0.000000] Linux version 6.1.0-lab-amd64 (debian-kernel@lists.debian.org) #1 SMP
+Oct 20 10:15:00 lab-srv kernel: [  900.101010] usb 1-1: New USB device found, idVendor=0781, idProduct=5581, bcdDevice= 1.00
+Oct 20 10:15:00 lab-srv kernel: [  900.101020] usb 1-1: Product: Ultra
+Oct 20 10:15:00 lab-srv kernel: [  900.101030] usb 1-1: Manufacturer: SanDisk
+Oct 20 10:15:00 lab-srv kernel: [  900.101040] usb 1-1: SerialNumber: 4C530001230920115045

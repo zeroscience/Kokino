@@ -18,6 +18,8 @@ pub const TARGETS: &[Target] = &[
     Target { name: "volume", run: volume, seeds: &["tests/fixtures/disk-fat.img", "tests/fixtures/disk-win.img"] },
     Target { name: "ntfs", run: ntfs, seeds: &["tests/fixtures/testfs1", "tests/fixtures/testfs1-af", "tests/fixtures/testfs1-win"] },
     Target { name: "fat", run: fat, seeds: &["tests/fixtures/fat12.img", "tests/fixtures/fat16.img", "tests/fixtures/fat32.img", "tests/fixtures/exfat.img"] },
+    Target { name: "ext", run: ext, seeds: &["tests/fixtures/ext2.img", "tests/fixtures/ext3.img", "tests/fixtures/ext4.img"] },
+    Target { name: "linuxlogs", run: linuxlogs, seeds: &["crates/kokino-fuzz/seeds/linux"] },
     Target { name: "ewf", run: ewf, seeds: &["tests/fixtures/disk-af-odd.E01", "tests/fixtures/disk-af.E01"] },
     Target { name: "registry", run: registry, seeds: &["tests/fixtures/win/Users_alice_NTUSER.DAT", "tests/fixtures/win/Windows_System32_config_SAM", "tests/fixtures/win/Windows_System32_config_SOFTWARE", "tests/fixtures/win/Windows_System32_config_SYSTEM", "tests/fixtures/win/Windows_AppCompat_Programs_Amcache.hve"] },
     Target { name: "evtx", run: evtx, seeds: &["tests/fixtures/win/Windows_System32_winevt_Logs_Security.evtx", "tests/fixtures/win/Windows_System32_winevt_Logs_System.evtx", "tests/fixtures/win/Windows_System32_winevt_Logs_Microsoft-Windows-PowerShell_4Operational.evtx"] },
@@ -108,6 +110,22 @@ fn fat(d: &[u8]) {
             v.extents(e);
         }
     }
+}
+
+fn ext(d: &[u8]) {
+    let mut c = Cursor::new(d);
+    let Ok(v) = kokino_ext::open(&mut c, d.len() as u64) else { return };
+    if let Ok(scan) = kokino_ext::scan(&v, &mut c, |_, _| true) {
+        for e in scan.entries.iter().take(64) {
+            let _ = v.read(&mut c, e, 0, READ_CAP);
+            let _ = v.extents(&mut c, e);
+        }
+    }
+    v.free_runs(&mut c);
+}
+
+fn linuxlogs(d: &[u8]) {
+    kokino_analysis::linux::fuzz_parsers(d);
 }
 
 fn ewf(d: &[u8]) {

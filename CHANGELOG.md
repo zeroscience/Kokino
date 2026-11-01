@@ -5,6 +5,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- ext2, ext3 and ext4 (new crate `kokino-ext`): every inode, extent trees and indirect block maps, inline data and fast symlinks, directories with deleted names recovered from directory-entry slack, orphaned inodes under $OrphanFiles, block bitmap free space for carving and search. Owner, group, mode, inode number and deletion time are shown in the file details; ext4 times to the nanosecond with creation time. Works through MBR and GPT like the other file systems.
+- Recovery of deleted ext3/ext4 files through the journal: ext3 and ext4 clear a deleted file's block map, so Kokino looks for an older copy of its inode-table block in the JBD2 journal and, when the inode there is the same file (same generation) with its block map, reads the content through it. Such files show "Recovered from the journal (transaction N)"; the summary counts deleted files with nothing left to recover (carving may still find them).
+- Linux system summary (`kokino_analysis::linux`, System summary page): computer (os-release, hostname, time zone, machine id, kernels, boot and shutdown), accounts (passwd, shadow state without hashes, groups, lastlog; second uid 0 accounts, passwordless and system accounts with a shell flagged), logons, failures and reboots (wtmp, btmp, auth.log or secure, journald), shell histories (bash with HISTTIMEFORMAT, zsh, fish, python, mysql, psql, sqlite) with destructive commands flagged, sudo and account changes, packages (dpkg status, dpkg.log, apt history with who installed what, dnf/yum logs, apk, pacman), persistence (cron, systemd units, rc.local, SSH authorized keys with fingerprints and forced commands, sudoers NOPASSWD, ld.so.preload, shell startup lines), USB storage from kernel messages, NetworkManager connections, DHCP leases, SSH known hosts and /etc/hosts entries. Rotated and gzipped logs are read.
+- Time zones from the image: /etc/localtime (TZif, with the POSIX rule for later years) converts classic syslog lines, which carry local time and no year; the year is counted back from the log file's modification time and such events are marked.
+- systemd journal reader: entry objects with MESSAGE, SYSLOG_IDENTIFIER, _COMM, _PID, _HOSTNAME and more, regular and compact files; compressed fields are counted, not read.
+- Linux events on the timeline (commands with times, packages, logons, USB, networks) and inode deletion times as DEL events. The timeline's source filter reads System instead of Windows on non-NTFS volumes.
+- Four anti-forensics indicators for Linux: destructive commands in shell, apt or sudo history; shell history emptied or linked to /dev/null; wtmp or auth.log emptied; /etc/ld.so.preload in use.
+- Test fixtures `ext2.img`, `ext3.img`, `ext4.img` and `linux-server.img` from `scripts/make_ext_fixture.py` (pure Python, invented data), cross-checked with 7-Zip's ext reader.
+- Fuzz targets `ext` (the ext reader) and `linuxlogs` (journal, wtmp, syslog, TZif, apt, DHCP and dpkg parsers).
+- Help wiki page "Linux disks (ext2, ext3, ext4)", file system rows on the Cases and evidence page, ext in the carving and search descriptions.
+- Validation against the 22 NIST CFReDS ext images (VALIDATION.md): 962 of 965 tagged deleted files complete, 302 recovered through the journal, 2,782 deleted names listed. `scripts/validate_cfreds.py` handles ext and counts deleted names without content.
+- Deleted folders on ext3 and ext4: when the folder's block map is cleared, Kokino searches the free blocks of its block group for the directory block that names it, so the files in it keep their names.
+
+### Changed
+- Analysis schema 5 (`FsEntry::unix`, `FsAnalysis::linux`). Evidence analyzed before keeps working; re-analyze to get the new fields.
+
+### Fixed
+- ext reader (found by the NIST validation before release): ext2 deleted names whose inode number the kernel erased were dropped; deleted ext2 folders (size set to 0 by rmdir) and orphaned folders were not entered; blocks of large indexed folders whose files were all deleted were skipped as index blocks; old copies of names left behind by index splits were listed as deleted files.
+- ext reader (found by fuzzing before release): a superblock claiming millions of block groups made the block bitmap buffer reserve hundreds of megabytes from an 83 KB image. Group descriptors and the bitmap are now bounded by what the image holds.
+- Linux log parsers (found by fuzzing before release): integer overflows in POSIX time zone rules and in systemd journal object offsets and sizes. Fuzzing now totals 227,335,973 inputs over 18 targets, 22 problems found and fixed (SECURITY.md).
+
 ## [1.2.5] - 2026-11-01
 
 First public release.

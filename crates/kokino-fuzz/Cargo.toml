@@ -11,5 +11,6 @@ publish = false
 kokino-image.workspace = true
 kokino-ntfs.workspace = true
 kokino-fat.workspace = true
+kokino-ext.workspace = true
 kokino-artifacts.workspace = true
 kokino-analysis.workspace = true

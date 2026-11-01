@@ -13,6 +13,7 @@ pub mod carve;
 pub mod doctext;
 pub mod fs;
 pub mod hashsets;
+pub mod linux;
 pub mod photo;
 pub mod stats;
 pub mod textindex;
@@ -31,7 +32,8 @@ use stats::Stats;
 /// 2: adds `FsAnalysis::web` (browser history).
 /// 3: adds `FsAnalysis::windows` (registry, event logs, Prefetch, LNK, Jump Lists).
 /// 4: FAT12/16/32 and exFAT volumes are parsed too (`volume.fs` tells which).
-pub const SCHEMA_VERSION: u32 = 4;
+/// 5: ext2/3/4 volumes, `FsEntry::unix` and `FsAnalysis::linux`.
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// Bytes read from the start of every file for signature and entropy.
 const HEAD: usize = 8 * 1024;
@@ -71,6 +73,9 @@ pub struct FsAnalysis {
     /// Windows system artifacts found on this volume (schema 3+).
     #[serde(default)]
     pub windows: windows::WindowsArtifacts,
+    /// Linux system artifacts found on this volume (schema 5+).
+    #[serde(default)]
+    pub linux: linux::LinuxArtifacts,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,7 +147,7 @@ pub fn volume_reader(ev: &Evidence, v: &Volume) -> anyhow::Result<BlockCache<Sub
 fn analyze_fs(ev: &Evidence, v: &Volume, progress: Progress) -> anyhow::Result<FsAnalysis> {
     let mut r = volume_reader(ev, v)?;
     let fs = Fs::open(&mut r, v)?;
-    let stage = format!("Volume {}: {}", v.index, if fs.is_fat() { "reading directories" } else { "reading MFT" });
+    let stage = format!("Volume {}: {}", v.index, if fs.is_ntfs() { "reading MFT" } else { "reading directories" });
     let scan = fs.scan(&mut r, |d, t| progress(&stage, d, t))?;
 
     let total = scan.entries.len() as u64;
@@ -158,10 +163,11 @@ fn analyze_fs(ev: &Evidence, v: &Volume, progress: Progress) -> anyhow::Result<F
 
     let web = web::collect(&fs, &mut r, &files, &mut *progress);
     let windows = windows::collect(&fs, &mut r, &files, &mut *progress);
+    let linux = linux::collect(&fs, &mut r, &files, &mut *progress);
 
     progress(&format!("Volume {}: anti-forensics indicators", v.index), 0, 1);
     let now = kokino_core::time::datetime_to_filetime(chrono::Utc::now());
-    let indicators = antiforensics::evaluate(&mut files, now, &web, &windows, fs.is_fat());
+    let indicators = antiforensics::evaluate(&mut files, now, &web, &windows, &linux, !fs.is_ntfs());
     let score = antiforensics::score(&indicators);
     let mut stats = stats::compute(&files, &indicators, &score, now);
     if !scan.unreadable.is_empty() {
@@ -177,10 +183,12 @@ fn analyze_fs(ev: &Evidence, v: &Volume, progress: Progress) -> anyhow::Result<F
         stats.impact.push("Deleted FAT files are recovered assuming their clusters were contiguous (the chain is cleared on delete); content of fragmented deleted files can be partly wrong.".into());
     }
 
+    stats.impact.extend(scan.notes.iter().cloned());
     stats.impact.extend(web::impact(&web));
     stats.impact.extend(windows::impact(&windows));
+    stats.impact.extend(linux::impact(&linux));
 
-    Ok(FsAnalysis { volume: v.clone(), info: scan.info, files, unreadable: scan.unreadable, indicators, score, stats, web, windows })
+    Ok(FsAnalysis { volume: v.clone(), info: scan.info, files, unreadable: scan.unreadable, indicators, score, stats, web, windows, linux })
 }
 
 fn content_facts<R: std::io::Read + std::io::Seek>(fs: &Fs, r: &mut R, e: FsEntry) -> FileRow {
@@ -197,7 +205,7 @@ fn content_facts<R: std::io::Read + std::io::Seek>(fs: &Fs, r: &mut R, e: FsEntr
         flags: vec![],
         e,
     };
-    let is_meta = (!fs.is_fat() && row.e.record < 24) || row.e.path.starts_with("/$Extend");
+    let is_meta = (fs.is_ntfs() && row.e.record < 24) || row.e.path.starts_with("/$Extend");
     if is_meta {
         return row;
     }
@@ -266,7 +274,7 @@ mod tests {
         let fs = &a.filesystems[0];
         assert!(fs.files.len() > 500);
         assert!(fs.score.likelihood >= 0.0 && fs.score.likelihood <= 1.0);
-        let tl = timeline::build(&fs.files, &fs.web, &fs.windows);
+        let tl = timeline::build(&fs.files, &fs.web, &fs.windows, &fs.linux.timeline);
         assert!(!tl.is_empty());
         assert!(tl.windows(2).all(|w| w[0].t <= w[1].t));
     }
@@ -329,7 +337,7 @@ mod tests {
         assert!(web_ind.records.contains(&rec("/Users/alice/AppData/Local/Google/Chrome/User Data/Default/History")));
 
         // Web events are on the timeline.
-        let tl = timeline::build(&fs.files, &fs.web, &fs.windows);
+        let tl = timeline::build(&fs.files, &fs.web, &fs.windows, &fs.linux.timeline);
         assert_eq!(tl.iter().filter(|e| e.src == "DL").count(), 2);
         assert!(tl.iter().any(|e| e.src == "SEARCH"));
     }
@@ -402,7 +410,7 @@ mod tests {
         for id in ["log_cleared_event", "tool_execution_record", "wipe_tool_executed"] {
             assert!(fs.indicators.iter().any(|i| i.id == id), "{} missing", id);
         }
-        let tl = timeline::build(&fs.files, &fs.web, w);
+        let tl = timeline::build(&fs.files, &fs.web, w, &[]);
         for src in ["EXEC", "OPEN", "USB", "INST", "NET", "EVT"] {
             assert!(tl.iter().any(|e| e.src == src), "{} not in timeline", src);
         }
@@ -441,5 +449,63 @@ mod tests {
         assert!(!fs.indicators.iter().any(|i| i.id == "ads_unusual"));
         assert_eq!(fs.stats.users, vec!["alice".to_string()]);
         assert!(fs.score.likelihood > 0.9);
+    }
+
+    /// Ground truth from scripts/make_ext_fixture.py (linux-server.img).
+    #[test]
+    fn linux_server_artifacts() {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/linux-server.img");
+        if !p.exists() {
+            return;
+        }
+        let ev = Evidence::open(&p).unwrap();
+        let a = analyze(&ev, &mut |_, _, _| true).unwrap();
+        let fs = &a.filesystems[0];
+        let l = &fs.linux;
+        let c = &l.computer;
+        assert_eq!((c.hostname.as_str(), c.os.as_str(), c.time_zone.as_str()), ("lab-srv", "Debian GNU/Linux 12 (bookworm)", "Europe/Skopje"));
+        let iso = kokino_core::time::filetime_to_iso;
+        // Classic syslog, local time UTC+2: 10:10:01 is 08:10:01 UTC.
+        let ssh = l.events.iter().find(|e| e.category == "Logon" && e.user == "alice").unwrap();
+        assert_eq!(iso(ssh.time), "2026-10-20T08:10:01.0000000Z");
+        assert_eq!(ssh.ip, "192.0.2.10");
+        assert_eq!(l.events.iter().filter(|e| e.category == "Failed logon").count(), 2);
+        assert!(l.events.iter().any(|e| e.category == "Logon" && e.user == "bob" && e.source == "journal" && e.ip == "203.0.113.9"));
+        assert!(l.events.iter().any(|e| e.category == "Account" && e.user == "svc-backup"));
+        assert!(l.logons.iter().any(|x| x.source == "wtmp" && x.user == "alice" && x.end > x.time));
+        assert!(l.logons.iter().any(|x| x.source == "btmp" && x.user == "admin" && x.kind == "failed"));
+        assert_ne!(c.last_boot, 0);
+        assert_ne!(c.last_shutdown, 0);
+        let user = |n: &str| l.users.iter().find(|u| u.name == n).unwrap();
+        assert!(user("alice").admin && user("alice").password.starts_with("set (SHA-512)"));
+        assert!(user("toor").note.contains("uid 0"));
+        assert!(user("svc-backup").note.contains("without a password"));
+        assert_eq!(user("bob").password, "locked");
+        assert!(user("alice").logons >= 1);
+        let shred = l.commands.iter().find(|x| x.shell == "bash" && x.command.starts_with("shred")).unwrap();
+        assert_eq!(shred.flag, "secure deletion");
+        assert_eq!(iso(shred.time), "2026-10-20T10:10:30.0000000Z");
+        assert!(l.commands.iter().any(|x| x.shell == "sudo" && x.command.contains("/usr/bin/shred")));
+        let nmap = l.packages.iter().find(|p| p.name == "nmap").unwrap();
+        assert_eq!((nmap.by.as_str(), iso(nmap.installed).as_str()), ("alice", "2026-10-20T08:12:50.0000000Z"));
+        let unusual: Vec<&str> = l.persistence.iter().filter(|p| p.unusual).map(|p| p.kind.as_str()).collect();
+        for k in ["cron", "systemd", "ld.so.preload", "SSH key", "history disabled"] {
+            assert!(unusual.contains(&k), "{} not flagged: {:?}", k, unusual);
+        }
+        assert!(l.persistence.iter().any(|p| p.kind == "SSH key" && p.command.contains("SHA256:")));
+        assert_eq!(l.usb.len(), 1);
+        assert_eq!((l.usb[0].name.as_str(), l.usb[0].serial.as_str()), ("SanDisk Ultra", "4C530001230920115045"));
+        assert!(l.networks.iter().any(|n| n.name == "LabWiFi" && n.last_connected > 0));
+        assert!(l.networks.iter().any(|n| n.kind == "SSH known host" && n.name == "192.0.2.10"));
+        assert!(l.networks.iter().any(|n| n.kind == "hosts file entry" && n.description == "203.0.113.66"));
+        assert!(l.interfaces.iter().any(|i| i.ip == "192.0.2.20" && i.gateway == "192.0.2.1"));
+        for id in ["linux_antiforensic_command", "shell_history_cleared", "ld_preload"] {
+            assert!(fs.indicators.iter().any(|i| i.id == id), "{} missing", id);
+        }
+        let tl = timeline::build(&fs.files, &fs.web, &fs.windows, &l.timeline);
+        for src in ["EXEC", "INST", "USB", "NET", "EVT"] {
+            assert!(tl.iter().any(|e| e.src == src), "{} not in timeline", src);
+        }
+        assert!(fs.stats.impact.iter().any(|x| x.contains("Linux computer lab-srv")));
     }
 }
