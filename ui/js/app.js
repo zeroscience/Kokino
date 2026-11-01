@@ -1443,7 +1443,16 @@ function linuxSystem(ctx, r) {
 
 async function systemTab(ctx) {
   const r = await api(`/cases/${ctx.cid}/evidence/${ctx.eid}/fs/${ctx.fi}/windows`);
-  const intro = h("div.hd", h("div", h("h1", "System summary"), h("div.muted", "Registry, event logs, Prefetch, shortcuts and Jump Lists of this Windows volume. " + zoneSentence() + "")), h("span.sp"), fsPicker(ctx, "system"));
+  // What this page reads depends on the volume: Windows files on NTFS,
+  // Linux files on ext, either (usually neither) on a FAT or exFAT drive.
+  const what = isExt(r.fs) ? "Accounts, logons, shell histories, logs, the journal, packages and persistence of this Linux volume."
+    : isFat(r.fs) ? "Windows or Linux system files found on this volume (a removable drive usually has none)."
+    : "Registry, event logs, Prefetch, shortcuts and Jump Lists of this Windows volume.";
+  const intro = h("div.hd", h("div", h("h1", "System summary"), h("div.muted", what + " " + zoneSentence())), h("span.sp"), fsPicker(ctx, "system"));
+  if (isExt(r.fs) && r.schema < 5) {
+    return render(h("div.stack", intro, h("div.card.empty", h("p", "This evidence was analyzed before Kokino read Linux system files."),
+      canWrite() ? h("button.primary", { onclick: () => reingest(ctx.cid, ctx.eid, false) }, "Re-analyze now") : h("p.muted", "Ask an examiner on this case to re-analyze it."))));
+  }
   if (r.schema < 3) {
     return render(h("div.stack", intro, h("div.card.empty", h("p", "This evidence was analyzed by an earlier Kokino version, before Windows artifacts were read."),
       canWrite() ? h("button.primary", { onclick: () => reingest(ctx.cid, ctx.eid, false) }, "Re-analyze now") : h("p.muted", "Ask an examiner on this case to re-analyze it."))));

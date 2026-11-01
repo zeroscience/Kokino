@@ -23,6 +23,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Analysis schema 5 (`FsEntry::unix`, `FsAnalysis::linux`). Evidence analyzed before keeps working; re-analyze to get the new fields.
 
 ### Fixed
+- System summary: the heading said "Registry, event logs ... of this Windows volume" on every volume; it now describes what is read on NTFS, ext and FAT, and evidence analyzed before the Linux reader offers a re-analysis.
 - ext reader (found by the NIST validation before release): ext2 deleted names whose inode number the kernel erased were dropped; deleted ext2 folders (size set to 0 by rmdir) and orphaned folders were not entered; blocks of large indexed folders whose files were all deleted were skipped as index blocks; old copies of names left behind by index splits were listed as deleted files.
 - ext reader (found by fuzzing before release): a superblock claiming millions of block groups made the block bitmap buffer reserve hundreds of megabytes from an 83 KB image. Group descriptors and the bitmap are now bounded by what the image holds.
 - Linux log parsers (found by fuzzing before release): integer overflows in POSIX time zone rules and in systemd journal object offsets and sizes. Fuzzing now totals 227,335,973 inputs over 18 targets, 22 problems found and fixed (SECURITY.md).
