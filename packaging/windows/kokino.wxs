@@ -35,10 +35,15 @@
           <File Id="KokinoExe" Source="$(var.Bin)\kokino.exe" KeyPath="yes" />
           <Environment Id="AddToPath" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="yes" Permanent="no" />
         </Component>
-        <Component Id="Documents">
+        <!-- One file per component: plain files cannot share a generated component id. -->
+        <Component Id="LicenseFile">
           <File Id="License" Source="$(var.Root)\LICENSE" Name="LICENSE.txt" KeyPath="yes" />
-          <File Id="Notice" Source="$(var.Root)\NOTICE" Name="NOTICE.txt" />
-          <File Id="Readme" Source="$(var.Root)\README.md" Name="README.md" />
+        </Component>
+        <Component Id="NoticeFile">
+          <File Id="Notice" Source="$(var.Root)\NOTICE" Name="NOTICE.txt" KeyPath="yes" />
+        </Component>
+        <Component Id="ReadmeFile">
+          <File Id="Readme" Source="$(var.Root)\README.md" Name="README.md" KeyPath="yes" />
         </Component>
       </Directory>
     </StandardDirectory>
@@ -56,7 +61,9 @@
 
     <Feature Id="Kokino" Title="Kokino Forensic Toolkit">
       <ComponentRef Id="Program" />
-      <ComponentRef Id="Documents" />
+      <ComponentRef Id="LicenseFile" />
+      <ComponentRef Id="NoticeFile" />
+      <ComponentRef Id="ReadmeFile" />
       <ComponentRef Id="StartMenu" />
     </Feature>
   </Package>
