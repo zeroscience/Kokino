@@ -60,7 +60,7 @@ NTFS volume and wraps it in an MBR disk. The test
 `finds_planted_antiforensics` asserts that each rule fires on exactly the
 planted file. New rules must add a planted case there.
 
-## Known limits (1.2.5)
+## Known limits (1.2.6)
 
 - Prefetch, EVTX and $UsnJrnl are checked by presence and size only; parsing
   them (run counts, event 1102, journal gaps) is Milestone 1-2.

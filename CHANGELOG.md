@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.6] - 2026-11-02
+
+Linux: ext2, ext3 and ext4 file systems and Linux system artifacts, validated on the NIST CFReDS ext images and fuzzed.
+
 ### Added
 - ext2, ext3 and ext4 (new crate `kokino-ext`): every inode, extent trees and indirect block maps, inline data and fast symlinks, directories with deleted names recovered from directory-entry slack, orphaned inodes under $OrphanFiles, block bitmap free space for carving and search. Owner, group, mode, inode number and deletion time are shown in the file details; ext4 times to the nanosecond with creation time. Works through MBR and GPT like the other file systems.
 - Recovery of deleted ext3/ext4 files through the journal: ext3 and ext4 clear a deleted file's block map, so Kokino looks for an older copy of its inode-table block in the JBD2 journal and, when the inode there is the same file (same generation) with its block map, reads the content through it. Such files show "Recovered from the journal (transaction N)"; the summary counts deleted files with nothing left to recover (carving may still find them).
@@ -20,6 +24,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Deleted folders on ext3 and ext4: when the folder's block map is cleared, Kokino searches the free blocks of its block group for the directory block that names it, so the files in it keep their names.
 
 ### Changed
+- New project description in the README, the About page and on GitHub.
 - Analysis schema 5 (`FsEntry::unix`, `FsAnalysis::linux`). Evidence analyzed before keeps working; re-analyze to get the new fields.
 
 ### Fixed

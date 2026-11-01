@@ -17,8 +17,8 @@ Thanks to the people behind these collections:
   Forensics Tool Testing (CFTT) program: here the Deleted File Recovery
   (DFR) test images and their layout document.
 
-Kokino version: 1.2.5 plus the changes in the changelog's Unreleased
-section. Run on Windows 10.
+Kokino version: 1.2.5 plus the fixes listed in the changelog for the FAT,
+exFAT and NTFS images; 1.2.6 for the ext images. Run on Windows 10.
 
 ## Summary
 

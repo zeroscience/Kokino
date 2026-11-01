@@ -84,7 +84,7 @@ target ran 1,938,929 inputs with no finding, and 10 more minutes each on
 and 18 distinct problems found by fuzzing.
 
 The ext2/3/4 reader and the Linux artifact parsers were fuzzed before they
-shipped (after 1.2.5):
+shipped (in 1.2.6):
 
 | Target | What it covers | Round 1 (10 min) | Round 2 | Inputs in all | Distinct problems found |
 |---|---|--:|--:|--:|---|

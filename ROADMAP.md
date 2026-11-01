@@ -20,7 +20,7 @@ checked against public test images with known answers where they exist
 - [x] Accounts, roles and hash-chained audit logs; lab server mode over HTTPS
 - [x] Packages for Windows (MSI), Linux (.deb, .tar.gz) and macOS (DMG)
 
-## Since 1.2.5 (unreleased)
+## In 1.2.6
 
 ### Linux: ext4 and Linux artifacts
 - [x] ext2/3/4: inodes, extents, directories, deleted entries (recovered through the journal where possible)

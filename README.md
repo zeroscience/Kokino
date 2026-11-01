@@ -22,7 +22,7 @@
   <img src="https://img.shields.io/badge/rust-1.80%2B-orange?logo=rust&logoColor=white" alt="Rust 1.80+">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey" alt="Platforms: Windows, Linux, macOS">
   <img src="https://img.shields.io/badge/GUI-browser-1f6feb" alt="Browser GUI">
-  <img src="https://img.shields.io/badge/version-1.2.5-00bcd4" alt="Version 1.2.5">
+  <img src="https://img.shields.io/badge/version-1.2.6-00bcd4" alt="Version 1.2.6">
   <img src="https://img.shields.io/badge/evidence-read--only-2ea44f" alt="Evidence read-only">
   <img src="https://img.shields.io/badge/audit%20log-hash--chained-2ea44f" alt="Hash-chained audit log">
   <a href="SECURITY.md#fuzzing-the-parsers"><img src="https://img.shields.io/badge/parsers%20fuzzed-227M%20inputs-2ea44f" alt="Parsers fuzzed: 227 million inputs"></a>
@@ -66,12 +66,11 @@
 
 ---
 
-Kokino walks every NTFS MFT record, every FAT and exFAT directory entry and
-every ext2/3/4 inode, live and deleted, compares $STANDARD_INFORMATION against $FILE_NAME timestamps,
-identifies content by signature, and scores the evidence for anti-forensic
-activity. Every number comes with its explanation and the exact files behind it.
+Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workbench for disk images. Give it an E01, raw or VHD image and it reads every NTFS, FAT, exFAT and ext2/3/4 volume down to the last record, live and deleted, brings back what was erased, and rebuilds what happened on the machine: Windows registry, event logs and execution traces, Linux logons, shell histories and persistence, browser history, carved files and edited pictures.
 
-> Status: 1.2.5, the first public release. Validated against NIST CFReDS (FAT, exFAT, NTFS and ext) and Digital Corpora test images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed ([SECURITY.md](SECURITY.md)). Since 1.2.5 (unreleased): ext2/3/4 and Linux artifacts. Next: VHDX, VMDK, ISO 9660 and UDF (see [What's next](#whats-next)).
+Every finding links to the exact bytes it came from, every indicator of anti-forensic activity explains itself, and every examiner action lands in a hash-chained audit log, so the results hold up in a report and in court.
+
+> Status: 1.2.6 adds ext2/3/4 and Linux artifacts to 1.2.5, the first public release. Validated against NIST CFReDS (FAT, exFAT, NTFS and ext) and Digital Corpora test images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed ([SECURITY.md](SECURITY.md)). Next: VHDX, VMDK, ISO 9660 and UDF (see [What's next](#whats-next)).
 
 ## Features
 
