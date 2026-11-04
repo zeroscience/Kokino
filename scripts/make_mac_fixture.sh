@@ -6,7 +6,7 @@
 # reports about every file, which the tests use as ground truth:
 #
 #   out/hfsplus.img    bare HFS+ (journaled) volume, 8 MiB
-#   out/apfs.img       GPT disk with an APFS container, 32 MiB, two
+#   out/apfs.img       GPT disk with an APFS container, 64 MiB, two
 #                      volumes (KOKINO_APFS and KOKINO_DATA)
 #   out/manifest.txt   stat, extended attributes and flags of every file
 #
@@ -85,7 +85,7 @@ hdiutil convert "$WORK/hfs.dmg" -format UDTO -o "$WORK/hfs"
 mv "$WORK/hfs.cdr" "$OUT/hfsplus.img"
 
 # APFS: a GPT disk with one container and two volumes.
-hdiutil create -size 32m -fs APFS -volname KOKINO_APFS -layout GPTSPUD -ov "$WORK/apfs.dmg"
+hdiutil create -size 64m -fs APFS -volname KOKINO_APFS -layout GPTSPUD -ov "$WORK/apfs.dmg"
 ATTACH="$(hdiutil attach "$WORK/apfs.dmg" -nobrowse -owners on)"
 echo "$ATTACH"
 MNT="$(echo "$ATTACH" | awk -F'\t' '/KOKINO_APFS/ {print $NF}' | sed 's/^ *//' | tail -1)"
