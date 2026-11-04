@@ -1,0 +1,23 @@
+# Builds the HFS+ and APFS test images with Apple's own tools
+# (scripts/make_mac_fixture.sh) and keeps them as a build artifact.
+# Run by hand from the Actions tab; the images go into tests/fixtures.
+name: Mac test images
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  images:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build HFS+ and APFS images
+        run: bash scripts/make_mac_fixture.sh out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-fixtures
+          path: out/
+          retention-days: 7
