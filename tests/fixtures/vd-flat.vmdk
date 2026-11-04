@@ -1,0 +1,13 @@
+# Disk DescriptorFile
+version=1
+CID=33333333
+parentCID=ffffffff
+createType="monolithicFlat"
+
+# Extent description
+RW 7360 FLAT "vd-flat-flat.vmdk" 0
+
+# The Disk Data Base
+#DDB
+ddb.virtualHWVersion = "4"
+ddb.adapterType = "ide"

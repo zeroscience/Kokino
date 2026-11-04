@@ -41,3 +41,6 @@ ext 1 105243 oom
 linuxlogs 1 3150 overflow
 linuxlogs 1 3907 overflow
 linuxlogs 1 3419575 overflow
+optical 1 3 overflow
+optical 1 192 panic
+optical 1 1698992 panic

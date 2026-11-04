@@ -487,7 +487,7 @@ function deleteCase(c) {
 }
 
 function addEvidence(cid) {
-  const path = h("input", { placeholder: "Full path to .E01 / .dd / .raw / .img / .001 / .vhd" });
+  const path = h("input", { placeholder: "Full path to .E01 / .dd / .raw / .img / .001 / .vhd / .vhdx / .vmdk" });
   const name = h("input", { placeholder: "Defaults to file name" });
   const notes = h("textarea", { rows: 2, placeholder: "Acquisition notes, chain of custody reference..." });
   const md5 = h("input.mono", { placeholder: "optional" });
@@ -595,7 +595,8 @@ function fsPicker(ctx, tab) {
 /** FAT12/16/32 and exFAT: one timestamp set, no MFT, no named streams. */
 const isFat = (label) => /fat/i.test(label || "");
 const isExt = (label) => /^ext/i.test(label || "");
-const isNtfs = (label) => !isFat(label) && !isExt(label);
+const isOptical = (label) => /iso 9660|udf/i.test(label || "");
+const isNtfs = (label) => !isFat(label) && !isExt(label) && !isOptical(label);
 /** FAT12/16/32 store the device's local time with no zone: shown as stored, never converted. exFAT stores a UTC offset. */
 const deviceClock = (label) => isFat(label) && label !== "exFAT";
 const fsClock = (ctx) => ({ raw: !!(ctx.fs && deviceClock(ctx.fs.volume.fs_label)) });
@@ -681,7 +682,7 @@ function summaryTab(ctx) {
   const maxCat = Math.max(1, ...st.by_category.map((c) => c[1]));
   const maxExt = Math.max(1, ...st.top_ext.map((c) => c[1]));
   render(h("div.stack",
-    h("div.hd", h("div", h("h1", ev.record.name), h("div.muted", `${fs.volume.fs_label} "${fs.info.label}", ${isExt(fs.volume.fs_label) ? `${fs.info.version}, UUID ${fs.info.serial}, block` : `serial ${fs.info.serial}, ${isFat(fs.volume.fs_label) ? "" : `NTFS ${fs.info.version}, `}cluster`} ${fs.info.cluster_size} B, analyzed ${ts(s.analyzed_at, 19, { label: true })} by Kokino ${s.tool_version}`)), h("span.sp"), fsPicker(ctx, "summary"),
+    h("div.hd", h("div", h("h1", ev.record.name), h("div.muted", `${fs.volume.fs_label} "${fs.info.label}", ${isOptical(fs.volume.fs_label) ? `${fs.info.version}, created ${ts(fs.info.serial, 19)}, sector` : isExt(fs.volume.fs_label) ? `${fs.info.version}, UUID ${fs.info.serial}, block` : `serial ${fs.info.serial}, ${isFat(fs.volume.fs_label) ? "" : `NTFS ${fs.info.version}, `}cluster`} ${fs.info.cluster_size} B, analyzed ${ts(s.analyzed_at, 19, { label: true })} by Kokino ${s.tool_version}`)), h("span.sp"), fsPicker(ctx, "summary"),
       h("a.btn", { href: apiUrl(`/cases/${ctx.cid}/evidence/${ctx.eid}/report`), target: "_blank", rel: "noopener" }, "HTML report")),
     h("div.card.flat", h("div.hd", h("h3", "Disk layout"), h("span.sp"), h("span.muted", `${s.image_format}, ${bytes(s.image_size)}`)), volumeMap(s)),
     h("div.grid.g4.stagger",
@@ -841,12 +842,14 @@ async function fileDrawer(ctx, idx, startOffset) {
   const r = f.row;
   const fat = isFat(f.fs);
   const ext = isExt(f.fs);
+  const optical = isOptical(f.fs);
+  const ntfs = isNtfs(f.fs);
   const u = f.unix;
   const names = fat ? ["created", "modified", "accessed"] : ["created", "modified", "accessed", "mft_modified"];
-  const labels = { created: "Born (B)", modified: "Modified (M)", accessed: fat ? "Accessed (A, date only)" : "Accessed (A)", mft_modified: ext ? "Inode changed (C)" : "MFT changed (C)" };
-  const tsTable = h("table.ts", h("tr", h("th", ""), h("th", fat ? "Directory entry" : ext ? "Inode" : "$STANDARD_INFORMATION"), fat || ext ? null : h("th", "$FILE_NAME")),
+  const labels = { created: "Born (B)", modified: optical ? "Recorded / modified (M)" : "Modified (M)", accessed: fat ? "Accessed (A, date only)" : "Accessed (A)", mft_modified: ext ? "Inode changed (C)" : optical ? "Attributes changed (C)" : "MFT changed (C)" };
+  const tsTable = h("table.ts", h("tr", h("th", ""), h("th", fat ? "Directory entry" : ext ? "Inode" : optical ? "Directory record" : "$STANDARD_INFORMATION"), ntfs ? h("th", "$FILE_NAME") : null),
     names.map((n, i) => {
-      if (fat || ext) return h("tr", h("td.muted", labels[n]), h("td.mono", ts((f.si && f.si[n]) || "", undefined, { raw: deviceClock(f.fs) })));
+      if (!ntfs) return h("tr", h("td.muted", labels[n]), h("td.mono", ts((f.si && f.si[n]) || "", undefined, { raw: deviceClock(f.fs) })));
       const a = f.si && f.si[n], b = f.fn && f.fn[n];
       const ra = f.si && f.si.raw[i], rb = f.fn && f.fn.raw[i];
       const back = n === "created" && ra && rb && ra + 10000000 < rb;
@@ -902,23 +905,23 @@ async function fileDrawer(ctx, idx, startOffset) {
       f.indicators.length ? h("div.stack", f.indicators.map((i) => h("div.card.flat.ind.hot", h("b", i.title), h("p", { style: { margin: "6px 0 0" } }, i.explanation), h("div.cav", i.caveat)))) : null,
       f.hashes && f.hashes.sets.some((s) => s.kind === "notable") ? h("div.card.flat.ind.hot", h("b", "In a known-bad hash set"), h("p", { style: { margin: "6px 0 0" } }, f.hashes.sets.filter((s) => s.kind === "notable").map((s) => `${s.name} (${ALGO[s.algo]})`).join(", ")),
         h("div.cav", "A hash match means identical content, not how the file got here or whether anyone opened it.")) : null,
-      h("div.card.flat", h("h3", fat ? (f.fs === "exFAT" ? `Timestamps (${zoneName()}, from the stored UTC offset, 10 ms precision)` : "Timestamps (the device's local clock as stored, 2 s precision)") : ext ? `Timestamps (${zoneName()}, stored in UTC; ext4 to the nanosecond, ext2/ext3 to the second)` : `Timestamps (${zoneName()}, 100 ns precision)`), tsTable),
+      h("div.card.flat", h("h3", fat ? (f.fs === "exFAT" ? `Timestamps (${zoneName()}, from the stored UTC offset, 10 ms precision)` : "Timestamps (the device's local clock as stored, 2 s precision)") : ext ? `Timestamps (${zoneName()}, stored in UTC; ext4 to the nanosecond, ext2/ext3 to the second)` : optical ? `Timestamps (${zoneName()}, recorded as local time with its UTC offset, 1 s precision; born, accessed and changed only with Rock Ridge)` : `Timestamps (${zoneName()}, 100 ns precision)`), tsTable),
       h("div.card.flat", h("h3", "Identity"), h("div.kv", { style: { marginTop: "8px" } },
-        fat ? [h("span", "Entry id / parent"), h("span.mono", { title: "Assigned by Kokino in directory order; FAT has no record numbers" }, `${r.record} / ${f.parent}`)]
+        fat || optical ? [h("span", "Entry id / parent"), h("span.mono", { title: "Assigned by Kokino in directory order; this file system has no record numbers" }, `${r.record} / ${f.parent}`)]
           : ext ? [h("span", "Inode / entry id"), h("span.mono", { title: "Entry ids are assigned by Kokino; hard links share one inode" }, `${u ? u.inode : ""} / ${r.record}`)]
           : [h("span", "MFT record / seq"), h("span.mono", `${r.record} / ${r.seq}`), h("span", "Parent record / seq"), h("span.mono", `${f.parent} / ${f.parent_seq}`)],
-        ext && u ? [h("span", "Mode"), h("span.mono", `${u.mode_string} (${u.mode.padStart(6, "0")})`), h("span", "Owner uid / gid"), h("span.mono", `${u.uid} / ${u.gid}`)] : null,
-        ext && u && u.link_target != null ? [h("span", "Link target"), h("span.mono", { style: { wordBreak: "break-all" } }, u.link_target)] : null,
-        ext ? null : [h("span", "8.3 name"), h("span.mono", f.dos_name || "")],
+        u ? [h("span", "Mode"), h("span.mono", `${u.mode_string} (${u.mode.padStart(6, "0")})`), h("span", "Owner uid / gid"), h("span.mono", `${u.uid} / ${u.gid}`)] : null,
+        u && u.link_target != null ? [h("span", "Link target"), h("span.mono", { style: { wordBreak: "break-all" } }, u.link_target)] : null,
+        ext || optical ? null : [h("span", "8.3 name"), h("span.mono", f.dos_name || "")],
         h("span", "Logical / allocated"), h("span", `${num(r.size)} / ${num(f.alloc_size)} bytes`),
         h("span", "Signature"), h("span", { style: { color: r.mismatch ? "var(--bad)" : null } }, r.sig_label ? `${r.sig_label}${r.mismatch ? ", does not match ." + r.ext : ""}` : "unknown"),
         h("span", "Entropy"), ent != null ? h("div", h("div.entropy", cursor), h("span.muted", `${ent.toFixed(3)} bits/byte`)) : h("span.muted", "n/a"),
         f.uniform != null ? [h("span", "Sampled content"), h("span", { style: { color: "var(--warn)" } }, `every sampled byte is 0x${f.uniform.toString(16).padStart(2, "0")}`)] : null,
         fat ? null : [h("span", "Hard links"), h("span", f.hard_links)],
-        fat || ext ? null : [h("span", "USN"), h("span.mono", f.usn ?? "")],
-        h("span", fat ? "Directory entry at" : ext ? "Inode at" : "MFT record at"), h("a.mono", { href: "#", onclick: (e) => { e.preventDefault(); jump(f.record_image_offset); } }, `image offset ${num(f.record_image_offset)} -> hex`),
+        ntfs ? [h("span", "USN"), h("span.mono", f.usn ?? "")] : null,
+        h("span", fat ? "Directory entry at" : ext ? "Inode at" : optical ? "Directory record at" : "MFT record at"), h("a.mono", { href: "#", onclick: (e) => { e.preventDefault(); jump(f.record_image_offset); } }, `image offset ${num(f.record_image_offset)} -> hex`),
         u && u.journal_seq != null ? [h("span", "Inode copy in journal"), h("a.mono", { href: "#", onclick: (e) => { e.preventDefault(); jump(u.inode_image_offset); } }, `image offset ${num(u.inode_image_offset)} -> hex`)] : null,
-        f.data_image_offset != null ? [h("span", ext ? "First data block" : "First data cluster"), h("a.mono", { href: "#", onclick: (e) => { e.preventDefault(); jump(f.data_image_offset); } }, `image offset ${num(f.data_image_offset)} -> hex`)] : null,
+        f.data_image_offset != null ? [h("span", ext ? "First data block" : optical ? "First data sector" : "First data cluster"), h("a.mono", { href: "#", onclick: (e) => { e.preventDefault(); jump(f.data_image_offset); } }, `image offset ${num(f.data_image_offset)} -> hex`)] : null,
         f.error ? [h("span", "Parser note"), h("span", { style: { color: "var(--warn)" } }, f.error)] : null,
       )),
       f.streams.length > 1 ? h("div.card.flat", h("h3", "Data streams"), h("table.ts", h("tr", h("th", "Name"), h("th", "Size"), h("th", "")),
@@ -1446,7 +1449,7 @@ async function systemTab(ctx) {
   // What this page reads depends on the volume: Windows files on NTFS,
   // Linux files on ext, either (usually neither) on a FAT or exFAT drive.
   const what = isExt(r.fs) ? "Accounts, logons, shell histories, logs, the journal, packages and persistence of this Linux volume."
-    : isFat(r.fs) ? "Windows or Linux system files found on this volume (a removable drive usually has none)."
+    : isFat(r.fs) || isOptical(r.fs) ? "Windows or Linux system files found on this volume (a removable drive or disc usually has none)."
     : "Registry, event logs, Prefetch, shortcuts and Jump Lists of this Windows volume.";
   const intro = h("div.hd", h("div", h("h1", "System summary"), h("div.muted", what + " " + zoneSentence())), h("span.sp"), fsPicker(ctx, "system"));
   if (isExt(r.fs) && r.schema < 5) {

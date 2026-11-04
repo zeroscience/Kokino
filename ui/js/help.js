@@ -149,9 +149,9 @@ const WIKI = [
       kv([
         ["E01 (EWF)", "Pick the .E01; the other segments (.E02, ... .EAA) are found automatically. Compressed and uncompressed images both work."],
         ["Raw / dd", ".dd, .raw, .img, .bin, or split .001, .002, ..."],
-        ["VHD", "Fixed-size VHD. Dynamic VHD, VHDX, VMDK and Ex01 are recognized and reported but not read yet: convert them to E01 or raw."],
+        ["Virtual disks", "VHD (fixed, dynamic and differencing), VHDX (dynamic, fixed and differencing) and VMDK (flat, sparse, streamOptimized as exported in OVA files, split into 2 GB extents, and snapshots). Pick the disk itself (for VMDK the small descriptor .vmdk, not a -flat or -s001 extent); parents of differencing disks and snapshots are found next to it by the names the disk records, and a parent that changed after the child was made is reported. A VHDX whose log was never applied (not shut down cleanly) is read without the log, and the summary says so. Ex01 is recognized but not read yet."],
         ["Partitions", "MBR (with extended partitions) and GPT, or a single volume with no partition table."],
-        ["File systems", "NTFS, FAT12, FAT16, FAT32, exFAT, ext2, ext3 and ext4 are parsed, live and deleted files alike. APFS, HFS+ and BitLocker volumes are detected and reported; their space is still searched and carved."],
+        ["File systems", "NTFS, FAT12, FAT16, FAT32, exFAT, ext2, ext3, ext4, ISO 9660 and UDF are parsed, live and deleted files alike. APFS, HFS+ and BitLocker volumes are detected and reported; their space is still searched and carved."],
       ]),
       p("If you have the acquisition hash, paste it: Kokino reports whether the image still matches. For E01 it also checks the hash the imaging tool stored inside the file. Both results go into the audit log, and a mismatch is shown in red on the evidence card."),
       p("Hashing and analysis run in the background; progress shows at the top right. ", h("b", "Re-analyze"), " reruns the analysis after a Kokino upgrade; ", h("b", "Re-hash + analyze"), " also recomputes the hashes."),
@@ -204,6 +204,18 @@ const WIKI = [
         h("span", h("b", "Syslog times:"), " classic syslog lines (\"Oct 20 10:10:01\") have no year and no time zone. Kokino converts them with the image's own /etc/localtime and counts the year back from the log file's modification time; such events are marked with *. Newer RFC 3339 lines and the journal carry exact UTC times."),
         h("span", h("b", "Shell histories:"), " bash writes its history when the shell exits and records times only when HISTTIMEFORMAT was set; zsh and fish always do. Commands that destroy evidence (shred, history -c, removing logs, touch -d, journal vacuum) are flagged."),
         h("span", h("b", "Journal:"), " fields the journal stored compressed (long messages) are counted, not read, in this version."),
+      ),
+    ],
+  },
+  {
+    id: "optical", title: "Optical discs and .iso files (ISO 9660, UDF)", icon: "disk",
+    body: [
+      p("Add a .iso file (or a raw image of a CD, DVD or Blu-ray) as evidence like any other image. Explorer, Timeline, signatures, search, hashes, bookmarks and exports work on it; there is no free space to carve on a disc."),
+      ul(
+        h("span", h("b", "ISO 9660:"), " Rock Ridge gives POSIX names, owners, modes, times and symbolic links (deep folders that Rock Ridge moved to rr_moved are shown where they belong); Joliet gives Unicode names. Times are recorded as local time with its offset from UTC, to the second."),
+        h("span", h("b", "Multisession discs:"), " each session adds a new directory tree, and old data stays on the disc. Kokino shows the newest session as the live file system, and lists files that only older sessions have (removed or replaced later) as deleted, with the session they come from. Their content is read from the disc."),
+        h("span", h("b", "UDF:"), " DVDs, Blu-ray discs and packet-written media, UDF 1.02 to 2.60. A deleted file's directory entry stays in its folder with a deleted flag; Kokino lists it, with the content its file entry still points to (which may by then belong to something else, and says so). On a disc with both, UDF is used unless the ISO 9660 side has more than one session."),
+        h("span", h("b", "Not read yet:"), " UDF virtual partitions (CD-R written incrementally) and sparable partitions (DVD-RW); the summary says when a disc uses them."),
       ),
     ],
   },
@@ -456,7 +468,7 @@ const WIKI = [
     body: [
       p("Evidence can be made to attack the tool that reads it: a disk image, registry hive or picture crafted to crash Kokino, hang an ingest, or use up the examiner's memory. Kokino is written in Rust with ", code("unsafe"), " code forbidden in every crate, and every parser that reads evidence has been fuzzed."),
       h("h3", "Fuzzing"),
-      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader and the Linux log parsers ran ", h("b", "227,335,973 inputs"), " and found ", h("b", "22 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
+      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks and optical media ran ", h("b", "231,857,430 inputs"), " and found ", h("b", "25 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
       h("div.scroll", h("table.tbl",
         h("thead", h("tr", h("th", "Target"), h("th", "Covers"), h("th", "Inputs"), h("th", "Found"))),
         h("tbody", [
@@ -465,6 +477,8 @@ const WIKI = [
         ["fat", "FAT12, FAT16, FAT32 and exFAT: boot sectors, FAT chains, directories, deleted entries, long names", "386,599", "4 (memory, overflow)"],
         ["ext", "ext2, ext3 and ext4: superblock, group descriptors, inodes, extents, indirect blocks, directories and their slack, journal copies", "1,332,425", "1 (memory)"],
         ["linuxlogs", "systemd journal, wtmp/btmp, syslog dates, TZif time zones, apt history, DHCP leases, dpkg status", "28,941,401", "3 (overflow)"],
+        ["vdisk", "Virtual disks: VHD, VHDX and VMDK headers, block tables, grain tables, compressed grains", "203,015", "none"],
+        ["optical", "ISO 9660 (Rock Ridge, Joliet, sessions) and UDF (descriptors, partitions, file entries, directories)", "4,318,442", "3 (overflow, out-of-range reads)"],
         ["ewf", "E01 (EWF) images: sections, chunk tables, zlib chunks, stored hashes", "42,686", "1 (overflow)"],
         ["registry", "Registry hives (SYSTEM, SOFTWARE, SAM, NTUSER.DAT, Amcache): cells, key and value lists, the whole key tree", "23,242,474", "1 (hang)"],
         ["evtx", "Windows event logs: chunks, binary XML templates and substitutions", "3,188,571", "none"],

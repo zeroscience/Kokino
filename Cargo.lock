@@ -892,6 +892,7 @@ dependencies = [
  "kokino-ext",
  "kokino-fat",
  "kokino-image",
+ "kokino-iso",
  "kokino-ntfs",
  "regex",
  "rusqlite",
@@ -976,6 +977,7 @@ dependencies = [
  "kokino-ext",
  "kokino-fat",
  "kokino-image",
+ "kokino-iso",
  "kokino-ntfs",
 ]
 
@@ -989,6 +991,16 @@ dependencies = [
  "serde",
  "sha1",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "kokino-iso"
+version = "1.2.6"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "kokino-core",
+ "kokino-ntfs",
 ]
 
 [[package]]

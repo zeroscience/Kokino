@@ -224,7 +224,7 @@ impl EwfImage {
             bail!("chunk tables list {} chunks but the volume section says {}", chunks.len(), chunk_count);
         }
         let media_size = sectors_n.checked_mul(bps as u64).context("media size out of range")?;
-        if chunk_count.checked_mul(chunk_size as u64).map_or(true, |cap| media_size > cap) {
+        if chunk_count.checked_mul(chunk_size as u64).is_none_or(|cap| media_size > cap) {
             bail!("media size {} exceeds what {} chunks can hold", media_size, chunk_count);
         }
         info.segments = paths.iter().map(|p| p.display().to_string()).collect();

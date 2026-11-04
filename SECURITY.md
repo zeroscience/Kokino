@@ -91,7 +91,14 @@ shipped (in 1.2.6):
 | `ext` | ext2, ext3 and ext4: superblock, group descriptors, inodes, extent trees, indirect blocks, directories and their slack, orphan scan, journal copies, block bitmap | 311,223 | 710,567 (25 min) + 310,635 (10 min, after the validation fixes) | 1,332,425 | 1 (memory) |
 | `linuxlogs` | systemd journal files, wtmp/btmp, syslog lines and their dates, TZif time zones and POSIX rules, apt history, DHCP leases, dpkg status, shell command rules | 9,505,147 | 19,436,254 (15 min) | 28,941,401 | 3 (overflow) |
 
-In all: 227,335,973 inputs over 18 targets, and 22 distinct problems
+Virtual disks and optical media (after 1.2.6):
+
+| Target | What it covers | Rounds | Inputs in all | Distinct problems found |
+|---|---|---|--:|---|
+| `vdisk` | VHD dynamic and differencing, VHDX (headers, region table, metadata, block table, sector bitmaps), VMDK (descriptor, sparse grain directory and tables, streamOptimized grains and footer); reads across the whole disk | 10 + 20 + 15 min | 203,015 | none (one 20 s stall in round 2 did not reproduce: the input replays in 9 ms; most likely the antivirus scanning the temporary file this target writes) |
+| `optical` | ISO 9660 descriptors, sessions, directory records, Rock Ridge and Joliet; UDF anchor, volume descriptors, partition maps, file set, file entries, allocation descriptors and directory entries | 15 + 15 min | 4,318,442 | 3 (overflow, out-of-range reads) |
+
+In all: 231,857,430 inputs over 20 targets, and 25 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed
@@ -121,6 +128,9 @@ found by fuzzing, all fixed.
 | 21 | Time zones (TZif rule) | Integer overflow | Fuzzing | Hours in a POSIX rule string multiplied unchecked | POSIX limits enforced (hours up to 167, minutes and seconds up to 59) |
 | 22 | systemd journal | Integer overflow | Fuzzing | Object offsets near the top of the address range added to a header size | Checked arithmetic |
 | 23 | systemd journal | Integer overflow | Fuzzing | A data object's size added to its offset | Checked arithmetic |
+| 24 | UDF | Integer overflow | Fuzzing | The backup anchor position (image size minus 256 sectors) on images smaller than that | Saturating arithmetic |
+| 25 | UDF | Crash (read past the end) | Fuzzing | A file entry cut short at the end of the image was read at its full size | Short entries read as zeros past the end |
+| 26 | UDF | Crash (read past the end) | Fuzzing | A short last block of the volume descriptor sequence was read as a full descriptor | The sequence ends at a short block |
 
 Before the fixes, every one of these could stop or slow an ingest, a carving
 job or a picture scan, or exhaust the examiner's memory, on purpose-made

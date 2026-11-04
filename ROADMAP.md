@@ -33,9 +33,13 @@ checked against public test images with known answers where they exist
 ## Next
 
 ### Virtual and optical disks
-- [ ] VHDX and VMDK (virtual machines and cloud disks)
+- [x] VHDX and VMDK (virtual machines and cloud disks), plus dynamic and differencing VHD and snapshot chains (unreleased)
+- [ ] VHDX log replay (disks not shut down cleanly are read without their log)
+- [ ] ESXi snapshot formats (VMFSSPARSE, SESPARSE)
 - [ ] Ex01 (EWF version 2)
-- [ ] ISO 9660 and UDF (optical media, ISO files inside evidence)
+- [x] ISO 9660 (Rock Ridge, Joliet, multisession history) and UDF (unreleased)
+- [ ] UDF virtual (VAT) and sparable partitions; UDF 2.50 metadata partition checked on a real disc
+- [ ] ISO and virtual disk files found inside evidence, opened as evidence of their own
 
 ## Later
 

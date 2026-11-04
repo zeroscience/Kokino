@@ -491,7 +491,7 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Carve { image, json } => {
             use std::io::{Read, Seek, SeekFrom};
             let ev = kokino_image::Evidence::open(&image)?;
-            eprintln!("{} ({}, {} bytes)", image.display(), ev.format.label(), ev.size);
+            eprintln!("{} ({}, {} bytes)", image.display(), ev.format_label(), ev.size);
             let a = kokino_analysis::analyze(&ev, &mut |_, _, _| true)?;
             let c = kokino_analysis::carve::carve(&ev, &a, &mut |_, _, _| true)?;
             let mut r = ev.reader()?;
@@ -511,7 +511,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Cmd::Files { image, json, extract } => {
             let ev = kokino_image::Evidence::open(&image)?;
-            eprintln!("{} ({}, {} bytes)", image.display(), ev.format.label(), ev.size);
+            eprintln!("{} ({}, {} bytes)", image.display(), ev.format_label(), ev.size);
             let a = kokino_analysis::analyze(&ev, &mut |_, _, _| true)?;
             let fh = kokino_analysis::hashsets::hash_files(&ev, &a, &mut |_, _, _| true)?;
             if !json {
@@ -551,7 +551,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Cmd::Analyze { image, json } => {
             let ev = kokino_image::Evidence::open(&image)?;
-            eprintln!("{} ({}, {} bytes)", image.display(), ev.format.label(), ev.size);
+            eprintln!("{} ({}, {} bytes)", image.display(), ev.format_label(), ev.size);
             let mut last = String::new();
             let a = kokino_analysis::analyze(&ev, &mut |stage, d, t| {
                 if stage != last {
@@ -589,7 +589,7 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Hash { image } => {
             let ev = kokino_image::Evidence::open(&image)?;
             let (h, n) = kokino_core::hashing::hash_reader(ev.reader()?, |_| true)?;
-            println!("format  {}\nbytes   {}\nmd5     {}\nsha1    {}\nsha256  {}", ev.format.label(), n, h.md5, h.sha1, h.sha256);
+            println!("format  {}\nbytes   {}\nmd5     {}\nsha1    {}\nsha256  {}", ev.format_label(), n, h.md5, h.sha1, h.sha256);
             // EWF images carry the hash the imaging tool computed; check it.
             if let Some(info) = ev.ewf_info() {
                 println!();

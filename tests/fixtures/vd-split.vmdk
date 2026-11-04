@@ -1,0 +1,14 @@
+# Disk DescriptorFile
+version=1
+CID=44444444
+parentCID=ffffffff
+createType="twoGbMaxExtentSparse"
+
+# Extent description
+RW 3712 SPARSE "vd-split-s001.vmdk"
+RW 3648 SPARSE "vd-split-s002.vmdk"
+
+# The Disk Data Base
+#DDB
+ddb.virtualHWVersion = "4"
+ddb.adapterType = "ide"

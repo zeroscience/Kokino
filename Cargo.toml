@@ -6,6 +6,7 @@ members = [
     "crates/kokino-ntfs",
     "crates/kokino-fat",
     "crates/kokino-ext",
+    "crates/kokino-iso",
     "crates/kokino-analysis",
     "crates/kokino-artifacts",
     "crates/kokino-server",
@@ -27,6 +28,7 @@ kokino-image = { path = "crates/kokino-image" }
 kokino-ntfs = { path = "crates/kokino-ntfs" }
 kokino-fat = { path = "crates/kokino-fat" }
 kokino-ext = { path = "crates/kokino-ext" }
+kokino-iso = { path = "crates/kokino-iso" }
 kokino-analysis = { path = "crates/kokino-analysis" }
 kokino-artifacts = { path = "crates/kokino-artifacts" }
 kokino-server = { path = "crates/kokino-server" }

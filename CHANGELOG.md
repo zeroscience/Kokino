@@ -5,6 +5,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Virtual disks (new module `kokino_image::vdisk`): VHD dynamic and differencing (fixed was already read), VHDX dynamic, fixed and differencing (partially present blocks with sector bitmaps), VMDK monolithicFlat, monolithicSparse, streamOptimized (deflate grains, as in OVA exports), split extents (twoGbMaxExtentSparse/Flat), VMFS flat extents and snapshot chains. Parents are found next to the child from the paths it records and checked (VHD unique id, VHDX parent linkage, VMDK parent CID); a mismatch, or a VHDX log that was never applied, is reported in the evidence summary. Evidence cards show the exact kind, for example "VMDK (streamOptimized)" or "VHDX (differencing) (+1 parent)".
+- Optical media (new crate `kokino-iso`): ISO 9660 with Rock Ridge (names, owners, modes, times, symbolic links, relocated deep folders, continuation areas) and Joliet; multisession discs, where the newest session is the live tree and files only older sessions list are shown as deleted with their session and content; UDF 1.02 to 2.60 with physical and metadata partitions, file and extended file entries, embedded data, and directory entries marked deleted. Bridge discs are read through UDF unless the ISO side has older sessions. Help page "Optical discs and .iso files".
+- Test images `iso-rr-joliet.iso`, `iso-udf.iso`, `iso-multisession.iso` from `scripts/make_iso_fixture.py` (mkisofs).
+- Test images `vd-*.vhd`, `vd-*.vhdx`, `vd-*.vmdk` from `scripts/make_vdisk_fixture.py` (the disk-fat.img disk in every format, plus a known patch in the differencing and snapshot disks); 7-Zip reads the VHD and VMDK ones back to the same bytes.
+
+- Fuzz targets `vdisk` and `optical`: 4.5 million inputs; three UDF problems found (an overflow on tiny images, two out-of-range reads on truncated descriptors) and fixed before release. Totals: 231,857,430 inputs over 20 targets, 25 problems found and fixed (SECURITY.md).
+
+### Fixed
+- Volume list: ext volumes were not marked as supported in the disk layout (only the analysis knew); fixed together with ISO 9660 and UDF detection.
+
 ## [1.2.6] - 2026-11-02
 
 Linux: ext2, ext3 and ext4 file systems and Linux system artifacts, validated on the NIST CFReDS ext images and fuzzed.

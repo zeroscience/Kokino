@@ -26,6 +26,10 @@ pub enum FsKind {
     Apfs,
     HfsPlus,
     BitLocker,
+    /// ISO 9660 (CD, DVD, .iso files), with Rock Ridge and Joliet when present.
+    Iso9660,
+    /// UDF without an ISO 9660 descriptor (most Blu-ray and some DVDs).
+    Udf,
     Unknown,
 }
 
@@ -41,6 +45,8 @@ impl FsKind {
             FsKind::Apfs => "APFS",
             FsKind::HfsPlus => "HFS+",
             FsKind::BitLocker => "BitLocker (encrypted)",
+            FsKind::Iso9660 => "ISO 9660",
+            FsKind::Udf => "UDF",
             FsKind::Unknown => "Unknown",
         }
     }
@@ -93,6 +99,18 @@ pub fn detect_fs<R: Read + Seek>(r: &mut R, start: u64) -> FsKind {
     if n >= 1026 && (&b[1024..1026] == b"H+" || &b[1024..1026] == b"HX") {
         return FsKind::HfsPlus;
     }
+    // Optical: the volume recognition sequence starts at 32 KiB, one 2 KiB
+    // descriptor after another. ISO 9660 has a primary descriptor (CD001);
+    // UDF has BEA01, NSR02 or NSR03, TEA01.
+    let mut vrs = [0u8; 2048 * 8];
+    let got = read_at(r, start + 32768, &mut vrs).unwrap_or(0);
+    let ids: Vec<&[u8]> = vrs[..got].chunks(2048).filter(|d| d.len() >= 6).map(|d| &d[1..6]).collect();
+    if ids.iter().any(|id| *id == b"CD001") {
+        return FsKind::Iso9660;
+    }
+    if ids.iter().any(|id| *id == b"NSR02" || *id == b"NSR03") && ids.iter().any(|id| *id == b"BEA01") {
+        return FsKind::Udf;
+    }
     FsKind::Unknown
 }
 
@@ -105,7 +123,7 @@ fn mk(index: usize, kind: VolumeKind, start: u64, length: u64, description: Stri
         description,
         fs,
         fs_label: fs.label().to_string(),
-        supported: matches!(fs, FsKind::Ntfs | FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat),
+        supported: matches!(fs, FsKind::Ntfs | FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat | FsKind::Ext | FsKind::Iso9660 | FsKind::Udf),
     }
 }
 

@@ -1,8 +1,9 @@
 //! Evidence image formats.
 //!
-//! Supported: raw (dd/img/bin), split raw (.001, .002, ...), VHD fixed,
-//! EWF / E01 (all segments).
-//! Detected but not yet readable: Ex01, VHD dynamic, VHDX, VMDK.
+//! Supported: raw (dd/img/bin), split raw (.001, .002, ...), EWF / E01 (all
+//! segments), VHD (fixed, dynamic, differencing), VHDX, VMDK (flat, sparse,
+//! streamOptimized, split, snapshots; see `vdisk`).
+//! Detected but not yet readable: Ex01.
 
 use anyhow::{bail, Context};
 use serde::Serialize;
@@ -12,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::ewf::{EwfImage, EwfInfo, EwfReader};
+use crate::vdisk::{VDisk, VDiskReader};
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -20,6 +22,8 @@ pub enum ImageFormat {
     SplitRaw,
     VhdFixed,
     Ewf,
+    /// VHD dynamic or differencing, VHDX, VMDK: `Evidence::vdisk_label` says which.
+    Virtual,
 }
 
 impl ImageFormat {
@@ -29,6 +33,7 @@ impl ImageFormat {
             ImageFormat::SplitRaw => "Split raw",
             ImageFormat::VhdFixed => "VHD (fixed)",
             ImageFormat::Ewf => "EWF (E01)",
+            ImageFormat::Virtual => "Virtual disk",
         }
     }
 }
@@ -48,6 +53,7 @@ pub struct Evidence {
     pub size: u64,
     parts: Vec<Part>,
     ewf: Option<Arc<EwfImage>>,
+    vdisk: Option<Arc<VDisk>>,
 }
 
 impl Evidence {
@@ -66,18 +72,16 @@ impl Evidence {
             // Any segment opens the whole set; the evidence is named by its first segment.
             let first = crate::ewf::segment_path(&path, 1).unwrap_or(path);
             let img = Arc::new(EwfImage::open(&first)?);
-            return Ok(Evidence { size: img.size(), path: first, format: ImageFormat::Ewf, parts: vec![], ewf: Some(img) });
+            return Ok(Evidence { size: img.size(), path: first, format: ImageFormat::Ewf, parts: vec![], ewf: Some(img), vdisk: None });
         }
-        if n >= 8 && &head == b"vhdxfile" {
-            bail!("VHDX detected: not supported yet (Milestone 1)");
-        }
-        if n >= 4 && (&head[..4] == b"KDMV" || &head[..4] == b"# Di") {
-            bail!("VMDK detected: not supported yet (Milestone 1)");
+        if let Some(v) = crate::vdisk::open(&path)? {
+            let v = Arc::new(v);
+            return Ok(Evidence { size: v.size, path, format: ImageFormat::Virtual, parts: vec![], ewf: None, vdisk: Some(v) });
         }
 
         if let Some(parts) = split_parts(&path)? {
             let size = parts.iter().map(|p| p.len).sum();
-            return Ok(Evidence { path, format: ImageFormat::SplitRaw, size, parts, ewf: None });
+            return Ok(Evidence { path, format: ImageFormat::SplitRaw, size, parts, ewf: None, vdisk: None });
         }
 
         if len >= 512 {
@@ -85,21 +89,32 @@ impl Evidence {
             f.seek(SeekFrom::Start(len - 512))?;
             f.read_exact(&mut footer)?;
             if &footer[..8] == b"conectix" {
-                let disk_type = u32::from_be_bytes(footer[60..64].try_into().unwrap());
-                if disk_type != 2 {
-                    bail!("VHD dynamic/differencing detected: not supported yet (Milestone 1)");
-                }
+                // Dynamic and differencing VHDs were opened above.
                 let parts = vec![Part { path: path.clone(), start: 0, len: len - 512 }];
-                return Ok(Evidence { path, format: ImageFormat::VhdFixed, size: len - 512, parts, ewf: None });
+                return Ok(Evidence { path, format: ImageFormat::VhdFixed, size: len - 512, parts, ewf: None, vdisk: None });
             }
         }
 
         let parts = vec![Part { path: path.clone(), start: 0, len }];
-        Ok(Evidence { path, format: ImageFormat::Raw, size: len, parts, ewf: None })
+        Ok(Evidence { path, format: ImageFormat::Raw, size: len, parts, ewf: None, vdisk: None })
     }
 
     pub fn reader(&self) -> io::Result<EvidenceReader> {
-        Ok(EvidenceReader { parts: self.parts.clone(), size: self.size, pos: 0, open: None, ewf: self.ewf.as_ref().map(|i| i.reader()) })
+        Ok(EvidenceReader { parts: self.parts.clone(), size: self.size, pos: 0, open: None, ewf: self.ewf.as_ref().map(|i| i.reader()), vd: self.vdisk.as_ref().map(|v| v.reader()) })
+    }
+
+    /// What kind of virtual disk this is ("VMDK (streamOptimized)", "VHDX
+    /// (differencing) (+1 parent)"), and what to know about it.
+    pub fn vdisk_info(&self) -> Option<(&str, &[String])> {
+        self.vdisk.as_ref().map(|v| (v.label.as_str(), v.notes.as_slice()))
+    }
+
+    /// The format as shown to people: the virtual disk kind when there is one.
+    pub fn format_label(&self) -> String {
+        match &self.vdisk {
+            Some(v) => v.label.clone(),
+            None => self.format.label().to_string(),
+        }
     }
 
     /// Acquisition metadata and stored hashes, for EWF images.
@@ -109,6 +124,11 @@ impl Evidence {
 
     /// Every file that makes up the image (all segments or parts).
     pub fn files(&self) -> Vec<PathBuf> {
+        if let Some(v) = &self.vdisk {
+            let mut f = v.files.clone();
+            f.dedup();
+            return f;
+        }
         match &self.ewf {
             Some(i) => i.info.segments.iter().map(PathBuf::from).collect(),
             None => self.parts.iter().map(|p| p.path.clone()).collect(),
@@ -140,6 +160,7 @@ pub struct EvidenceReader {
     pos: u64,
     open: Option<(usize, File)>,
     ewf: Option<EwfReader>,
+    vd: Option<VDiskReader>,
 }
 
 impl EvidenceReader {
@@ -153,6 +174,12 @@ impl Read for EvidenceReader {
         if let Some(e) = self.ewf.as_mut() {
             e.seek(SeekFrom::Start(self.pos))?;
             let n = e.read(buf)?;
+            self.pos += n as u64;
+            return Ok(n);
+        }
+        if let Some(v) = self.vd.as_mut() {
+            v.seek(SeekFrom::Start(self.pos))?;
+            let n = v.read(buf)?;
             self.pos += n as u64;
             return Ok(n);
         }

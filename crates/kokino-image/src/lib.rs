@@ -7,6 +7,7 @@
 
 pub mod ewf;
 pub mod source;
+pub mod vdisk;
 pub mod volume;
 
 pub use ewf::EwfInfo;

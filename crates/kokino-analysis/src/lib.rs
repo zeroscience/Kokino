@@ -99,6 +99,11 @@ pub fn analyze(ev: &Evidence, progress: Progress) -> anyhow::Result<Analysis> {
     let volumes = detect_volumes(&mut r, ev.size);
     let mut filesystems = vec![];
     let mut errors = vec![];
+    // Remarks about the virtual disk itself (unreplayed VHDX log, a parent
+    // that changed after a snapshot) come first.
+    if let Some((_, notes)) = ev.vdisk_info() {
+        errors.extend(notes.iter().cloned());
+    }
 
     for v in volumes.iter().filter(|v| fs::supported(v.fs)) {
         match analyze_fs(ev, v, progress) {
@@ -132,7 +137,7 @@ pub fn analyze(ev: &Evidence, progress: Progress) -> anyhow::Result<Analysis> {
         schema: SCHEMA_VERSION,
         tool_version: kokino_core::TOOL_VERSION.to_string(),
         analyzed_at: kokino_core::time::now_iso(),
-        image_format: ev.format.label().to_string(),
+        image_format: ev.format_label(),
         image_size: ev.size,
         volumes,
         filesystems,

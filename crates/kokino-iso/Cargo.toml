@@ -1,0 +1,13 @@
+[package]
+name = "kokino-iso"
+description = "ISO 9660 (Rock Ridge, Joliet, multisession) and UDF reader for optical media and .iso images"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+kokino-core.workspace = true
+kokino-ntfs.workspace = true
+anyhow.workspace = true
+chrono.workspace = true

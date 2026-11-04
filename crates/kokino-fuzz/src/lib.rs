@@ -20,6 +20,8 @@ pub const TARGETS: &[Target] = &[
     Target { name: "fat", run: fat, seeds: &["tests/fixtures/fat12.img", "tests/fixtures/fat16.img", "tests/fixtures/fat32.img", "tests/fixtures/exfat.img"] },
     Target { name: "ext", run: ext, seeds: &["tests/fixtures/ext2.img", "tests/fixtures/ext3.img", "tests/fixtures/ext4.img"] },
     Target { name: "linuxlogs", run: linuxlogs, seeds: &["crates/kokino-fuzz/seeds/linux"] },
+    Target { name: "vdisk", run: vdisk, seeds: &["tests/fixtures/vd-dynamic.vhd", "tests/fixtures/vd-dynamic.vhdx", "tests/fixtures/vd-sparse.vmdk", "tests/fixtures/vd-stream.vmdk"] },
+    Target { name: "optical", run: optical, seeds: &["tests/fixtures/iso-rr-joliet.iso", "tests/fixtures/iso-udf.iso", "tests/fixtures/iso-multisession.iso"] },
     Target { name: "ewf", run: ewf, seeds: &["tests/fixtures/disk-af-odd.E01", "tests/fixtures/disk-af.E01"] },
     Target { name: "registry", run: registry, seeds: &["tests/fixtures/win/Users_alice_NTUSER.DAT", "tests/fixtures/win/Windows_System32_config_SAM", "tests/fixtures/win/Windows_System32_config_SOFTWARE", "tests/fixtures/win/Windows_System32_config_SYSTEM", "tests/fixtures/win/Windows_AppCompat_Programs_Amcache.hve"] },
     Target { name: "evtx", run: evtx, seeds: &["tests/fixtures/win/Windows_System32_winevt_Logs_Security.evtx", "tests/fixtures/win/Windows_System32_winevt_Logs_System.evtx", "tests/fixtures/win/Windows_System32_winevt_Logs_Microsoft-Windows-PowerShell_4Operational.evtx"] },
@@ -145,6 +147,51 @@ fn ewf(d: &[u8]) {
             match r.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => total += n,
+            }
+        }
+    }
+}
+
+fn vdisk(d: &[u8]) {
+    use std::io::{Read, Seek, SeekFrom};
+    let dir = std::env::temp_dir().join(format!("kokino-fuzz-vdisk-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let p = dir.join("disk.bin");
+    if std::fs::write(&p, d).is_err() {
+        return;
+    }
+    if let Ok(Some(v)) = kokino_image::vdisk::open(&p) {
+        let v = std::sync::Arc::new(v);
+        let mut r = v.reader();
+        let mut buf = vec![0u8; READ_CAP];
+        let mut total = 0;
+        while total < (8 << 20) {
+            match r.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => total += n,
+            }
+        }
+        // A few reads far into the disk (sparse disks claim large sizes).
+        for f in [3u64, 7, 11] {
+            let _ = r.seek(SeekFrom::Start(v.size / f));
+            let _ = r.read(&mut buf[..4096]);
+        }
+    }
+}
+
+fn optical(d: &[u8]) {
+    let mut c = Cursor::new(d);
+    if let Ok(v) = kokino_iso::open(&mut c, d.len() as u64) {
+        if let Ok(s) = kokino_iso::scan(&v, &mut c, |_, _| true) {
+            for e in s.entries.iter().take(64) {
+                let _ = v.read(&mut c, e, 0, READ_CAP);
+            }
+        }
+    }
+    if let Ok(v) = kokino_iso::udf::open(&mut c, d.len() as u64) {
+        if let Ok(s) = kokino_iso::udf::scan(&v, &mut c, |_, _| true) {
+            for e in s.entries.iter().take(64) {
+                let _ = v.read(&mut c, e, 0, READ_CAP);
             }
         }
     }

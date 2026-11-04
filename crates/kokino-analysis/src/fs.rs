@@ -1,5 +1,5 @@
 //! One interface over the file systems Kokino parses: NTFS, FAT12/16/32,
-//! exFAT and ext2/3/4. Callers hold a volume reader (see `volume_reader`) and an `Fs`
+//! exFAT, ext2/3/4, ISO 9660 and UDF. Callers hold a volume reader (see `volume_reader`) and an `Fs`
 //! opened on it, and read files by their `FsEntry`.
 
 use kokino_image::{FsKind, Volume};
@@ -10,6 +10,8 @@ pub enum Fs {
     Ntfs(kokino_ntfs::Ntfs),
     Fat(kokino_fat::FatVolume),
     Ext(kokino_ext::ExtVolume),
+    Iso(kokino_iso::IsoVolume),
+    Udf(kokino_iso::udf::UdfVolume),
 }
 
 /// What a file-system walk produced.
@@ -23,7 +25,7 @@ pub struct FsScan {
 
 /// File systems with a parser.
 pub fn supported(k: FsKind) -> bool {
-    matches!(k, FsKind::Ntfs | FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat | FsKind::Ext)
+    matches!(k, FsKind::Ntfs | FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat | FsKind::Ext | FsKind::Iso9660 | FsKind::Udf)
 }
 
 impl Fs {
@@ -32,6 +34,20 @@ impl Fs {
             FsKind::Ntfs => Ok(Fs::Ntfs(kokino_ntfs::open_ntfs(r)?)),
             FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat => Ok(Fs::Fat(kokino_fat::open(r, v.length)?)),
             FsKind::Ext => Ok(Fs::Ext(kokino_ext::open(r, v.length)?)),
+            FsKind::Iso9660 => {
+                // A bridge disc also carries UDF, which keeps full names,
+                // owners, permissions, creation times and deleted entries.
+                // ISO 9660 wins only when it holds history UDF lacks: older
+                // sessions.
+                let iso = kokino_iso::open(r, v.length)?;
+                if iso.sessions.len() == 1 {
+                    if let Ok(u) = kokino_iso::udf::open(r, v.length) {
+                        return Ok(Fs::Udf(u));
+                    }
+                }
+                Ok(Fs::Iso(iso))
+            }
+            FsKind::Udf => Ok(Fs::Udf(kokino_iso::udf::open(r, v.length)?)),
             _ => anyhow::bail!("no parser for {}", v.fs_label),
         }
     }
@@ -49,6 +65,10 @@ impl Fs {
         matches!(self, Fs::Ext(_))
     }
 
+    pub fn is_optical(&self) -> bool {
+        matches!(self, Fs::Iso(_) | Fs::Udf(_))
+    }
+
     /// Walks every entry; `progress(done, total)` may return false to cancel.
     pub fn scan<R: Read + Seek>(&self, r: &mut R, progress: impl FnMut(u64, u64) -> bool) -> anyhow::Result<FsScan> {
         match self {
@@ -64,6 +84,14 @@ impl Fs {
                 let s = kokino_ext::scan(v, r, progress)?;
                 Ok(FsScan { info: s.info, entries: s.entries, unreadable: vec![], notes: s.notes })
             }
+            Fs::Iso(v) => {
+                let s = kokino_iso::scan(v, r, progress)?;
+                Ok(FsScan { info: s.info, entries: s.entries, unreadable: vec![], notes: s.notes })
+            }
+            Fs::Udf(v) => {
+                let s = kokino_iso::udf::scan(v, r, progress)?;
+                Ok(FsScan { info: s.info, entries: s.entries, unreadable: vec![], notes: s.notes })
+            }
         }
     }
 
@@ -76,6 +104,10 @@ impl Fs {
             Fs::Fat(v) => v.read(r, e, offset, len),
             Fs::Ext(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
             Fs::Ext(v) => v.read(r, e, offset, len),
+            Fs::Iso(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
+            Fs::Iso(v) => v.read(r, e, offset, len),
+            Fs::Udf(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
+            Fs::Udf(v) => v.read(r, e, offset, len),
         }
     }
 
@@ -87,6 +119,10 @@ impl Fs {
             Fs::Fat(v) => Ok(v.extents(e)),
             Fs::Ext(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
             Fs::Ext(v) => v.extents(r, e),
+            Fs::Iso(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
+            Fs::Iso(v) => Ok(v.extents(r, e)),
+            Fs::Udf(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
+            Fs::Udf(v) => Ok(v.extents(r, e)),
         }
     }
 
@@ -96,6 +132,8 @@ impl Fs {
             Fs::Ntfs(n) => kokino_ntfs::free_runs(n, r),
             Fs::Fat(v) => Ok(v.free_runs()),
             Fs::Ext(v) => Ok(v.free_runs(r)),
+            // A pressed or recorded disc has no free space to carve.
+            Fs::Iso(_) | Fs::Udf(_) => Ok(vec![]),
         }
     }
 }
