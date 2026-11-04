@@ -89,7 +89,8 @@ hdiutil create -size 32m -fs APFS -volname KOKINO_APFS -layout GPTSPUD -ov "$WOR
 ATTACH="$(hdiutil attach "$WORK/apfs.dmg" -nobrowse -owners on)"
 echo "$ATTACH"
 MNT="$(echo "$ATTACH" | awk -F'\t' '/KOKINO_APFS/ {print $NF}' | sed 's/^ *//' | tail -1)"
-CONTAINER="$(echo "$ATTACH" | awk '/Apple_APFS/ {print $1}' | head -1)"
+# The synthesized container disk (content type EF57347C-...), not the partition.
+CONTAINER="$(echo "$ATTACH" | awk '/EF57347C/ {print $1}' | head -1)"
 populate "$MNT"
 manifest "$MNT" "apfs.img KOKINO_APFS"
 diskutil apfs addVolume "$CONTAINER" APFS KOKINO_DATA -nomount
