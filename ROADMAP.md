@@ -33,18 +33,22 @@ checked against public test images with known answers where they exist
 ## Next
 
 ### Virtual and optical disks
-- [x] VHDX and VMDK (virtual machines and cloud disks), plus dynamic and differencing VHD and snapshot chains (unreleased)
+- [x] VHDX and VMDK (virtual machines and cloud disks), plus dynamic and differencing VHD and snapshot chains (1.2.7)
 - [ ] VHDX log replay (disks not shut down cleanly are read without their log)
 - [ ] ESXi snapshot formats (VMFSSPARSE, SESPARSE)
 - [ ] Ex01 (EWF version 2)
-- [x] ISO 9660 (Rock Ridge, Joliet, multisession history) and UDF (unreleased)
+- [x] ISO 9660 (Rock Ridge, Joliet, multisession history) and UDF (1.2.7)
 - [ ] UDF virtual (VAT) and sparable partitions; UDF 2.50 metadata partition checked on a real disc
 - [ ] ISO and virtual disk files found inside evidence, opened as evidence of their own
 
 ## Later
 
 ### More file systems and volumes
-- [ ] HFS+ and APFS (macOS)
+- [x] HFS+ and APFS (macOS), with deleted files from old catalog and file-system tree nodes (1.2.7)
+- [ ] APFS snapshots, encrypted volumes (FileVault) and free space (space manager)
+- [ ] HFS+ and APFS checked on disks from real Macs (so far: images made with Apple's own tools)
+- [ ] LZFSE decompression (decmpfs types 11 and 12)
+- [ ] macOS artifacts: property lists, unified logs, KnowledgeC, quarantine events, FSEvents
 - [ ] XFS
 - [ ] BitLocker with a recovery key
 - [ ] Volume Shadow Copies

@@ -123,7 +123,7 @@ fn mk(index: usize, kind: VolumeKind, start: u64, length: u64, description: Stri
         description,
         fs,
         fs_label: fs.label().to_string(),
-        supported: matches!(fs, FsKind::Ntfs | FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat | FsKind::Ext | FsKind::Iso9660 | FsKind::Udf),
+        supported: matches!(fs, FsKind::Ntfs | FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat | FsKind::Ext | FsKind::Iso9660 | FsKind::Udf | FsKind::HfsPlus | FsKind::Apfs),
     }
 }
 

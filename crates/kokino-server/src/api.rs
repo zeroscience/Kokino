@@ -89,7 +89,24 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/system/hashsets/{id}", axum::routing::patch(hashset_update).delete(hashset_delete))
         .route("/cases/{cid}/evidence/{eid}/hashes", get(hashes_list).post(hashes_start))
         .route("/jobs", get(list_jobs))
+        .route("/update-check", get(update_check))
         .route("/jobs/{id}/cancel", post(cancel_job))
+}
+
+/// Asks GitHub for the latest release, only because someone clicked.
+/// Recorded in the system audit log either way.
+async fn update_check(State(st): St, Extension(me): Me) -> R {
+    let res = tokio::task::spawn_blocking(crate::update::check).await.map_err(|e| anyhow::anyhow!("{}", e))?;
+    match res {
+        Ok(u) => {
+            crate::auth::sys_audit(&st, &me.username, "update.check", json!({"source": crate::update::RELEASES_API, "latest": u.latest, "newer": u.newer}));
+            Ok(Json(json!(u)))
+        }
+        Err(e) => {
+            crate::auth::sys_audit(&st, &me.username, "update.check", json!({"source": crate::update::RELEASES_API, "error": format!("{:#}", e)}));
+            Err(anyhow::anyhow!("could not reach GitHub: {:#}", e).into())
+        }
+    }
 }
 
 /// Public: enough for the login screen, nothing about cases or the host.

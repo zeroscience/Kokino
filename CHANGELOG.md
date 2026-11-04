@@ -5,13 +5,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.7] - 2026-11-04
+
+Virtual disks, optical media and Mac disks: VHD, VHDX and VMDK (with snapshots), ISO 9660 and UDF (with multisession history), HFS+ and APFS (with deleted files), and an update check that runs only when asked.
+
 ### Added
+- Update check, only on request: "Check for updates" on the About page and `kokino version --check` ask GitHub's release list for the latest version and show its notes and SHA-256 checksums, with a link to download. Nothing is downloaded or installed, nothing runs on its own, and every check is recorded in the system audit log (`update.check`). The Privacy page says exactly this.
 - Virtual disks (new module `kokino_image::vdisk`): VHD dynamic and differencing (fixed was already read), VHDX dynamic, fixed and differencing (partially present blocks with sector bitmaps), VMDK monolithicFlat, monolithicSparse, streamOptimized (deflate grains, as in OVA exports), split extents (twoGbMaxExtentSparse/Flat), VMFS flat extents and snapshot chains. Parents are found next to the child from the paths it records and checked (VHD unique id, VHDX parent linkage, VMDK parent CID); a mismatch, or a VHDX log that was never applied, is reported in the evidence summary. Evidence cards show the exact kind, for example "VMDK (streamOptimized)" or "VHDX (differencing) (+1 parent)".
 - Optical media (new crate `kokino-iso`): ISO 9660 with Rock Ridge (names, owners, modes, times, symbolic links, relocated deep folders, continuation areas) and Joliet; multisession discs, where the newest session is the live tree and files only older sessions list are shown as deleted with their session and content; UDF 1.02 to 2.60 with physical and metadata partitions, file and extended file entries, embedded data, and directory entries marked deleted. Bridge discs are read through UDF unless the ISO side has older sessions. Help page "Optical discs and .iso files".
+- macOS file systems (new crate `kokino-mac`): HFS+ and HFSX (catalog, extents overflow and attributes B-trees, hard links, resource forks, allocation bitmap) and APFS (checkpoints, object maps, every unencrypted volume of a container, file-system tree, hard links, symlinks, extended attributes). macOS file compression (decmpfs) decoded: zlib and LZVN, inline or in the resource fork. Deleted files from old HFS+ catalog-node copies in the journal and unused nodes, and from older APFS file-system tree nodes, with their content. Encrypted APFS volumes are reported. Help page "Mac disks (HFS+, APFS)".
+- Test images `hfsplus.img` and `apfs.img` made with Apple's own tools on GitHub's macOS runner (`scripts/make_mac_fixture.sh`, workflow "Mac test images"), with macOS's own report of every file as ground truth.
 - Test images `iso-rr-joliet.iso`, `iso-udf.iso`, `iso-multisession.iso` from `scripts/make_iso_fixture.py` (mkisofs).
 - Test images `vd-*.vhd`, `vd-*.vhdx`, `vd-*.vmdk` from `scripts/make_vdisk_fixture.py` (the disk-fat.img disk in every format, plus a known patch in the differencing and snapshot disks); 7-Zip reads the VHD and VMDK ones back to the same bytes.
 
-- Fuzz targets `vdisk` and `optical`: 4.5 million inputs; three UDF problems found (an overflow on tiny images, two out-of-range reads on truncated descriptors) and fixed before release. Totals: 231,857,430 inputs over 20 targets, 25 problems found and fixed (SECURITY.md).
+- Fuzz targets `vdisk`, `optical` and `mac`: 4.75 million inputs; six problems found and fixed before release (UDF: an overflow on tiny images and two out-of-range reads; HFS+: an overflow and an out-of-range read; APFS: an overflow). Totals: 232,089,581 inputs over 21 targets, 28 problems found and fixed (SECURITY.md).
 
 ### Fixed
 - Volume list: ext volumes were not marked as supported in the disk layout (only the analysis knew); fixed together with ISO 9660 and UDF detection.

@@ -1,0 +1,13 @@
+[package]
+name = "kokino-mac"
+description = "HFS+ and APFS readers with decmpfs (zlib, LZVN) and deleted-record recovery"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+kokino-core.workspace = true
+kokino-ntfs.workspace = true
+anyhow.workspace = true
+flate2.workspace = true

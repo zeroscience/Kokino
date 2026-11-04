@@ -91,14 +91,15 @@ shipped (in 1.2.6):
 | `ext` | ext2, ext3 and ext4: superblock, group descriptors, inodes, extent trees, indirect blocks, directories and their slack, orphan scan, journal copies, block bitmap | 311,223 | 710,567 (25 min) + 310,635 (10 min, after the validation fixes) | 1,332,425 | 1 (memory) |
 | `linuxlogs` | systemd journal files, wtmp/btmp, syslog lines and their dates, TZif time zones and POSIX rules, apt history, DHCP leases, dpkg status, shell command rules | 9,505,147 | 19,436,254 (15 min) | 28,941,401 | 3 (overflow) |
 
-Virtual disks and optical media (after 1.2.6):
+Virtual disks, optical media and Mac disks (1.2.7):
 
 | Target | What it covers | Rounds | Inputs in all | Distinct problems found |
 |---|---|---|--:|---|
 | `vdisk` | VHD dynamic and differencing, VHDX (headers, region table, metadata, block table, sector bitmaps), VMDK (descriptor, sparse grain directory and tables, streamOptimized grains and footer); reads across the whole disk | 10 + 20 + 15 min | 203,015 | none (one 20 s stall in round 2 did not reproduce: the input replays in 9 ms; most likely the antivirus scanning the temporary file this target writes) |
 | `optical` | ISO 9660 descriptors, sessions, directory records, Rock Ridge and Joliet; UDF anchor, volume descriptors, partition maps, file set, file entries, allocation descriptors and directory entries | 15 + 15 min | 4,318,442 | 3 (overflow, out-of-range reads) |
+| `mac` | HFS+ volume header, catalog, extents and attributes B-trees, journal scan; APFS checkpoints, object maps, file-system trees, old-node scan; decmpfs with zlib and LZVN | 3 x 15 min | 232,151 | 3 (overflows, out-of-range read) |
 
-In all: 231,857,430 inputs over 20 targets, and 25 distinct problems
+In all: 232,089,581 inputs over 21 targets, and 28 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed
@@ -131,6 +132,9 @@ found by fuzzing, all fixed.
 | 24 | UDF | Integer overflow | Fuzzing | The backup anchor position (image size minus 256 sectors) on images smaller than that | Saturating arithmetic |
 | 25 | UDF | Crash (read past the end) | Fuzzing | A file entry cut short at the end of the image was read at its full size | Short entries read as zeros past the end |
 | 26 | UDF | Crash (read past the end) | Fuzzing | A short last block of the volume descriptor sequence was read as a full descriptor | The sequence ends at a short block |
+| 27 | HFS+ | Integer overflow | Fuzzing | A B-tree node claiming more records than its offset table can hold | The record loop stops before the table runs out |
+| 28 | HFS+ | Crash (read past the end) | Fuzzing | A volume header cut short at the end of the image | Short headers refused |
+| 29 | APFS | Integer overflow | Fuzzing | A checkpoint address from the superblock multiplied by the block size | Saturating arithmetic for every block address |
 
 Before the fixes, every one of these could stop or slow an ingest, a carving
 job or a picture scan, or exhaust the examiner's memory, on purpose-made

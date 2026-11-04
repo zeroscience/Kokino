@@ -44,3 +44,6 @@ linuxlogs 1 3419575 overflow
 optical 1 3 overflow
 optical 1 192 panic
 optical 1 1698992 panic
+mac 1 64424 overflow
+mac 1 73700 panic
+mac 2 35549 overflow

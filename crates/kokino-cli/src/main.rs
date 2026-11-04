@@ -101,6 +101,11 @@ enum Cmd {
     },
     /// Verify the hash chain of a case's audit log
     VerifyAudit { case_dir: PathBuf },
+    /// Print the version; with --check, ask GitHub whether a newer release exists (the only command that uses the network, and only when asked)
+    Version {
+        #[arg(long)]
+        check: bool,
+    },
     /// Write the case report (bookmarks as exhibits, evidence, chain of
     /// custody, methods, limitations) as HTML and Word into the case's
     /// exports folder, and record both files' SHA-256 in its audit log
@@ -655,6 +660,21 @@ async fn main() -> anyhow::Result<()> {
             for f in &g.files {
                 println!("  {}", case_dir.join("exports").join(&f.name).display());
                 println!("    SHA-256 {}", f.sha256);
+            }
+        }
+        Cmd::Version { check } => {
+            println!("{} {}", kokino_core::TOOL_NAME, kokino_core::TOOL_VERSION);
+            if check {
+                println!("asking {} ...", kokino_server::update::RELEASES_API);
+                let u = kokino_server::update::check()?;
+                if u.newer {
+                    println!("newer release: {} (published {})\n{}", u.latest, u.published, u.url);
+                    if let Some(c) = &u.checksums {
+                        println!("\nSHA256SUMS.txt of that release:\n{}", c.trim_end());
+                    }
+                } else {
+                    println!("this is the latest release ({})", u.latest);
+                }
             }
         }
         Cmd::VerifyAudit { case_dir } => {

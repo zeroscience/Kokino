@@ -1,5 +1,5 @@
 //! One interface over the file systems Kokino parses: NTFS, FAT12/16/32,
-//! exFAT, ext2/3/4, ISO 9660 and UDF. Callers hold a volume reader (see `volume_reader`) and an `Fs`
+//! exFAT, ext2/3/4, ISO 9660, UDF, HFS+ and APFS. Callers hold a volume reader (see `volume_reader`) and an `Fs`
 //! opened on it, and read files by their `FsEntry`.
 
 use kokino_image::{FsKind, Volume};
@@ -12,6 +12,8 @@ pub enum Fs {
     Ext(kokino_ext::ExtVolume),
     Iso(kokino_iso::IsoVolume),
     Udf(kokino_iso::udf::UdfVolume),
+    Hfs(kokino_mac::hfs::HfsVolume),
+    Apfs(kokino_mac::apfs::ApfsContainer),
 }
 
 /// What a file-system walk produced.
@@ -25,7 +27,7 @@ pub struct FsScan {
 
 /// File systems with a parser.
 pub fn supported(k: FsKind) -> bool {
-    matches!(k, FsKind::Ntfs | FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat | FsKind::Ext | FsKind::Iso9660 | FsKind::Udf)
+    matches!(k, FsKind::Ntfs | FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat | FsKind::Ext | FsKind::Iso9660 | FsKind::Udf | FsKind::HfsPlus | FsKind::Apfs)
 }
 
 impl Fs {
@@ -48,6 +50,8 @@ impl Fs {
                 Ok(Fs::Iso(iso))
             }
             FsKind::Udf => Ok(Fs::Udf(kokino_iso::udf::open(r, v.length)?)),
+            FsKind::HfsPlus => Ok(Fs::Hfs(kokino_mac::hfs::open(r, v.length)?)),
+            FsKind::Apfs => Ok(Fs::Apfs(kokino_mac::apfs::open(r, v.length)?)),
             _ => anyhow::bail!("no parser for {}", v.fs_label),
         }
     }
@@ -92,6 +96,14 @@ impl Fs {
                 let s = kokino_iso::udf::scan(v, r, progress)?;
                 Ok(FsScan { info: s.info, entries: s.entries, unreadable: vec![], notes: s.notes })
             }
+            Fs::Hfs(v) => {
+                let s = kokino_mac::hfs::scan(v, r, progress)?;
+                Ok(FsScan { info: s.info, entries: s.entries, unreadable: vec![], notes: s.notes })
+            }
+            Fs::Apfs(v) => {
+                let s = kokino_mac::apfs::scan(v, r, progress)?;
+                Ok(FsScan { info: s.info, entries: s.entries, unreadable: vec![], notes: s.notes })
+            }
         }
     }
 
@@ -108,6 +120,11 @@ impl Fs {
             Fs::Iso(v) => v.read(r, e, offset, len),
             Fs::Udf(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
             Fs::Udf(v) => v.read(r, e, offset, len),
+            Fs::Hfs(v) if stream == "rsrc" => v.read_rsrc(r, e, offset, len),
+            Fs::Hfs(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
+            Fs::Hfs(v) => v.read(r, e, offset, len),
+            Fs::Apfs(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
+            Fs::Apfs(v) => v.read(r, e, offset, len),
         }
     }
 
@@ -123,6 +140,9 @@ impl Fs {
             Fs::Iso(v) => Ok(v.extents(r, e)),
             Fs::Udf(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
             Fs::Udf(v) => Ok(v.extents(r, e)),
+            Fs::Hfs(_) | Fs::Apfs(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
+            Fs::Hfs(v) => Ok(v.extents(r, e)),
+            Fs::Apfs(v) => Ok(v.extents(r, e)),
         }
     }
 
@@ -134,6 +154,9 @@ impl Fs {
             Fs::Ext(v) => Ok(v.free_runs(r)),
             // A pressed or recorded disc has no free space to carve.
             Fs::Iso(_) | Fs::Udf(_) => Ok(vec![]),
+            Fs::Hfs(v) => Ok(v.free_runs(r)),
+            // APFS free space (space manager) is not read yet.
+            Fs::Apfs(_) => Ok(vec![]),
         }
     }
 }

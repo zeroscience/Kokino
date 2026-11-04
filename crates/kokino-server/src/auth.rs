@@ -237,7 +237,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/system/audit", get(system_audit))
 }
 
-fn sys_audit(st: &AppState, actor: &str, action: &str, detail: Value) {
+pub(crate) fn sys_audit(st: &AppState, actor: &str, action: &str, detail: Value) {
     if let Err(e) = st.users.audit.append(actor, action, detail) {
         tracing::error!("system audit write failed: {e:#}");
     }

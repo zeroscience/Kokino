@@ -1,7 +1,7 @@
 // About page and the Wiki (user manual). Content lives here as data so the
 // app shell only routes to it.
 
-import { h, icon, debounce } from "./lib.js";
+import { h, icon, debounce, api } from "./lib.js";
 
 export const CONTACT = {
   web: "https://www.zeroscience.mk",
@@ -18,6 +18,36 @@ const ul = (...items) => h("ul", items.map((i) => h("li", i)));
 const kv = (rows) => h("div.kv", rows.map(([k, v]) => [h("span", k), h("span", v)]));
 
 // ------------------------------------------------------------------ about
+
+// Asks GitHub for the latest release, only when clicked; nothing is
+// downloaded or installed. The server records the check in its audit log.
+function updateCard(info) {
+  const out = h("div.stack");
+  const btn = h("button", "Check for updates");
+  btn.onclick = async () => {
+    btn.disabled = true;
+    out.replaceChildren(h("p.muted", "Asking GitHub..."));
+    try {
+      const u = await api("/update-check");
+      out.replaceChildren(
+        u.newer
+          ? h("div.stack",
+            h("p", h("b", `Kokino ${u.latest} is available`), ` (you have ${u.current}; published ${u.published.slice(0, 10)}).`),
+            h("p", link(u.url, "Release notes and downloads")),
+            u.checksums ? h("details", h("summary", "SHA-256 checksums of the release"), h("pre.cmd", u.checksums)) : null,
+            h("p.muted", "Download it from GitHub and check it against the checksums. The Windows installer upgrades in place and keeps cases and accounts."))
+          : h("p", `This is the latest release (${u.current}).`));
+    } catch (e) {
+      out.replaceChildren(h("p", { style: { color: "var(--warn)" } }, e.message));
+    }
+    btn.disabled = false;
+  };
+  return h("div.card.stack",
+    h("h3", "Updates"),
+    p(`Version ${info.version}. Kokino never contacts anything on its own; this button makes one request to GitHub's release list and shows what it finds. The check is recorded in the system audit log. On the command line: `, code("kokino version --check"), "."),
+    h("div.row", btn),
+    out);
+}
 const COMPONENTS = [
   ["ntfs", "NTFS structures", "MIT OR Apache-2.0", "Colin Finck"],
   ["SQLite (via rusqlite)", "Browser history databases", "Public domain / MIT", "SQLite developers"],
@@ -66,6 +96,7 @@ export function aboutPage(info) {
         ),
       ),
     ),
+    updateCard(info),
     h("div.grid.g2",
       h("div.card.stack",
         h("h3", "Contact"),
@@ -151,7 +182,7 @@ const WIKI = [
         ["Raw / dd", ".dd, .raw, .img, .bin, or split .001, .002, ..."],
         ["Virtual disks", "VHD (fixed, dynamic and differencing), VHDX (dynamic, fixed and differencing) and VMDK (flat, sparse, streamOptimized as exported in OVA files, split into 2 GB extents, and snapshots). Pick the disk itself (for VMDK the small descriptor .vmdk, not a -flat or -s001 extent); parents of differencing disks and snapshots are found next to it by the names the disk records, and a parent that changed after the child was made is reported. A VHDX whose log was never applied (not shut down cleanly) is read without the log, and the summary says so. Ex01 is recognized but not read yet."],
         ["Partitions", "MBR (with extended partitions) and GPT, or a single volume with no partition table."],
-        ["File systems", "NTFS, FAT12, FAT16, FAT32, exFAT, ext2, ext3, ext4, ISO 9660 and UDF are parsed, live and deleted files alike. APFS, HFS+ and BitLocker volumes are detected and reported; their space is still searched and carved."],
+        ["File systems", "NTFS, FAT12, FAT16, FAT32, exFAT, ext2, ext3, ext4, ISO 9660, UDF, HFS+ and APFS are parsed, live and deleted files alike. BitLocker volumes are detected and reported; their space is still searched and carved."],
       ]),
       p("If you have the acquisition hash, paste it: Kokino reports whether the image still matches. For E01 it also checks the hash the imaging tool stored inside the file. Both results go into the audit log, and a mismatch is shown in red on the evidence card."),
       p("Hashing and analysis run in the background; progress shows at the top right. ", h("b", "Re-analyze"), " reruns the analysis after a Kokino upgrade; ", h("b", "Re-hash + analyze"), " also recomputes the hashes."),
@@ -204,6 +235,20 @@ const WIKI = [
         h("span", h("b", "Syslog times:"), " classic syslog lines (\"Oct 20 10:10:01\") have no year and no time zone. Kokino converts them with the image's own /etc/localtime and counts the year back from the log file's modification time; such events are marked with *. Newer RFC 3339 lines and the journal carry exact UTC times."),
         h("span", h("b", "Shell histories:"), " bash writes its history when the shell exits and records times only when HISTTIMEFORMAT was set; zsh and fish always do. Commands that destroy evidence (shred, history -c, removing logs, touch -d, journal vacuum) are flagged."),
         h("span", h("b", "Journal:"), " fields the journal stored compressed (long messages) are counted, not read, in this version."),
+      ),
+    ],
+  },
+  {
+    id: "mac", title: "Mac disks (HFS+, APFS)", icon: "disk",
+    body: [
+      p("HFS+ (Mac OS Extended, also HFSX) and APFS volumes are parsed like the others; an APFS container with several volumes shows each as a top-level folder. The file details show the catalog or inode number, the owner and mode, and the link target."),
+      ul(
+        h("span", h("b", "Compression:"), " macOS stores many files compressed inside an extended attribute or the resource fork (decmpfs). Kokino decodes zlib and LZVN, so such files show their real size and content; other tools often show them as empty. LZFSE is reported, not decoded yet."),
+        h("span", h("b", "Hard links:"), " on HFS+ a hard link is a small record pointing to an iNode file in a hidden folder; Kokino shows the link with the iNode file's content and times."),
+        h("span", h("b", "Extended attributes:"), " including com.apple.quarantine, which macOS sets on files that came from the internet (the app that downloaded them and when)."),
+        h("span", h("b", "Deleted files on HFS+:"), " removing a file compacts its catalog node, so the record survives only in older copies of that node: in the journal, or in catalog nodes no longer in use. Kokino reads them and lists the files the live catalog no longer has, with their content when the blocks are still free (it says when they are not)."),
+        h("span", h("b", "Deleted files on APFS:"), " APFS never changes metadata in place; older copies of the file-system tree stay in free blocks until they are reused. Kokino reads every intact one and lists the names and inodes the current tree no longer has, with the content their old extents point to."),
+        h("span", h("b", "Not read yet:"), " encrypted (FileVault) APFS volumes (reported), APFS snapshots, APFS free space for carving, and macOS system artifacts (property lists, unified logs)."),
       ),
     ],
   },
@@ -468,7 +513,7 @@ const WIKI = [
     body: [
       p("Evidence can be made to attack the tool that reads it: a disk image, registry hive or picture crafted to crash Kokino, hang an ingest, or use up the examiner's memory. Kokino is written in Rust with ", code("unsafe"), " code forbidden in every crate, and every parser that reads evidence has been fuzzed."),
       h("h3", "Fuzzing"),
-      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks and optical media ran ", h("b", "231,857,430 inputs"), " and found ", h("b", "25 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
+      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks, optical media and Mac disks ran ", h("b", "232,089,581 inputs"), " and found ", h("b", "28 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
       h("div.scroll", h("table.tbl",
         h("thead", h("tr", h("th", "Target"), h("th", "Covers"), h("th", "Inputs"), h("th", "Found"))),
         h("tbody", [
@@ -479,6 +524,7 @@ const WIKI = [
         ["linuxlogs", "systemd journal, wtmp/btmp, syslog dates, TZif time zones, apt history, DHCP leases, dpkg status", "28,941,401", "3 (overflow)"],
         ["vdisk", "Virtual disks: VHD, VHDX and VMDK headers, block tables, grain tables, compressed grains", "203,015", "none"],
         ["optical", "ISO 9660 (Rock Ridge, Joliet, sessions) and UDF (descriptors, partitions, file entries, directories)", "4,318,442", "3 (overflow, out-of-range reads)"],
+        ["mac", "HFS+ (catalog, extents, attributes, journal) and APFS (checkpoints, object maps, file-system trees), decmpfs with zlib and LZVN", "232,151", "3 (overflows, out-of-range read)"],
         ["ewf", "E01 (EWF) images: sections, chunk tables, zlib chunks, stored hashes", "42,686", "1 (overflow)"],
         ["registry", "Registry hives (SYSTEM, SOFTWARE, SAM, NTUSER.DAT, Amcache): cells, key and value lists, the whole key tree", "23,242,474", "1 (hang)"],
         ["evtx", "Windows event logs: chunks, binary XML templates and substitutions", "3,188,571", "none"],
@@ -507,7 +553,8 @@ const WIKI = [
   {
     id: "privacy", title: "Privacy", icon: "lock",
     body: [
-      p("Kokino runs entirely on your workstation or lab server. It sends nothing anywhere: no telemetry, no update checks, no crash reports, no fonts or scripts from the internet. The page's security policy only lets it talk to the Kokino server itself, and links to outside sites (Wikipedia, zeroscience.mk) open only when you click them."),
+      p("Kokino runs entirely on your workstation or lab server. It sends nothing anywhere on its own: no telemetry, no automatic update checks, no crash reports, no fonts or scripts from the internet. The page's security policy only lets it talk to the Kokino server itself, and links to outside sites (Wikipedia, zeroscience.mk) open only when you click them."),
+      p("The one exception is the update check, and only when you ask for it: ", code("Check for updates"), " on the About page (or ", code("kokino version --check"), ") makes one HTTPS request from the Kokino server to api.github.com for the latest release, sends nothing about you or your cases (GitHub sees the request and the Kokino version), and is recorded in the system audit log. Nothing is downloaded or installed."),
       p("Evidence images are opened read-only and never changed. Everything Kokino produces stays in the cases folder:"),
       ul(
         h("span", h("b", "Per case:"), " case details and members, evidence records with their hashes, analysis results, the text index, carved-file and picture findings (offsets, hashes and findings, not copies), bookmarks and notes, overlay edits, exports you chose to make, and the case audit log."),

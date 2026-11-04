@@ -7,6 +7,7 @@ members = [
     "crates/kokino-fat",
     "crates/kokino-ext",
     "crates/kokino-iso",
+    "crates/kokino-mac",
     "crates/kokino-analysis",
     "crates/kokino-artifacts",
     "crates/kokino-server",
@@ -15,7 +16,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.2.6"
+version = "1.2.7"
 edition = "2021"
 authors = ["Zero Science Lab"]
 license = "Apache-2.0"
@@ -29,6 +30,7 @@ kokino-ntfs = { path = "crates/kokino-ntfs" }
 kokino-fat = { path = "crates/kokino-fat" }
 kokino-ext = { path = "crates/kokino-ext" }
 kokino-iso = { path = "crates/kokino-iso" }
+kokino-mac = { path = "crates/kokino-mac" }
 kokino-analysis = { path = "crates/kokino-analysis" }
 kokino-artifacts = { path = "crates/kokino-artifacts" }
 kokino-server = { path = "crates/kokino-server" }
@@ -63,6 +65,8 @@ rpassword = "7"
 axum-server = { version = "0.7", features = ["tls-rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+# Update check only (on request): HTTPS with rustls, no OpenSSL.
+ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 
 # Keep debug builds small on disk: full debug info for our crates only,
 # line tables for dependencies, no incremental cache (it grew to GBs).

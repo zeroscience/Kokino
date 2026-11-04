@@ -272,7 +272,7 @@ async function home() {
   render(
     h("div.hero",
       h("h1", "Every finding, ", h("em", "traceable to the byte.")),
-      h("p", "Open an image, and Kokino walks every NTFS MFT record, FAT/exFAT directory entry and ext2/3/4 inode, live and deleted, compares $SI against $FN timestamps, checks signatures and scores the evidence for anti-forensic activity, with an explanation behind every number."),
+      h("p", "Open an image, and Kokino walks every NTFS MFT record, FAT/exFAT directory entry, ext2/3/4 inode and HFS+/APFS catalog record, live and deleted, compares $SI against $FN timestamps, checks signatures and scores the evidence for anti-forensic activity, with an explanation behind every number."),
     ),
     h("div.grid.g3",
       canCreate()
@@ -577,7 +577,7 @@ async function workspace(cid, eid, tab, q) {
   if (tab === "photo") return photoViewer(ctx);
   if (tab === "hashes") return hashesTab(ctx);
   if (!ctx.fs) {
-    return render(h("div.card.stack", h("h2", "No supported filesystem found"), h("p.muted", "Kokino parses NTFS, FAT12, FAT16, FAT32, exFAT, ext2, ext3 and ext4. Detected volumes:"), volumeMap(s), ...s.errors.map((e) => h("p", e)), h("a.btn", { href: `#/c/${cid}/e/${eid}/hex` }, "Open in hex")));
+    return render(h("div.card.stack", h("h2", "No supported filesystem found"), h("p.muted", "Kokino parses NTFS, FAT12/16/32, exFAT, ext2/3/4, ISO 9660, UDF, HFS+ and APFS. Detected volumes:"), volumeMap(s), ...s.errors.map((e) => h("p", e)), h("a.btn", { href: `#/c/${cid}/e/${eid}/hex` }, "Open in hex")));
   }
   if (tab === "explorer") return explorerTab(ctx);
   if (tab === "timeline") return timelineTab(ctx);
@@ -596,7 +596,8 @@ function fsPicker(ctx, tab) {
 const isFat = (label) => /fat/i.test(label || "");
 const isExt = (label) => /^ext/i.test(label || "");
 const isOptical = (label) => /iso 9660|udf/i.test(label || "");
-const isNtfs = (label) => !isFat(label) && !isExt(label) && !isOptical(label);
+const isMac = (label) => /hfs|apfs/i.test(label || "");
+const isNtfs = (label) => !isFat(label) && !isExt(label) && !isOptical(label) && !isMac(label);
 /** FAT12/16/32 store the device's local time with no zone: shown as stored, never converted. exFAT stores a UTC offset. */
 const deviceClock = (label) => isFat(label) && label !== "exFAT";
 const fsClock = (ctx) => ({ raw: !!(ctx.fs && deviceClock(ctx.fs.volume.fs_label)) });
@@ -682,7 +683,7 @@ function summaryTab(ctx) {
   const maxCat = Math.max(1, ...st.by_category.map((c) => c[1]));
   const maxExt = Math.max(1, ...st.top_ext.map((c) => c[1]));
   render(h("div.stack",
-    h("div.hd", h("div", h("h1", ev.record.name), h("div.muted", `${fs.volume.fs_label} "${fs.info.label}", ${isOptical(fs.volume.fs_label) ? `${fs.info.version}, created ${ts(fs.info.serial, 19)}, sector` : isExt(fs.volume.fs_label) ? `${fs.info.version}, UUID ${fs.info.serial}, block` : `serial ${fs.info.serial}, ${isFat(fs.volume.fs_label) ? "" : `NTFS ${fs.info.version}, `}cluster`} ${fs.info.cluster_size} B, analyzed ${ts(s.analyzed_at, 19, { label: true })} by Kokino ${s.tool_version}`)), h("span.sp"), fsPicker(ctx, "summary"),
+    h("div.hd", h("div", h("h1", ev.record.name), h("div.muted", `${fs.volume.fs_label} "${fs.info.label}", ${isOptical(fs.volume.fs_label) ? `${fs.info.version}, created ${ts(fs.info.serial, 19)}, sector` : isExt(fs.volume.fs_label) || isMac(fs.volume.fs_label) ? `${fs.info.version}, UUID ${fs.info.serial}, block` : `serial ${fs.info.serial}, ${isFat(fs.volume.fs_label) ? "" : `NTFS ${fs.info.version}, `}cluster`} ${fs.info.cluster_size} B, analyzed ${ts(s.analyzed_at, 19, { label: true })} by Kokino ${s.tool_version}`)), h("span.sp"), fsPicker(ctx, "summary"),
       h("a.btn", { href: apiUrl(`/cases/${ctx.cid}/evidence/${ctx.eid}/report`), target: "_blank", rel: "noopener" }, "HTML report")),
     h("div.card.flat", h("div.hd", h("h3", "Disk layout"), h("span.sp"), h("span.muted", `${s.image_format}, ${bytes(s.image_size)}`)), volumeMap(s)),
     h("div.grid.g4.stagger",
@@ -841,7 +842,9 @@ async function fileDrawer(ctx, idx, startOffset) {
   const f = await api(base);
   const r = f.row;
   const fat = isFat(f.fs);
-  const ext = isExt(f.fs);
+  const mac = isMac(f.fs);
+  // Inode-based file systems share the inode labels.
+  const ext = isExt(f.fs) || mac;
   const optical = isOptical(f.fs);
   const ntfs = isNtfs(f.fs);
   const u = f.unix;
@@ -905,7 +908,7 @@ async function fileDrawer(ctx, idx, startOffset) {
       f.indicators.length ? h("div.stack", f.indicators.map((i) => h("div.card.flat.ind.hot", h("b", i.title), h("p", { style: { margin: "6px 0 0" } }, i.explanation), h("div.cav", i.caveat)))) : null,
       f.hashes && f.hashes.sets.some((s) => s.kind === "notable") ? h("div.card.flat.ind.hot", h("b", "In a known-bad hash set"), h("p", { style: { margin: "6px 0 0" } }, f.hashes.sets.filter((s) => s.kind === "notable").map((s) => `${s.name} (${ALGO[s.algo]})`).join(", ")),
         h("div.cav", "A hash match means identical content, not how the file got here or whether anyone opened it.")) : null,
-      h("div.card.flat", h("h3", fat ? (f.fs === "exFAT" ? `Timestamps (${zoneName()}, from the stored UTC offset, 10 ms precision)` : "Timestamps (the device's local clock as stored, 2 s precision)") : ext ? `Timestamps (${zoneName()}, stored in UTC; ext4 to the nanosecond, ext2/ext3 to the second)` : optical ? `Timestamps (${zoneName()}, recorded as local time with its UTC offset, 1 s precision; born, accessed and changed only with Rock Ridge)` : `Timestamps (${zoneName()}, 100 ns precision)`), tsTable),
+      h("div.card.flat", h("h3", fat ? (f.fs === "exFAT" ? `Timestamps (${zoneName()}, from the stored UTC offset, 10 ms precision)` : "Timestamps (the device's local clock as stored, 2 s precision)") : mac ? `Timestamps (${zoneName()}, stored in UTC; APFS to the nanosecond, HFS+ to the second)` : ext ? `Timestamps (${zoneName()}, stored in UTC; ext4 to the nanosecond, ext2/ext3 to the second)` : optical ? `Timestamps (${zoneName()}, recorded as local time with its UTC offset, 1 s precision; born, accessed and changed only with Rock Ridge)` : `Timestamps (${zoneName()}, 100 ns precision)`), tsTable),
       h("div.card.flat", h("h3", "Identity"), h("div.kv", { style: { marginTop: "8px" } },
         fat || optical ? [h("span", "Entry id / parent"), h("span.mono", { title: "Assigned by Kokino in directory order; this file system has no record numbers" }, `${r.record} / ${f.parent}`)]
           : ext ? [h("span", "Inode / entry id"), h("span.mono", { title: "Entry ids are assigned by Kokino; hard links share one inode" }, `${u ? u.inode : ""} / ${r.record}`)]
@@ -1448,7 +1451,8 @@ async function systemTab(ctx) {
   const r = await api(`/cases/${ctx.cid}/evidence/${ctx.eid}/fs/${ctx.fi}/windows`);
   // What this page reads depends on the volume: Windows files on NTFS,
   // Linux files on ext, either (usually neither) on a FAT or exFAT drive.
-  const what = isExt(r.fs) ? "Accounts, logons, shell histories, logs, the journal, packages and persistence of this Linux volume."
+  const what = isMac(r.fs) ? "macOS system artifacts (property lists, unified logs, KnowledgeC, quarantine events) are not read yet; the files themselves are in the Explorer."
+    : isExt(r.fs) ? "Accounts, logons, shell histories, logs, the journal, packages and persistence of this Linux volume."
     : isFat(r.fs) || isOptical(r.fs) ? "Windows or Linux system files found on this volume (a removable drive or disc usually has none)."
     : "Registry, event logs, Prefetch, shortcuts and Jump Lists of this Windows volume.";
   const intro = h("div.hd", h("div", h("h1", "System summary"), h("div.muted", what + " " + zoneSentence())), h("span.sp"), fsPicker(ctx, "system"));

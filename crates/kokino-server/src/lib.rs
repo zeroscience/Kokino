@@ -14,6 +14,7 @@ pub mod casereport;
 mod jobs;
 mod state;
 mod tls;
+pub mod update;
 
 use axum::body::Body;
 use axum::extract::{Request, State};

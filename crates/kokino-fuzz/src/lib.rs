@@ -22,6 +22,7 @@ pub const TARGETS: &[Target] = &[
     Target { name: "linuxlogs", run: linuxlogs, seeds: &["crates/kokino-fuzz/seeds/linux"] },
     Target { name: "vdisk", run: vdisk, seeds: &["tests/fixtures/vd-dynamic.vhd", "tests/fixtures/vd-dynamic.vhdx", "tests/fixtures/vd-sparse.vmdk", "tests/fixtures/vd-stream.vmdk"] },
     Target { name: "optical", run: optical, seeds: &["tests/fixtures/iso-rr-joliet.iso", "tests/fixtures/iso-udf.iso", "tests/fixtures/iso-multisession.iso"] },
+    Target { name: "mac", run: mac, seeds: &["tests/fixtures/hfsplus.img", "tests/fixtures/apfs.img"] },
     Target { name: "ewf", run: ewf, seeds: &["tests/fixtures/disk-af-odd.E01", "tests/fixtures/disk-af.E01"] },
     Target { name: "registry", run: registry, seeds: &["tests/fixtures/win/Users_alice_NTUSER.DAT", "tests/fixtures/win/Windows_System32_config_SAM", "tests/fixtures/win/Windows_System32_config_SOFTWARE", "tests/fixtures/win/Windows_System32_config_SYSTEM", "tests/fixtures/win/Windows_AppCompat_Programs_Amcache.hve"] },
     Target { name: "evtx", run: evtx, seeds: &["tests/fixtures/win/Windows_System32_winevt_Logs_Security.evtx", "tests/fixtures/win/Windows_System32_winevt_Logs_System.evtx", "tests/fixtures/win/Windows_System32_winevt_Logs_Microsoft-Windows-PowerShell_4Operational.evtx"] },
@@ -195,6 +196,35 @@ fn optical(d: &[u8]) {
             }
         }
     }
+}
+
+fn mac(d: &[u8]) {
+    // A GPT disk (the APFS seed): start at its first partition.
+    let d = if d.get(512..520) == Some(b"EFI PART") {
+        let lba = d.get(1024 + 32..1024 + 40).map(|x| u64::from_le_bytes(x.try_into().unwrap())).unwrap_or(0) as usize;
+        d.get(lba.saturating_mul(512)..).unwrap_or(&[])
+    } else {
+        d
+    };
+    let mut c = Cursor::new(d);
+    if let Ok(v) = kokino_mac::hfs::open(&mut c, d.len() as u64) {
+        if let Ok(s) = kokino_mac::hfs::scan(&v, &mut c, |_, _| true) {
+            for e in s.entries.iter().take(64) {
+                let _ = v.read(&mut c, e, 0, READ_CAP);
+            }
+        }
+        let _ = v.free_runs(&mut c);
+    }
+    if let Ok(v) = kokino_mac::apfs::open(&mut c, d.len() as u64) {
+        if let Ok(s) = kokino_mac::apfs::scan(&v, &mut c, |_, _| true) {
+            for e in s.entries.iter().take(64) {
+                let _ = v.read(&mut c, e, 0, READ_CAP);
+            }
+        }
+    }
+    // The decompressors on the raw input too.
+    let _ = kokino_mac::decmpfs::lzvn(d.get(..4096).unwrap_or(d), 1 << 16);
+    let _ = kokino_mac::decmpfs::decompress(d.get(..4096).unwrap_or(d), d.get(4096..65536));
 }
 
 fn registry(d: &[u8]) {

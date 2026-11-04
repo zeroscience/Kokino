@@ -1,0 +1,62 @@
+== hfsplus.img
+2 Directory 374 2026-11-04T20:10:36Z 2026-11-04T20:10:32Z .
+  flags -
+32 Regular File 5 2026-10-20T08:10:30Z 2026-10-20T08:10:30Z ./Café Skopje.txt
+  flags -
+31 Regular File 64000 2026-10-20T08:09:30Z 2026-10-20T08:09:30Z ./compressed.txt
+  flags compressed
+21 Directory 170 2026-11-04T20:10:35Z 2026-11-04T20:10:35Z ./Documents
+  flags -
+22 Directory 102 2026-11-04T20:10:35Z 2026-11-04T20:10:35Z ./Documents/deep
+  flags -
+23 Directory 102 2026-11-04T20:10:35Z 2026-11-04T20:10:35Z ./Documents/deep/a
+  flags -
+24 Directory 102 2026-11-04T20:10:35Z 2026-11-04T20:10:35Z ./Documents/deep/a/b
+  flags -
+25 Directory 102 2026-11-04T20:10:35Z 2026-11-04T20:10:35Z ./Documents/deep/a/b/c
+  flags -
+27 Regular File 10 2026-10-20T08:08:30Z 2026-10-20T08:08:30Z ./Documents/deep/a/b/c/notes.txt
+  flags -
+20 Regular File 41 2026-10-20T08:06:30Z 2026-10-20T08:06:30Z ./Documents/hello-link.txt
+  flags -
+  xattr com.apple.quarantine: 0083;6a1f3c4a;Safari;8F1E2D3C-0000-4000-8000-000000000001
+  xattr com.kokino.test: lab value
+26 Regular File 9000 2026-10-20T08:07:30Z 2026-10-20T08:07:30Z ./Documents/report.txt
+  flags -
+20 Regular File 41 2026-10-20T08:06:30Z 2026-10-20T08:06:30Z ./hello.txt
+  flags -
+  xattr com.apple.quarantine: 0083;6a1f3c4a;Safari;8F1E2D3C-0000-4000-8000-000000000001
+  xattr com.kokino.test: lab value
+30 Symbolic Link 20 2026-10-20T08:05:30Z 2026-10-20T08:05:30Z ./link
+  flags -
+== apfs.img KOKINO_APFS
+2 Directory 224 2026-11-04T20:10:51Z 2026-11-04T20:10:48Z .
+  flags -
+30 Regular File 5 2026-10-20T08:10:30Z 2026-10-20T08:10:30Z ./Café Skopje.txt
+  flags -
+27 Regular File 64000 2026-10-20T08:09:30Z 2026-10-20T08:09:30Z ./compressed.txt
+  flags compressed
+17 Directory 160 2026-11-04T20:10:49Z 2026-11-04T20:10:49Z ./Documents
+  flags -
+18 Directory 96 2026-11-04T20:10:49Z 2026-11-04T20:10:49Z ./Documents/deep
+  flags -
+19 Directory 96 2026-11-04T20:10:49Z 2026-11-04T20:10:49Z ./Documents/deep/a
+  flags -
+20 Directory 96 2026-11-04T20:10:49Z 2026-11-04T20:10:49Z ./Documents/deep/a/b
+  flags -
+21 Directory 96 2026-11-04T20:10:49Z 2026-11-04T20:10:49Z ./Documents/deep/a/b/c
+  flags -
+23 Regular File 10 2026-10-20T08:08:30Z 2026-10-20T08:08:30Z ./Documents/deep/a/b/c/notes.txt
+  flags -
+16 Regular File 41 2026-10-20T08:06:30Z 2026-10-20T08:06:30Z ./Documents/hello-link.txt
+  flags -
+  xattr com.apple.quarantine: 0083;6a1f3c4a;Safari;8F1E2D3C-0000-4000-8000-000000000001
+  xattr com.kokino.test: lab value
+22 Regular File 9000 2026-10-20T08:07:30Z 2026-10-20T08:07:30Z ./Documents/report.txt
+  flags -
+16 Regular File 41 2026-10-20T08:06:30Z 2026-10-20T08:06:30Z ./hello.txt
+  flags -
+  xattr com.apple.quarantine: 0083;6a1f3c4a;Safari;8F1E2D3C-0000-4000-8000-000000000001
+  xattr com.kokino.test: lab value
+26 Symbolic Link 20 2026-10-20T08:05:30Z 2026-10-20T08:05:30Z ./link
+  flags -

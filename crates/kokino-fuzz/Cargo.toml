@@ -13,5 +13,6 @@ kokino-ntfs.workspace = true
 kokino-fat.workspace = true
 kokino-ext.workspace = true
 kokino-iso.workspace = true
+kokino-mac.workspace = true
 kokino-artifacts.workspace = true
 kokino-analysis.workspace = true

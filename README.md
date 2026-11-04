@@ -22,13 +22,13 @@
   <img src="https://img.shields.io/badge/rust-1.80%2B-orange?logo=rust&logoColor=white" alt="Rust 1.80+">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey" alt="Platforms: Windows, Linux, macOS">
   <img src="https://img.shields.io/badge/GUI-browser-1f6feb" alt="Browser GUI">
-  <img src="https://img.shields.io/badge/version-1.2.6-00bcd4" alt="Version 1.2.6">
+  <img src="https://img.shields.io/badge/version-1.2.7-00bcd4" alt="Version 1.2.7">
   <img src="https://img.shields.io/badge/evidence-read--only-2ea44f" alt="Evidence read-only">
   <img src="https://img.shields.io/badge/audit%20log-hash--chained-2ea44f" alt="Hash-chained audit log">
   <a href="SECURITY.md#fuzzing-the-parsers"><img src="https://img.shields.io/badge/parsers%20fuzzed-232M%20inputs-2ea44f" alt="Parsers fuzzed: 232 million inputs"></a>
   <img src="https://img.shields.io/badge/unsafe%20code-forbidden-2ea44f" alt="Unsafe code forbidden">
   <a href="VALIDATION.md"><img src="https://img.shields.io/badge/validated-NIST%20CFReDS%20%7C%20Digital%20Corpora-2ea44f" alt="Validated against NIST CFReDS and Digital Corpora"></a>
-  <img src="https://img.shields.io/badge/file%20systems-NTFS%20%7C%20FAT%20%7C%20exFAT%20%7C%20ext2%2F3%2F4%20%7C%20ISO%209660%20%7C%20UDF-6f42c1" alt="NTFS, FAT, exFAT, ext2/3/4, ISO 9660, UDF">
+  <img src="https://img.shields.io/badge/file%20systems-NTFS%20%7C%20FAT%20%7C%20exFAT%20%7C%20ext2%2F3%2F4%20%7C%20ISO%209660%20%7C%20UDF%20%7C%20HFS%2B%20%7C%20APFS-6f42c1" alt="NTFS, FAT, exFAT, ext2/3/4, ISO 9660, UDF, HFS+, APFS">
   <img src="https://img.shields.io/badge/images-E01%20%7C%20raw%20%7C%20split%20%7C%20VHD-6f42c1" alt="E01, raw, split raw, VHD">
 </p>
 
@@ -70,17 +70,18 @@ Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workben
 
 Every finding links to the exact bytes it came from, every indicator of anti-forensic activity explains itself, and every examiner action lands in a hash-chained audit log, so the results hold up in a report and in court.
 
-> Status: 1.2.6 adds ext2/3/4 and Linux artifacts to 1.2.5, the first public release. Validated against NIST CFReDS (FAT, exFAT, NTFS and ext) and Digital Corpora test images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed ([SECURITY.md](SECURITY.md)). Next: VHDX, VMDK, ISO 9660 and UDF (see [What's next](#whats-next)).
+> Status: 1.2.7 reads virtual disks (VHD, VHDX, VMDK), optical media (ISO 9660, UDF) and Mac disks (HFS+, APFS), on top of NTFS, FAT, exFAT and ext2/3/4. Validated against NIST CFReDS (FAT, exFAT, NTFS and ext) and Digital Corpora test images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed ([SECURITY.md](SECURITY.md)). Next: macOS artifacts, APFS snapshots and Ex01 (see [What's next](#whats-next)).
 
 ## Features
 
 - **Cases and integrity:** case store, evidence registration, single-pass MD5 / SHA-1 / SHA-256, verification against the acquisition hash, and a hash-chained audit log of every examiner action (`kokino verify-audit`).
 - **Images:** E01 (EWF, all segments, compressed or not), raw / dd, split raw (`.001`, `.002`, ...), and virtual disks: VHD (fixed, dynamic, differencing), VHDX (dynamic, fixed, differencing) and VMDK (flat, sparse, streamOptimized, split, snapshots), with parent disks found and checked automatically. For E01, Kokino checks the media against the hash the imaging tool stored in the image, shows the acquisition details it recorded (case, examiner, dates, device, tool) and flags sectors the imager could not read. Ex01 is detected and reported.
-- **Volumes:** MBR (including extended partitions), GPT, unallocated gaps. Parses NTFS, FAT12/16/32, exFAT, ext2/3/4, ISO 9660 and UDF; detects and reports APFS, HFS+ and BitLocker.
+- **Volumes:** MBR (including extended partitions), GPT, unallocated gaps. Parses NTFS, FAT12/16/32, exFAT, ext2/3/4, ISO 9660, UDF, HFS+ and APFS; detects and reports BitLocker.
 - **NTFS:** every MFT record including deleted ones, $SI and $FN times at full 100 ns precision, alternate data streams, orphans, resident data, data-run offsets. Records that cannot be parsed are reported, never dropped silently.
 - **FAT12/16/32 and exFAT:** USB sticks, SD and camera cards. Live files follow the FAT chain; deleted files and folders are listed with their long names restored, their content read from the first cluster on, and a note when the clusters were reused or the first cluster no longer holds the file's header.
 - **ext2/3/4:** Linux servers and desktops. Every inode, extents and block maps, directories with the names of deleted files recovered from directory slack, orphaned inodes, owner, mode, inode change and deletion times (ext4 to the nanosecond, with creation time). ext3 and ext4 clear a deleted file's block map; Kokino reads it back from an older copy of the inode kept in the journal when there is one, and says when there is not (then only carving can help).
 - **Optical discs and .iso files:** ISO 9660 with Rock Ridge (POSIX names, owners, modes, times, symbolic links, deep folders) and Joliet (Unicode names), multisession discs (the newest session is the live tree; files only older sessions list are shown as deleted, and their content is read from the disc), and UDF 1.02 to 2.60 (DVD, Blu-ray, packet writing) with directory entries marked deleted listed with what their file entry still holds.
+- **Mac disks (HFS+ and APFS):** HFS+ and HFSX with hard links resolved, resource forks, extended attributes (including the quarantine flag set on downloads) and HFS compression decoded (zlib and LZVN; 7-Zip shows such files as empty). APFS containers with every unencrypted volume, object maps, hard links, symbolic links, extended attributes and compression. Deleted files are recovered from old catalog-node copies in the HFS+ journal, and from the older file-system tree nodes that APFS leaves behind when it writes changes to new blocks. Encrypted (FileVault) APFS volumes are reported.
 - **Linux system summary:** accounts (passwd, shadow, group, lastlog; second root accounts, passwordless and system accounts with a shell flagged), logons, failures and reboots (wtmp, btmp, auth.log or secure, journald), shell histories (bash, zsh, fish and more, with times when recorded) with destructive commands flagged, sudo and account changes, installed packages and who installed them (dpkg, apt history, dnf/yum, apk, pacman), persistence (cron, systemd units, rc.local, SSH authorized keys, sudoers, ld.so.preload), USB storage seen by the kernel, Wi-Fi and other networks, DHCP leases and SSH known hosts. Classic syslog times are converted with the image's own time zone.
 - **Content:** about 70 file signatures, extension mismatch, Shannon entropy, uniform-content (wipe) detection.
 - **Web activity:** browser history from Chrome, Edge, Brave, Opera, Vivaldi and Firefox profiles: page visits (with how the page was reached and whether the address was typed), pages only the URL table still remembers, downloads with source URL, saved path and state, and search terms. Databases are read with their -wal file, so recent activity the browser had not yet merged is included. Deleted or cleared histories are flagged.
@@ -96,13 +97,14 @@ Every finding links to the exact bytes it came from, every indicator of anti-for
 - **Anti-forensics likelihood:** 22 transparent indicators (timestomping, SDelete patterns, wiped content, disguised executables, ADS payloads, encrypted containers, missing $UsnJrnl, event logs cleared (including Windows' own 1102/104 records), cleared browser history, wiping tools downloaded, researched or run, Linux shell histories cleared, logs emptied, shred and history -c typed, ld.so.preload rootkits, ...) combined with noisy-OR. See [docs/ANTI-FORENSICS.md](docs/ANTI-FORENSICS.md).
 - **Hex:** a virtualized viewer for images of any size, a data inspector (ints, FILETIME, Unix time, UTF-16), text and hex search, and **overlay editing**: edits are stored in the case and audit-logged, and the evidence file is never written. You can export a byte range raw or with the overlay applied.
 - **Export and report:** file and stream export (hashed and audited) and a self-contained HTML report.
+- **Updates:** Kokino never contacts anything on its own. "Check for updates" on the About page (or `kokino version --check`) asks GitHub for the latest release when you click it, shows its notes and checksums and links to the download; the check is recorded in the system audit log.
 - **Built-in help:** a searchable Wiki (getting started, roles, evidence, every view, browser history, hex, reports, LAN mode, command line, troubleshooting) and an About page with version and contact.
 - **Cases and accounts:** cases can be renamed, handed to another lead examiner, deleted and restored, all audit-logged. Every examiner signs in. Admins manage accounts and assign people to cases as examiner or reviewer (read-only). Every case action is attributed to the account in the audit log, and sign-ins are recorded in a hash-chained system audit log. Optional LAN mode serves HTTPS to a whole lab.
 
 ## What's next
 
 - **Ex01:** EWF version 2 (EnCase 7 and later)
-- **Later:** HFS+ and APFS, BitLocker with a recovery key, Volume Shadow Copies, $UsnJrnl, email stores, triage collection import
+- **Later:** macOS artifacts (property lists, unified logs, KnowledgeC), APFS snapshots and encrypted volumes, BitLocker with a recovery key, Volume Shadow Copies, $UsnJrnl, email stores, triage collection import
 
 The full list, with what is already done, is in [ROADMAP.md](ROADMAP.md).
 Suggestions are welcome as GitHub issues.
@@ -205,7 +207,7 @@ Headless, using the same engine:
 - Every action is logged to `<case>/audit.jsonl` under the examiner's account, with the SHA-256 of the previous entry.
 - Analysis is deterministic for a given image and Kokino version, and the version is stored with the results.
 - Results are checked against public test images with ground truth, NIST CFReDS (61 deleted-file recovery images) and Digital Corpora: 99.8% of deleted-file blocks recovered correctly, image hashes matching the published values. See [VALIDATION.md](VALIDATION.md).
-- Every parser that reads evidence is fuzzed (232 million inputs so far, 25 problems found and fixed) and `unsafe` Rust is forbidden in every crate. See [SECURITY.md](SECURITY.md), which is also where to report a vulnerability.
+- Every parser that reads evidence is fuzzed (232 million inputs so far, 28 problems found and fixed) and `unsafe` Rust is forbidden in every crate. See [SECURITY.md](SECURITY.md), which is also where to report a vulnerability.
 - The GUI needs a signed-in session (Argon2id passwords, HttpOnly SameSite=Strict cookies, login backoff), a CSRF header on every change and a known Host, which blocks other browser tabs and DNS rebinding. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#3-accounts-and-access).
 
 ## Development
