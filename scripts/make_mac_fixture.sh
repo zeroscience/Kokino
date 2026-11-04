@@ -6,8 +6,10 @@
 # reports about every file, which the tests use as ground truth:
 #
 #   out/hfsplus.img    bare HFS+ (journaled) volume, 8 MiB
-#   out/apfs.img       GPT disk with an APFS container, 64 MiB, two
-#                      volumes (KOKINO_APFS and KOKINO_DATA)
+#   out/apfs.img       GPT disk with an APFS container, 32 MiB, one
+#                      volume (KOKINO_APFS); a container gets one volume
+#                      slot per 512 MiB, so a second volume would need a
+#                      much larger image
 #   out/manifest.txt   stat, extended attributes and flags of every file
 #
 # The story (invented data) on every volume:
@@ -84,25 +86,13 @@ hdiutil detach "$MNT"
 hdiutil convert "$WORK/hfs.dmg" -format UDTO -o "$WORK/hfs"
 mv "$WORK/hfs.cdr" "$OUT/hfsplus.img"
 
-# APFS: a GPT disk with one container and two volumes.
-hdiutil create -size 64m -fs APFS -volname KOKINO_APFS -layout GPTSPUD -ov "$WORK/apfs.dmg"
+# APFS: a GPT disk with one container and one volume.
+hdiutil create -size 32m -fs APFS -volname KOKINO_APFS -layout GPTSPUD -ov "$WORK/apfs.dmg"
 ATTACH="$(hdiutil attach "$WORK/apfs.dmg" -nobrowse -owners on)"
 echo "$ATTACH"
 MNT="$(echo "$ATTACH" | awk -F'\t' '/KOKINO_APFS/ {print $NF}' | sed 's/^ *//' | tail -1)"
-# The synthesized container disk (content type EF57347C-...), not the partition.
-CONTAINER="$(echo "$ATTACH" | awk '/EF57347C/ {print $1}' | head -1)"
 populate "$MNT"
 manifest "$MNT" "apfs.img KOKINO_APFS"
-diskutil apfs addVolume "$CONTAINER" APFS KOKINO_DATA -nomount
-DATA_DEV="$(diskutil list | awk '/KOKINO_DATA/ {print $NF}' | head -1)"
-DATA_MNT="$WORK/datamnt"
-mkdir -p "$DATA_MNT"
-diskutil mount -mountPoint "$DATA_MNT" "$DATA_DEV"
-printf 'second volume\n' > "$DATA_MNT/data.txt"
-touch -t "$STAMP" "$DATA_MNT/data.txt"
-sync
-manifest "$DATA_MNT" "apfs.img KOKINO_DATA"
-diskutil unmount "$DATA_MNT"
 hdiutil detach "$(echo "$ATTACH" | head -1 | awk '{print $1}')"
 hdiutil convert "$WORK/apfs.dmg" -format UDTO -o "$WORK/apfs"
 mv "$WORK/apfs.cdr" "$OUT/apfs.img"
