@@ -29,7 +29,7 @@
   <img src="https://img.shields.io/badge/unsafe%20code-forbidden-2ea44f" alt="Unsafe code forbidden">
   <a href="VALIDATION.md"><img src="https://img.shields.io/badge/validated-NIST%20CFReDS%20%7C%20Digital%20Corpora-2ea44f" alt="Validated against NIST CFReDS and Digital Corpora"></a>
   <img src="https://img.shields.io/badge/file%20systems-NTFS%20%7C%20FAT%20%7C%20exFAT%20%7C%20ext2%2F3%2F4%20%7C%20ISO%209660%20%7C%20UDF%20%7C%20HFS%2B%20%7C%20APFS-6f42c1" alt="NTFS, FAT, exFAT, ext2/3/4, ISO 9660, UDF, HFS+, APFS">
-  <img src="https://img.shields.io/badge/images-E01%20%7C%20raw%20%7C%20split%20%7C%20VHD-6f42c1" alt="E01, raw, split raw, VHD">
+  <img src="https://img.shields.io/badge/images-E01%20%7C%20raw%20%7C%20split%20%7C%20VHD%20%7C%20VHDX%20%7C%20VMDK%20%7C%20ISO-6f42c1" alt="E01, raw, split raw, VHD, VHDX, VMDK, ISO">
 </p>
 
 <p align="center">
@@ -66,7 +66,7 @@
 
 ---
 
-Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workbench for disk images. Give it an E01, raw or VHD image and it reads every NTFS, FAT, exFAT and ext2/3/4 volume down to the last record, live and deleted, brings back what was erased, and rebuilds what happened on the machine: Windows registry, event logs and execution traces, Linux logons, shell histories and persistence, browser history, carved files and edited pictures.
+Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workbench for disk images. Give it an E01, raw, VHD, VHDX or VMDK image, or a disc image, and it reads every NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF volume down to the last record, live and deleted, brings back what was erased, and rebuilds what happened on the machine: Windows registry, event logs and execution traces, Linux logons, shell histories and persistence, browser history, carved files and edited pictures.
 
 Every finding links to the exact bytes it came from, every indicator of anti-forensic activity explains itself, and every examiner action lands in a hash-chained audit log, so the results hold up in a report and in court.
 

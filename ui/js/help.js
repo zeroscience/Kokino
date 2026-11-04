@@ -81,7 +81,7 @@ export function aboutPage(info) {
     h("div.grid.g2",
       h("div.card.stack",
         h("h3", "What it is"),
-        p("Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workbench for disk images. Give it an E01, raw or VHD image and it reads every NTFS, FAT, exFAT and ext2/3/4 volume down to the last record, live and deleted, brings back what was erased, and rebuilds what happened on the machine: Windows registry, event logs and execution traces, Linux logons, shell histories and persistence, browser history, carved files and edited pictures."),
+        p("Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workbench for disk images. Give it an E01, raw, VHD, VHDX or VMDK image, or a disc image, and it reads every NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF volume down to the last record, live and deleted, brings back what was erased, and rebuilds what happened on the machine: Windows registry, event logs and execution traces, Linux logons, shell histories and persistence, browser history, carved files and edited pictures."),
         p("Every finding links to the exact bytes it came from, every indicator of anti-forensic activity explains itself, and every examiner action lands in a hash-chained audit log, so the results hold up in a report and in court."),
         p("One portable binary serves this browser interface on Windows, Linux and macOS, alone on a workstation or for a whole lab over HTTPS."),
         p("The name comes from the Kokino observatory, a Bronze Age megalithic site in North Macedonia (", link("https://en.wikipedia.org/wiki/Kokino", "Wikipedia"), "); the wiki has the story."),
@@ -141,7 +141,8 @@ const WIKI = [
   {
     id: "start", title: "Getting started", icon: "chev",
     body: [
-      p("Build once, then start the server. It opens your browser on this machine."),
+      p("Installed from a release package (Windows MSI, Linux .deb, macOS DMG): start \"Kokino Forensic Toolkit\" from the Start menu, the desktop's application menu or the DMG's \"Start Kokino\", or run ", code("kokino serve"), ". It opens your browser on this machine. To see whether a newer release exists, use Check for updates on the About page (nothing is checked on its own)."),
+      p("From source: build once, then start the server."),
       pre("cargo build --release", "./target/release/kokino serve"),
       p("On the very first start there are no accounts yet. The terminal prints a one-time setup link; open it to create the first administrator. Without that link nobody can claim the server. You can also create the first admin on the console:"),
       pre("./target/release/kokino user add jdoe --role admin --display-name \"Jane Doe\""),
@@ -335,7 +336,7 @@ const WIKI = [
   {
     id: "carving", title: "Carved files", icon: "layers",
     body: [
-      p("Carving recovers files that no file system record describes any more, by their content. It runs after analysis (or with ", h("b", "Carve unallocated space"), " on the Carved files page) over every free cluster or block (NTFS, FAT, exFAT, ext2/3/4), the space outside partitions and volumes Kokino cannot parse yet. On ext3 and ext4 it is often the only way back to a deleted file's content."),
+      p("Carving recovers files that no file system record describes any more, by their content. It runs after analysis (or with ", h("b", "Carve unallocated space"), " on the Carved files page) over every free cluster or block (NTFS, FAT, exFAT, ext2/3/4, HFS+), the space outside partitions and volumes Kokino cannot parse yet. On ext3 and ext4 it is often the only way back to a deleted file's content."),
       ul(
         h("span", h("b", "Formats:"), " JPEG, PNG, GIF, BMP, WebP, PDF, Word, Excel and PowerPoint (DOCX/XLSX/PPTX and the older DOC/XLS/PPT), OpenDocument, EPUB, ZIP, JAR, APK, Outlook MSG, SQLite, Windows executables, DLLs and drivers, GZIP, 7-Zip, WAV, AVI, MP4/MOV, Jump Lists and 64 KiB event log chunks (with their record count and time range, often all that is left of a cleared log)."),
         h("span", h("b", "Whole files:"), " each format's own structure says where the file ends (JPEG markers, PNG chunks, the ZIP central directory, the PE section table, the SQLite page count, the end of a GZIP stream...), so random bytes that only resemble a header are not listed. A file whose end is missing is kept and marked incomplete."),

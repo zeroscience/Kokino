@@ -272,7 +272,7 @@ async function home() {
   render(
     h("div.hero",
       h("h1", "Every finding, ", h("em", "traceable to the byte.")),
-      h("p", "Open an image, and Kokino walks every NTFS MFT record, FAT/exFAT directory entry, ext2/3/4 inode and HFS+/APFS catalog record, live and deleted, compares $SI against $FN timestamps, checks signatures and scores the evidence for anti-forensic activity, with an explanation behind every number."),
+      h("p", "Open an image, and Kokino walks every NTFS MFT record, FAT/exFAT directory entry, ext2/3/4 inode, HFS+/APFS catalog record and ISO 9660/UDF directory record, live and deleted, compares $SI against $FN timestamps, checks signatures and scores the evidence for anti-forensic activity, with an explanation behind every number."),
     ),
     h("div.grid.g3",
       canCreate()
