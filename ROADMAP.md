@@ -54,12 +54,12 @@ checked against public test images with known answers where they exist
 - [ ] Volume Shadow Copies
 
 ### Deeper NTFS and Windows
-- [x] $UsnJrnl (change journal: every file change, grouped per round, paths rebuilt from the journal for folders that are gone) (unreleased)
-- [x] Names of deleted files left in folder index slack ($I30) and in $LogFile (unreleased)
-- [x] ShellBags (UsrClass.dat and NTUSER.DAT) (unreleased)
+- [x] $UsnJrnl (change journal: every file change, grouped per round, paths rebuilt from the journal for folders that are gone) (1.2.8)
+- [x] Names of deleted files left in folder index slack ($I30) and in $LogFile (1.2.8)
+- [x] ShellBags (UsrClass.dat and NTUSER.DAT) (1.2.8)
 - [ ] $LogFile transactions in full (redo/undo of MFT changes)
-- [x] SRUM (network and resource use per program, connections) with an ESE database reader (unreleased)
-- [x] BAM/DAM (unreleased)
+- [x] SRUM (network and resource use per program, connections) with an ESE database reader (1.2.8)
+- [x] BAM/DAM (1.2.8)
 - [ ] SRUM energy, push notification and app timeline tables; other ESE databases (Windows Search, WebCache)
 - [ ] Scheduled tasks, deleted registry keys and transaction logs
 - [ ] Legacy .evt event logs

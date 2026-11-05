@@ -22,10 +22,10 @@
   <img src="https://img.shields.io/badge/rust-1.80%2B-orange?logo=rust&logoColor=white" alt="Rust 1.80+">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey" alt="Platforms: Windows, Linux, macOS">
   <img src="https://img.shields.io/badge/GUI-browser-1f6feb" alt="Browser GUI">
-  <img src="https://img.shields.io/badge/version-1.2.7-00bcd4" alt="Version 1.2.7">
+  <img src="https://img.shields.io/badge/version-1.2.8-00bcd4" alt="Version 1.2.8">
   <img src="https://img.shields.io/badge/evidence-read--only-2ea44f" alt="Evidence read-only">
   <img src="https://img.shields.io/badge/audit%20log-hash--chained-2ea44f" alt="Hash-chained audit log">
-  <a href="SECURITY.md#fuzzing-the-parsers"><img src="https://img.shields.io/badge/parsers%20fuzzed-232M%20inputs-2ea44f" alt="Parsers fuzzed: 232 million inputs"></a>
+  <a href="SECURITY.md#fuzzing-the-parsers"><img src="https://img.shields.io/badge/parsers%20fuzzed-319M%20inputs-2ea44f" alt="Parsers fuzzed: 319 million inputs"></a>
   <img src="https://img.shields.io/badge/unsafe%20code-forbidden-2ea44f" alt="Unsafe code forbidden">
   <a href="VALIDATION.md"><img src="https://img.shields.io/badge/validated-NIST%20CFReDS%20%7C%20Digital%20Corpora-2ea44f" alt="Validated against NIST CFReDS and Digital Corpora"></a>
   <img src="https://img.shields.io/badge/file%20systems-NTFS%20%7C%20FAT%20%7C%20exFAT%20%7C%20ext2%2F3%2F4%20%7C%20ISO%209660%20%7C%20UDF%20%7C%20HFS%2B%20%7C%20APFS-6f42c1" alt="NTFS, FAT, exFAT, ext2/3/4, ISO 9660, UDF, HFS+, APFS">
@@ -70,7 +70,7 @@ Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workben
 
 Every finding links to the exact bytes it came from, every indicator of anti-forensic activity explains itself, and every examiner action lands in a hash-chained audit log, so the results hold up in a report and in court.
 
-> Status: 1.2.7 reads virtual disks (VHD, VHDX, VMDK), optical media (ISO 9660, UDF) and Mac disks (HFS+, APFS), on top of NTFS, FAT, exFAT and ext2/3/4. Validated against NIST CFReDS (FAT, exFAT, NTFS and ext) and Digital Corpora test images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed ([SECURITY.md](SECURITY.md)). Next: macOS artifacts, APFS snapshots and Ex01 (see [What's next](#whats-next)).
+> Status: 1.2.8 goes deeper into Windows: the NTFS change journal, names of deleted files from folder index slack and $LogFile, ShellBags, BAM/DAM and SRUM (with Kokino's own ESE database reader, checked against Windows' own on a real database). Reads E01, raw and virtual disks, and NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF. Validated against NIST CFReDS and Digital Corpora test images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed ([SECURITY.md](SECURITY.md)). Next: Ex01, macOS artifacts and APFS snapshots (see [What's next](#whats-next)).
 
 ## Features
 

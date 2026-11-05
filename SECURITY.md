@@ -99,7 +99,7 @@ Virtual disks, optical media and Mac disks (1.2.7):
 | `optical` | ISO 9660 descriptors, sessions, directory records, Rock Ridge and Joliet; UDF anchor, volume descriptors, partition maps, file set, file entries, allocation descriptors and directory entries | 15 + 15 min | 4,318,442 | 3 (overflow, out-of-range reads) |
 | `mac` | HFS+ volume header, catalog, extents and attributes B-trees, journal scan; APFS checkpoints, object maps, file-system trees, old-node scan; decmpfs with zlib and LZVN | 3 x 15 min | 232,151 | 3 (overflows, out-of-range read) |
 
-Deeper NTFS and Windows (unreleased):
+Deeper NTFS and Windows (1.2.8):
 
 | Target | What it covers | Rounds | Inputs in all | Distinct problems found |
 |---|---|---|--:|---|

@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.8] - 2026-11-05
+
+Deeper NTFS and Windows: the change journal, names of deleted files from folder index slack and $LogFile, ShellBags, BAM/DAM and SRUM with Kokino's own ESE database reader.
+
 ### Added
 - NTFS: names of deleted files whose MFT record was reused, recovered from folder index slack ($I30), the indexes of deleted folders, and $LogFile (which records every index change with the entry). Each is listed as a deleted, name-only entry with its $FILE_NAME times and size, the MFT record it had and a note saying where it was found and what that record holds now; earlier names of renamed or moved files are listed the same way. They have no content (reads say so) and are skipped by hashing. On the NIST CFReDS NTFS images the deleted files listed now match NIST's counts closely (case 08 exactly, VALIDATION.md); the missing names were mostly in $LogFile, not in index slack as VALIDATION.md had assumed. Hard links are recognized as second names of the same record.
 - NTFS change journal ($Extend\$UsnJrnl:$J, record versions 2 and 3, and $Max): every record read (sparse parts skipped), records of one round of changes combined into one change (created, data written, renamed with the old name, deleted, ...), paths rebuilt from today's folders or, for folders that are gone, from the journal itself, and each change linked to the file on the volume when its MFT reference and name match. New System summary page "Change journal" (filter by kind and path, paged), a journal summary on the overview (period covered, counts, when the journal was created), a "Change journal" section in the file details, and created, deleted and renamed files on the Timeline (source USN). Up to 250,000 changes are kept (the newest); the summary says when older ones were dropped.

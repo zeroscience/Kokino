@@ -18,7 +18,8 @@ Thanks to the people behind these collections:
   (DFR) test images and their layout document.
 
 Kokino version: 1.2.5 plus the fixes listed in the changelog for the FAT,
-exFAT and NTFS images; 1.2.6 for the ext images. Run on Windows 10.
+exFAT and NTFS images; 1.2.6 for the ext images; 1.2.8 for NTFS names
+without an MFT record and the SRUM database. Run on Windows 10.
 
 ## Summary
 
@@ -27,7 +28,7 @@ exFAT and NTFS images; 1.2.6 for the ext images. Run on Windows 10.
 | Digital Corpora `nps-2009-canon2` (FAT32 camera card, E01) | Image hashes against the published SHA-1; recovered pictures against the real files | Both images verify (E01 stored MD5 and published SHA-1); 34 of 36 recoverable pictures recovered byte for byte; the 3 overwritten deleted pictures flagged |
 | Digital Corpora `nps-2009-ntfs1` (NTFS, E01) | File list against the DFXML; compressed and EFS-encrypted copies against the plain originals | All files with correct names and sizes; all 9 compressed copies identical to the originals (after adding NTFS decompression, see below); encrypted copies read as ciphertext and now flagged |
 | NIST CFReDS DFR, 22 ext images (ext2, ext3, ext4) | Every deleted file with content, block by block; deleted names against NIST's layout | 962 of 965 tagged files complete, 99.9996% of blocks right; 302 files recovered through the ext3/ext4 journal; 2,782 deleted names listed; wrong content without a warning in 1 file |
-| A real Windows 10 22H2 SRUM database (SRUDB.dat, 70 MB, unreleased) | Every row and value of every table against Windows' own esent.dll | All 310,255 rows and 2,800,979 values the same, after two fixes (below) |
+| A real Windows 10 22H2 SRUM database (SRUDB.dat, 70 MB, 1.2.8) | Every row and value of every table against Windows' own esent.dll | All 310,255 rows and 2,800,979 values the same, after two fixes (below) |
 | NIST CFReDS DFR, 61 images (FAT12/16/32, exFAT, NTFS) | Every deleted file Kokino lists, block by block, against the files' own tags; counts against NIST's layout | 3,048 of 3,323 deleted test files complete, 1,367,020 of 1,370,338 blocks right (99.8%); exFAT 100%, NTFS 100% of blocks; wrong content without a warning in 4 files |
 
 The validation found real problems in Kokino, all fixed before these
@@ -201,7 +202,7 @@ every block right. Blocks are full 512-byte blocks, as NIST counts them.
   fat-08, ntfs-08 and ntfs-14), each overwritten by a file that left no
   trace Kokino can see yet.
 
-### NTFS: names without an MFT record (unreleased)
+### NTFS: names without an MFT record (1.2.8)
 
 Deleted files Kokino lists on the NTFS images with the full analysis:
 those with an MFT record (the table above) plus names found only in
@@ -224,7 +225,7 @@ one by one. The other NTFS cases list no name without a record, or one
 from the tools that made the image. Hard links (case 15) are recognized
 as a second name of the same record, not as a lost file.
 
-## SRUM: a real Windows 10 database (unreleased)
+## SRUM: a real Windows 10 database (1.2.8)
 
 Kokino's ESE reader was first tested only on databases written for the
 purpose by esent.dll. To check it on real data, the SRUM database of the
