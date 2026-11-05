@@ -1712,7 +1712,12 @@ async function systemTab(ctx) {
   const draw = () => body.replaceChildren(...sections[section]());
   drawSeg();
   draw();
-  render(h("div.stack", intro, seg, body));
+  // Analyzed before 1.2.8: the newer Windows artifacts are missing, not absent.
+  const stale = isNtfs(r.fs) && r.schema < 6
+    ? h("div.card.flat.stack", h("p", { style: { margin: 0, color: "var(--warn)" } }, "This evidence was analyzed by an earlier Kokino version, before the change journal, ShellBags, BAM/DAM, SRUM and the names of deleted files from folder indexes and $LogFile were read. Those parts are empty until it is analyzed again."),
+      canWrite() ? h("div", h("button.primary", { onclick: () => reingest(ctx.cid, ctx.eid, false) }, "Re-analyze now")) : h("p.muted", { style: { margin: 0 } }, "Ask an examiner on this case to re-analyze it."))
+    : null;
+  render(h("div.stack", intro, stale, seg, body));
 }
 
 // ---------------------------------------------------------------- carved files

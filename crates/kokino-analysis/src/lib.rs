@@ -33,7 +33,9 @@ use stats::Stats;
 /// 3: adds `FsAnalysis::windows` (registry, event logs, Prefetch, LNK, Jump Lists).
 /// 4: FAT12/16/32 and exFAT volumes are parsed too (`volume.fs` tells which).
 /// 5: ext2/3/4 volumes, `FsEntry::unix` and `FsAnalysis::linux`.
-pub const SCHEMA_VERSION: u32 = 5;
+/// 6: NTFS names without an MFT record (`FsEntry::name_only`), the change
+///    journal, ShellBags, BAM/DAM and SRUM.
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// Bytes read from the start of every file for signature and entropy.
 const HEAD: usize = 8 * 1024;

@@ -23,6 +23,7 @@ Deeper NTFS and Windows: the change journal, names of deleted files from folder 
 ### Changed
 - An NTFS record that cannot be parsed now gets its name back from its folder's index when the index still lists it, with a note pointing at the unreadable record (the `testfs1` fixture has one, a record split over two MFT runs).
 - Hashing (and `kokino files`) skip name-only entries, which have no content.
+- Analysis schema 6. On NTFS evidence analyzed by an earlier version, the System summary says that the change journal, ShellBags, BAM/DAM, SRUM and recovered names are missing until it is analyzed again, with a Re-analyze button.
 
 ## [1.2.7] - 2026-11-04
 
