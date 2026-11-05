@@ -421,6 +421,31 @@ mod tests {
         }
         assert!(fs.stats.impact.iter().any(|l| l.contains("USB storage device")));
 
+        // BAM and DAM from SYSTEM, SIDs named.
+        let bam = w.execution.iter().find(|x| x.source == "BAM" && x.program == r"\Users\alice\sdelete64.exe").expect("BAM entry");
+        assert_eq!((bam.user.as_str(), bam.tool, bam.detail.as_str()), ("alice", true, "last run, from HarddiskVolume3"));
+        assert_eq!(kokino_core::time::filetime_to_iso(bam.times[0]), "2026-10-20T09:41:30.0000000Z");
+        assert!(w.execution.iter().any(|x| x.source == "BAM" && x.program == "Microsoft.Windows.Explorer"));
+        assert!(w.execution.iter().any(|x| x.source == "DAM" && x.program.ends_with("notepad.exe")));
+
+        // SRUM written by esent.dll (scripts/make_srum_fixture.py).
+        let s = w.srum.as_ref().expect("SRUM");
+        assert!(s.error.is_none() && !s.dirty, "{:?}", s.error);
+        assert_eq!((s.network.len(), s.usage.len(), s.connections.len(), s.dropped), (303, 3, 1, 0));
+        let rc = &s.apps[0];
+        assert_eq!((rc.app.as_str(), rc.user.as_str()), (r"\Users\alice\AppData\Local\Temp\rclone.exe", "alice"));
+        assert_eq!((rc.sent, rc.received, rc.read, rc.written, rc.foreground, rc.records), (2_147_483_648, 4_194_304, 2_147_483_648, 12_288, 3_000_000, 5));
+        assert_eq!(kokino_core::time::filetime_to_iso(rc.first), "2026-10-20T10:00:00.0000000Z");
+        let n = s.network.iter().find(|n| n.app.ends_with("rclone.exe")).unwrap();
+        assert_eq!((n.interface.as_str(), n.profile.as_str()), ("Wi-Fi", "LabWiFi"));
+        assert!(s.apps.iter().any(|a| a.app == "wuauserv (service)" && a.user == "S-1-5-18" && a.received == 25_000_000));
+        let c = &s.connections[0];
+        assert_eq!((kokino_core::time::filetime_to_iso(c.start).as_str(), c.seconds, c.profile.as_str()), ("2026-10-20T08:55:00.0000000Z", 7500, "LabWiFi"));
+        assert_eq!(kokino_core::time::filetime_to_iso(s.first), "2026-10-07T22:00:00.0000000Z");
+        assert_eq!(w.timeline.iter().filter(|t| t.kind == "NET" && t.detail.contains("(SRUM)") && t.what.ends_with("rclone.exe")).count(), 2);
+        assert!(fs.stats.impact.iter().any(|l| l.starts_with("SRUM covers") && l.contains("rclone.exe (2048 MiB)")), "{:?}", fs.stats.impact);
+        assert!(w.sources.iter().any(|x| x.kind == "Wi-Fi profile" && x.error.is_none()));
+
         // Change journal planted by make_win_fixture.py (journal()).
         let j = w.journal.as_ref().expect("change journal");
         assert!(j.error.is_none(), "{:?}", j.error);

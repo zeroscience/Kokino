@@ -1330,7 +1330,7 @@ async function searchTab(ctx) {
 }
 
 // ---------------------------------------------------------------- Windows system summary
-const SYS_SECTIONS = [["overview", "Overview"], ["exec", "Programs run"], ["files", "Files and folders"], ["folders", "Folders (ShellBags)"], ["journal", "Change journal"], ["devices", "USB and networks"], ["logons", "Accounts and logons"], ["events", "Events"], ["software", "Software and autostart"], ["sources", "Sources"]];
+const SYS_SECTIONS = [["overview", "Overview"], ["exec", "Programs run"], ["files", "Files and folders"], ["folders", "Folders (ShellBags)"], ["journal", "Change journal"], ["srum", "Network use (SRUM)"], ["devices", "USB and networks"], ["logons", "Accounts and logons"], ["events", "Events"], ["software", "Software and autostart"], ["sources", "Sources"]];
 // The Windows artifacts API sends raw FILETIMEs (100 ns since 1601); minute
 // precision survives the conversion to a JavaScript number.
 const ftIso = (t) => (t ? new Date(t / 10000 - 11644473600000).toISOString().replace(/\.\d+Z$/, "Z") : "");
@@ -1532,6 +1532,42 @@ async function systemTab(ctx) {
       return [filterBox("Filter by folder or user...", (v) => { q = v; fill(); }),
         h("p.muted", { style: { fontSize: "12.5px" } }, "Explorer keeps the view settings of every folder a user opened, in UsrClass.dat (Windows 7 and later) or NTUSER.DAT, and keeps them after the folder, the USB stick or the network share is gone. A time is shown when the folder was the most recently opened one in its parent. The folder's own times are as they were when it was opened, in the computer's local time; the MFT record ties a folder to this or another NTFS volume."), out];
     },
+    srum: () => {
+      const s = w.srum;
+      if (!s) return [h("div.card.empty", "No SRUM database (Windows\\System32\\sru\\SRUDB.dat) on this volume.")];
+      const kv = (rows) => h("div.kv", rows.filter(([, v]) => v).map(([k, v]) => [h("span", k), h("span", v)]));
+      let q = "", pick = null;
+      const out = h("div");
+      const detail = h("div.stack");
+      const loadRows = async (a) => {
+        pick = a;
+        const p = new URLSearchParams({ app: a.app, user: a.user, limit: 1000 });
+        const [net, use] = await Promise.all([api(`/cases/${ctx.cid}/evidence/${ctx.eid}/fs/${ctx.fi}/srum?${p}`), api(`/cases/${ctx.cid}/evidence/${ctx.eid}/fs/${ctx.fi}/srum?kind=usage&${p}`)]);
+        detail.replaceChildren(
+          card(`${a.app.split("\\").pop()}, hour by hour`, h("p.muted", { style: { margin: 0 } }, a.app + (a.user ? `, user ${a.user}` : "")),
+            net.items.length ? table([`Hour ending (${zoneName()})`, "Sent", "Received", "Network", "Interface"], net.items.map((x) => h("tr", h("td.mono", t16(x.t)), h("td.num", { class: x.sent >= 104857600 ? "bad-text" : null }, bytes(x.sent)), h("td.num", bytes(x.received)), h("td", x.profile), h("td", x.interface)))) : null,
+            net.total > net.items.length ? h("p.muted", `newest ${num(net.items.length)} of ${num(net.total)} hours`) : null,
+            use.items.length ? table([`Hour ending (${zoneName()})`, "Disk read", "Disk written", "CPU cycles (foreground)", "CPU cycles (background)"], use.items.map((x) => h("tr", h("td.mono", t16(x.t)), h("td.num", bytes(x.read)), h("td.num", bytes(x.written)), h("td.num", num(x.foreground)), h("td.num", num(x.background))))) : null));
+        detail.scrollIntoView({ block: "start", behavior: "smooth" });
+      };
+      const fill = () => out.replaceChildren(table(["Program", "User", "Sent", "Received", "Disk read", "Disk written", "First", "Last"],
+        s.apps.filter((a) => !q || (a.app + " " + a.user).toLowerCase().includes(q)).map((a) =>
+          h("tr", { class: pick === a ? "sel" : null, onclick: () => { loadRows(a); fill(); } },
+            h("td.nm", h("b", a.app.split("\\").pop()), h("div.muted", a.app)), h("td", a.user),
+            h("td.num", { class: a.sent >= 1073741824 ? "bad-text" : null }, bytes(a.sent)), h("td.num", bytes(a.received)), h("td.num", bytes(a.read)), h("td.num", bytes(a.written)),
+            h("td.mono", t16(a.first)), h("td.mono", t16(a.last))))));
+      fill();
+      return [
+        card("SRUM (System Resource Usage Monitor)", kv([["Covers", s.first ? `${t16(s.first)} to ${t16(s.last)}` : "no records"], ["Programs", num(s.apps.length)],
+          ["Hourly records", r.srum_rows ? `${num(r.srum_rows.network)} network, ${num(r.srum_rows.usage)} resource use${s.dropped ? ` (the oldest ${num(s.dropped)} not kept)` : ""}` : ""], ["Database", fileOf(s.file)]]),
+          s.dirty ? h("p", { style: { color: "var(--warn)", margin: 0 } }, "Not cleanly closed: the newest hours may be only in its transaction logs (SRU*.log), which are not read.") : null,
+          s.error ? h("p.bad-text", s.error) : null),
+        filterBox("Filter by program or user...", (v) => { q = v; fill(); }),
+        h("p.muted", { style: { fontSize: "12.5px" } }, "Windows writes, about once an hour, how many bytes each program sent and received over which network and how much it read and wrote to disk, per user, and keeps about 30 to 60 days. A program that sent gigabytes is worth a look (cloud sync and copy tools such as rclone are a common way to take data out). Click a program for its hours. Times are when Windows wrote the record, at the end of the hour it covers."),
+        out, detail,
+        s.connections.length ? card("Network connections", table([`Connected (${zoneName()})`, "For", "Network", "Interface"], s.connections.slice().reverse().map((c) => h("tr", h("td.mono", t16(c.start)), h("td", `${Math.floor(c.seconds / 3600)} h ${Math.floor(c.seconds % 3600 / 60)} min`), h("td", c.profile), h("td", c.interface))))) : null,
+      ];
+    },
     journal: () => {
       const kinds = [["", "All"], ["created", "Created"], ["deleted", "Deleted"], ["renamed", "Renamed"], ["changed", "Other changes"]];
       let kind = "", q = "", order = "", shown = 0, total = 0;
@@ -1565,7 +1601,7 @@ async function systemTab(ctx) {
         h("div.row", status, more)];
     },
     exec: () => {
-      const srcs = ["", "Prefetch", "UserAssist", "Amcache", "ShimCache", "Event 4688"];
+      const srcs = ["", "Prefetch", "UserAssist", "BAM", "DAM", "Amcache", "ShimCache", "Event 4688"];
       let src = "", q = "";
       const out = h("div");
       const fill = () => out.replaceChildren(table([`Last run (${zoneName()})`, "Program", "Source", "Runs", "User", "Detail"],
@@ -1578,7 +1614,7 @@ async function systemTab(ctx) {
       drawS();
       fill();
       return [h("div.row.wrap", s2, filterBox("Filter by program, detail or hash...", (v) => { q = v; fill(); })),
-        h("p.muted", { style: { fontSize: "12.5px" } }, "Prefetch and UserAssist prove a program ran (with counts and times). Amcache records when a program was first seen. ShimCache lists programs Windows checked for compatibility; on Windows 10 and later an entry alone does not prove it ran."), out];
+        h("p.muted", { style: { fontSize: "12.5px" } }, "Prefetch and UserAssist prove a program ran (with counts and times). BAM and DAM keep the last run of each program per user for about a week. Amcache records when a program was first seen. ShimCache lists programs Windows checked for compatibility; on Windows 10 and later an entry alone does not prove it ran."), out];
     },
     files: () => {
       let q = "";

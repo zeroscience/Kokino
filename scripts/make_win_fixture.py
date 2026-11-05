@@ -63,8 +63,10 @@ def main():
     def parent(path):
         d = path.rsplit("/", 1)[0]
         if d not in dirs:
-            up, name = d.rsplit("/", 1)
-            dirs[d] = mkdir(name, parent(d))
+            if "/" in d:
+                dirs[d] = mkdir(d.rsplit("/", 1)[1], parent(d))
+            else:
+                dirs[d] = mkdir(d, ref(5, vol.read(5)))  # a new top-level folder
         return dirs[d]
 
     files = fixture_windows.build()

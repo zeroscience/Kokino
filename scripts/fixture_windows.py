@@ -246,9 +246,29 @@ def hive_system():
         path_key(cs + "\\Services\\updsvc", [sz("ImagePath", "C:\\Users\\Public\\updsvc.exe -k netsvc"), dword("Start", 2), dword("Type", 16), sz("DisplayName", "Windows Update Helper"), sz("ObjectName", "LocalSystem")], ts=ft(2026, 10, 21, 2, 14)),
         path_key(cs + "\\Services\\Tcpip", [sz("ImagePath", "System32\\drivers\\tcpip.sys"), dword("Start", 0), dword("Type", 1)]),
         path_key(cs + "\\Services\\Spooler", [sz("ImagePath", "%SystemRoot%\\System32\\spoolsv.exe"), dword("Start", 2), dword("Type", 16)]),
+        # BAM (Windows 10 1809+): last run per program for alice; one for DAM.
+        path_key(cs + "\\Services\\bam\\State\\UserSettings\\" + SID_ALICE, [
+            binary("\\Device\\HarddiskVolume3\\Users\\alice\\sdelete64.exe", struct.pack("<QQQ", ft(2026, 10, 20, 9, 41, 30), 0, 2)),
+            binary("\\Device\\HarddiskVolume3\\Program Files\\VeraCrypt\\VeraCrypt.exe", struct.pack("<QQQ", ft(2026, 10, 20, 10, 50, 5), 0, 2)),
+            binary("Microsoft.Windows.Explorer", struct.pack("<QQQ", ft(2026, 10, 21, 2, 8), 0, 0)),
+            dword("Version", 1), dword("SequenceNumber", 412),
+        ], ts=ft(2026, 10, 21, 2, 8)),
+        path_key(cs + "\\Services\\dam\\State\\UserSettings\\" + SID_ALICE, [
+            binary("\\Device\\HarddiskVolume3\\Windows\\System32\\notepad.exe", struct.pack("<QQ", ft(2026, 10, 19, 17, 30), 0)),
+        ]),
         path_key("MountedDevices", [binary("\\DosDevices\\E:", u16s("\\??\\USBSTOR#Disk&Ven_SanDisk&Prod_Cruzer_Blade&Rev_1.00#4C530001231109115023&0#{53f56307-b6bf-11d0-94f2-00a0c91efb8b}", False))]),
     ]
     return write_hive(Key("ROOT", [], merge(keys), ts=ft(2026, 10, 21, 18, 5)), "\\??\\C:\\Windows\\System32\\config\\SYSTEM")
+
+
+WLAN_IF = "{6F1D3A1C-2B6E-4C8A-9A51-0D7C2E4B8F10}"
+WLAN_PROFILE = "{3C9A6E21-7B44-4D0E-9F12-6A5B8C7D0E11}"
+
+
+def wlan_profile_xml():
+    return ('<?xml version="1.0"?>\n<WLANProfile xmlns="http://www.microsoft.com/networking/WLAN/profile/v1">\n'
+            '\t<name>LabWiFi</name>\n\t<SSIDConfig><SSID><name>LabWiFi</name></SSID></SSIDConfig>\n'
+            '\t<connectionType>ESS</connectionType>\n</WLANProfile>\n').encode()
 
 
 def hive_software():
@@ -260,6 +280,8 @@ def hive_software():
         path_key(nt + "\\ProfileList\\S-1-5-18", [sz("ProfileImagePath", "%systemroot%\\system32\\config\\systemprofile")]),
         path_key(nt + "\\ProfileList\\" + SID_ALICE, [sz("ProfileImagePath", "C:\\Users\\alice")], ts=ft(2025, 3, 2, 8, 10)),
         path_key(nt + "\\ProfileList\\" + SID_SVC, [sz("ProfileImagePath", "C:\\Users\\svc_backup")], ts=ft(2026, 10, 21, 2, 20)),
+        # Wi-Fi profile index 7 (SRUM's L2ProfileId); its name is in the XML file.
+        path_key("Microsoft\\WlanSvc\\Interfaces\\" + WLAN_IF + "\\Profiles\\" + WLAN_PROFILE, [dword("ProfileIndex", 7), dword("Flags", 0)]),
         path_key(nt + "\\NetworkList\\Profiles\\{A1B2C3D4-0000-4000-8000-000000000001}", [sz("ProfileName", "LabWiFi"), sz("Description", "LabWiFi"), dword("Category", 1), dword("NameType", 0x47),
                  binary("DateCreated", systemtime(2025, 3, 2, 9, 0)), binary("DateLastConnected", systemtime(2026, 10, 21, 8, 0))]),
         path_key(nt + "\\NetworkList\\Profiles\\{A1B2C3D4-0000-4000-8000-000000000002}", [sz("ProfileName", "Airport-Guest"), sz("Description", "Airport-Guest"), dword("Category", 0), dword("NameType", 0x47),
@@ -770,6 +792,7 @@ def build():
         "Windows/AppCompat/Programs/Amcache.hve": hive_amcache(),
         "Users/alice/NTUSER.DAT": hive_ntuser(),
         "Users/alice/AppData/Local/Microsoft/Windows/UsrClass.dat": hive_usrclass(),
+        "ProgramData/Microsoft/Wlansvc/Profiles/Interfaces/" + WLAN_IF + "/" + WLAN_PROFILE + ".xml": wlan_profile_xml(),
         "Windows/System32/winevt/Logs/Security.evtx": log_security(),
         "Windows/System32/winevt/Logs/System.evtx": log_system(),
         "Windows/System32/winevt/Logs/Microsoft-Windows-TerminalServices-LocalSessionManager%4Operational.evtx": log_rdp(),
@@ -777,6 +800,10 @@ def build():
     }
     for name, data in prefetch_files().items():
         out["Windows/Prefetch/" + name] = data
+    # SRUM: the small-page database from make_srum_fixture.py (written by esent.dll).
+    srum = os.path.join(OUT, "SRUDB-4k.dat")
+    if os.path.exists(srum):
+        out["Windows/System32/sru/SRUDB.dat"] = open(srum, "rb").read()
     for name, data in recent_files().items():
         out[RECENT + name] = data
     return out

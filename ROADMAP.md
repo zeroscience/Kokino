@@ -58,7 +58,10 @@ checked against public test images with known answers where they exist
 - [x] Names of deleted files left in folder index slack ($I30) and in $LogFile (unreleased)
 - [x] ShellBags (UsrClass.dat and NTUSER.DAT) (unreleased)
 - [ ] $LogFile transactions in full (redo/undo of MFT changes)
-- [ ] SRUM, BAM/DAM, scheduled tasks, deleted registry keys and transaction logs
+- [x] SRUM (network and resource use per program, connections) with an ESE database reader (unreleased)
+- [x] BAM/DAM (unreleased)
+- [ ] SRUM energy, push notification and app timeline tables; other ESE databases (Windows Search, WebCache)
+- [ ] Scheduled tasks, deleted registry keys and transaction logs
 - [ ] Legacy .evt event logs
 
 ### Content

@@ -107,8 +107,10 @@ Deeper NTFS and Windows (unreleased):
 | `indx` | folder index (INDX) records with their fixups, deleted folders' index roots, $LogFile record pages; the name carver with a fixed folder and with any parent accepted | 10 min | 35,329,154 | none |
 | `usn` | change journal records (versions 2, 3 and 4), split across two buffers as the reader hands them over, grouping into changes, $Max | 10 min | 8,954,455 | none |
 | `shellbags` | BagMRU trees in a hive, every shell item kind (root, drive, folder with extension blocks, network, ZIP, URI, control panel, delegate) | 10 min | 15,785,595 | none |
+| `ese` | ESE databases (seeds written by esent.dll, 4 and 32 KiB pages): header, pages and tags, B+ trees, catalog, every table's records, long values, 7-bit and XPRESS decompression, and the SRUM reader on top | 15 min | 532,995 | none |
+| `registry` | again, as BAM and DAM are read from the SYSTEM hive | 5 min | 26,319,961 | none |
 
-In all: 292,355,638 inputs over 24 targets, and 28 distinct problems
+In all: 319,208,594 inputs over 25 targets, and 28 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed

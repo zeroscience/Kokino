@@ -77,6 +77,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/web", get(web))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/windows", get(windows))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/journal", get(journal))
+        .route("/cases/{cid}/evidence/{eid}/fs/{fi}/srum", get(srum))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/indicator/{id}", get(indicator_files))
         .route("/cases/{cid}/evidence/{eid}/binmap", get(image_binmap))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/file/{idx}/binmap", get(file_binmap))
@@ -1106,6 +1107,9 @@ async fn windows(State(st): St, Path((cid, eid, fi)): Path<(String, String, usiz
         o.remove("hits");
     }
     let mut files = files;
+    if let Some(s) = &f.windows.srum {
+        files.insert(s.file, path(Some(s.file)));
+    }
     for b in &f.windows.shellbags {
         files.insert(b.file, path(Some(b.file)));
         if let Some(v) = b.on_volume {
@@ -1120,7 +1124,38 @@ async fn windows(State(st): St, Path((cid, eid, fi)): Path<(String, String, usiz
             "first": j.first, "last": j.last, "records": j.records, "dropped": j.dropped, "error": j.error, "changes": j.changes.len(),
             "created_files": count(kokino_artifacts::usn::FILE_CREATE), "deleted_files": count(kokino_artifacts::usn::FILE_DELETE), "renamed_files": count(kokino_artifacts::usn::RENAME_NEW_NAME)})
     });
-    Ok(Json(json!({"schema": l.analysis.schema, "fs": f.volume.fs_label, "windows": f.windows.without_journal(), "journal": journal, "linux": linux, "files": files})))
+    let srum_rows = f.windows.srum_rows().map(|(n, u)| json!({"network": n.len(), "usage": u.len()}));
+    Ok(Json(json!({"schema": l.analysis.schema, "fs": f.volume.fs_label, "windows": f.windows.without_journal(), "journal": journal, "srum_rows": srum_rows, "linux": linux, "files": files})))
+}
+
+#[derive(Deserialize)]
+struct SrumQ {
+    /// "network" (default) or "usage"
+    kind: Option<String>,
+    /// Only this program and user (exact).
+    app: Option<String>,
+    user: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+/// SRUM's hourly rows, newest first, for one program or all.
+async fn srum(State(st): St, Path((cid, eid, fi)): Path<(String, String, usize)>, Query(q): Query<SrumQ>) -> R {
+    let l = st.loaded(&cid, &eid)?;
+    let f = fs_of(&l, fi)?;
+    let Some((net, usage)) = f.windows.srum_rows() else { return Ok(Json(json!({"total": 0, "offset": 0, "items": []}))) };
+    let off = q.offset.unwrap_or(0);
+    let lim = q.limit.unwrap_or(300).min(3000);
+    let ok = |app: &str, user: &str| q.app.as_deref().is_none_or(|a| a == app) && q.user.as_deref().is_none_or(|u| u == user);
+    let iso = |t: u64| if t == 0 { String::new() } else { filetime_to_iso(t) };
+    let (total, items): (usize, Vec<Value>) = if q.kind.as_deref() == Some("usage") {
+        let hits: Vec<_> = usage.iter().rev().filter(|x| ok(&x.app, &x.user)).collect();
+        (hits.len(), hits.into_iter().skip(off).take(lim).map(|x| { let mut v = json!(x); v["t_iso"] = json!(iso(x.t)); v }).collect())
+    } else {
+        let hits: Vec<_> = net.iter().rev().filter(|x| ok(&x.app, &x.user)).collect();
+        (hits.len(), hits.into_iter().skip(off).take(lim).map(|x| { let mut v = json!(x); v["t_iso"] = json!(iso(x.t)); v }).collect())
+    };
+    Ok(Json(json!({"total": total, "offset": off, "items": items})))
 }
 
 #[derive(Deserialize)]
@@ -2006,6 +2041,22 @@ fn report_windows(h: &mut String, w: &kokino_analysis::windows::WindowsArtifacts
                 h.push_str(&format!("<tr><td class=bad><code>{}</code></td><td><code>{}</code></td><td>{}</td></tr>", esc(&c.old_path), esc(&c.path), t(c.c.t)));
             }
             h.push_str("</table>");
+        }
+    }
+    if let Some(s) = w.srum.as_ref().filter(|s| s.first > 0) {
+        let top: Vec<&kokino_analysis::windows::SrumApp> = s.apps.iter().filter(|a| a.sent >= 1 << 20).take(20).collect();
+        h.push_str(&format!("<h4>Network use per program (SRUM, {} to {} UTC)</h4>", t(s.first), t(s.last)));
+        if top.is_empty() {
+            h.push_str("<p>No program sent 1 MiB or more.</p>");
+        } else {
+            h.push_str("<table><tr><th>Program</th><th>User</th><th>Sent (bytes)</th><th>Received (bytes)</th><th>First (UTC)</th><th>Last (UTC)</th></tr>");
+            for a in top {
+                h.push_str(&format!("<tr><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>", esc(&a.app), esc(&a.user), a.sent, a.received, t(a.first), t(a.last)));
+            }
+            h.push_str("</table>");
+        }
+        if s.dirty {
+            h.push_str("<p class=muted>The SRUM database was not cleanly closed; the newest hours may be only in its transaction logs, which were not read.</p>");
         }
     }
     let odd: Vec<&kokino_analysis::windows::Autorun> = w.autoruns.iter().filter(|a| a.unusual).collect();

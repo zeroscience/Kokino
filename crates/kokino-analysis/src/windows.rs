@@ -6,14 +6,15 @@
 //! deleted copies included, reads them through the NTFS layer and turns
 //! them into what an examiner asks first: which computer and accounts,
 //! which USB devices and networks, what was installed and set to start
-//! automatically, what ran, which files and folders were opened (ShellBags
-//! included), what happened to files (the change journal), and the notable
-//! events (logons, log clearing, service and account creation, remote
-//! desktop, PowerShell).
+//! automatically, what ran (BAM included), which files and folders were
+//! opened (ShellBags included), what happened to files (the change journal),
+//! how much each program used the network and the disk (SRUM), and the
+//! notable events (logons, log clearing, service and account creation,
+//! remote desktop, PowerShell).
 
 use crate::FileRow;
 use kokino_artifacts::registry::{Hive, Key};
-use kokino_artifacts::{evtx, jumplist, lnk, prefetch, registry, shellbags, usn};
+use kokino_artifacts::{ese, evtx, jumplist, lnk, prefetch, registry, shellbags, usn};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -49,6 +50,75 @@ pub struct WindowsArtifacts {
     /// The NTFS change journal ($UsnJrnl) of this volume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub journal: Option<Journal>,
+    /// System Resource Usage Monitor (SRUDB.dat).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srum: Option<Srum>,
+}
+
+/// What SRUM holds: per program and user, hour by hour, how much it sent
+/// and received over which network, and how much it used the processor
+/// and the disk; and when the computer was connected to which network.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Srum {
+    pub file: u32,
+    /// Not cleanly closed: the newest hours may be only in its logs.
+    pub dirty: bool,
+    pub first: u64,
+    pub last: u64,
+    /// Totals per program and user, most data sent first.
+    pub apps: Vec<SrumApp>,
+    pub network: Vec<SrumNet>,
+    pub usage: Vec<SrumUsage>,
+    pub connections: Vec<SrumConn>,
+    /// Rows not kept (the oldest), beyond the limit.
+    pub dropped: u64,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SrumApp {
+    pub app: String,
+    pub user: String,
+    pub first: u64,
+    pub last: u64,
+    pub sent: u64,
+    pub received: u64,
+    pub read: u64,
+    pub written: u64,
+    /// Processor cycles in the foreground and background.
+    pub foreground: u64,
+    pub background: u64,
+    pub records: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SrumNet {
+    pub t: u64,
+    pub app: String,
+    pub user: String,
+    pub interface: String,
+    pub profile: String,
+    pub sent: u64,
+    pub received: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SrumUsage {
+    pub t: u64,
+    pub app: String,
+    pub user: String,
+    pub foreground: u64,
+    pub background: u64,
+    pub read: u64,
+    pub written: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SrumConn {
+    pub start: u64,
+    pub seconds: u64,
+    pub interface: String,
+    pub profile: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -103,6 +173,11 @@ impl WindowsArtifacts {
         self.sources.is_empty() && self.journal.is_none()
     }
 
+    /// The hourly SRUM rows, which `without_journal` leaves out.
+    pub fn srum_rows(&self) -> Option<(&[SrumNet], &[SrumUsage])> {
+        self.srum.as_ref().map(|s| (s.network.as_slice(), s.usage.as_slice()))
+    }
+
     /// A copy without the change journal, which can hold hundreds of
     /// thousands of changes and is served page by page instead.
     pub fn without_journal(&self) -> WindowsArtifacts {
@@ -123,6 +198,8 @@ impl WindowsArtifacts {
             timeline: vec![],
             shellbags: self.shellbags.clone(),
             journal: None,
+            // Hourly rows are served page by page too.
+            srum: self.srum.as_ref().map(|s| Srum { network: vec![], usage: vec![], ..s.clone() }),
         }
     }
 }
@@ -223,7 +300,7 @@ pub struct Autorun {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Execution {
-    /// Prefetch, UserAssist, ShimCache, Amcache or "Event 4688"
+    /// Prefetch, UserAssist, ShimCache, Amcache, BAM, DAM or "Event 4688"
     pub source: String,
     pub program: String,
     pub user: String,
@@ -317,6 +394,8 @@ enum Kind {
     NtUser,
     UsrClass,
     Amcache,
+    Srum,
+    WlanProfile,
     Evtx,
     Prefetch,
     Lnk,
@@ -338,6 +417,12 @@ fn classify(path: &str) -> Option<Kind> {
     }
     if parts.len() == 8 && parts[1] == "users" && parts[3..].join("/") == "appdata/local/microsoft/windows/usrclass.dat" {
         return Some(Kind::UsrClass);
+    }
+    if p == "/windows/system32/sru/srudb.dat" {
+        return Some(Kind::Srum);
+    }
+    if p.starts_with("/programdata/microsoft/wlansvc/profiles/interfaces/") && p.ends_with(".xml") {
+        return Some(Kind::WlanProfile);
     }
     if p.starts_with("/windows/system32/winevt/logs/") && p.ends_with(".evtx") {
         return Some(Kind::Evtx);
@@ -369,6 +454,9 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
     found.sort_by_key(|(i, _)| (files[*i].e.deleted, *i));
     let total = found.len() as u64;
     let mut hives: Vec<(Kind, usize, Hive)> = vec![];
+    let mut srum_db: Option<(usize, Vec<u8>)> = None;
+    // Wi-Fi profile GUID (as in the file name) -> network name.
+    let mut wlan: HashMap<String, String> = HashMap::new();
     for (n, (i, kind)) in found.into_iter().enumerate() {
         if !progress("Windows artifacts", n as u64, total) {
             break;
@@ -415,6 +503,20 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
                 jump_access(&mut w, jl, i, f);
                 Ok(())
             }
+            Kind::Srum => {
+                if srum_db.is_some() {
+                    src.note = Some("older deleted copy; the live database is used".into());
+                } else {
+                    ese::Db::open(&d)?;
+                    srum_db = Some((i, d));
+                }
+                Ok(())
+            }
+            Kind::WlanProfile => {
+                let name = xml_text(&d, "name").ok_or_else(|| anyhow::anyhow!("no <name> in the profile"))?;
+                wlan.insert(f.e.name.trim_end_matches(".xml").trim_end_matches(".XML").to_ascii_uppercase(), name);
+                Ok(())
+            }
         });
         if let Err(e) = res {
             src.error = Some(format!("{:#}", e));
@@ -449,11 +551,197 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
         }
     }
     link_bags(&mut w, files);
+    if let Some((i, d)) = srum_db {
+        let mut profiles: HashMap<u32, String> = HashMap::new();
+        for (_, _, h) in hives.iter().filter(|(k, _, _)| *k == Kind::Software) {
+            wlan_profiles(h, &wlan, &mut profiles);
+        }
+        srum(&mut w, &d, i, files[i].e.deleted, &profiles);
+    }
     if fs.is_ntfs() {
         journal(&mut w, fs, r, files, &mut *progress);
     }
     finish(&mut w);
     w
+}
+
+/// Text of the first <tag> element in an XML file (UTF-8 or UTF-16).
+fn xml_text(d: &[u8], tag: &str) -> Option<String> {
+    let s = if d.starts_with(&[0xFF, 0xFE]) { kokino_artifacts::bin::utf16(&d[2..]) } else { String::from_utf8_lossy(d).into_owned() };
+    let open = format!("<{}>", tag);
+    let a = s.find(&open)? + open.len();
+    let b = a + s[a..].find('<')?;
+    let t = s[a..b].trim();
+    (!t.is_empty()).then(|| t.to_string())
+}
+
+/// SRUM's L2ProfileId is the ProfileIndex of a Wi-Fi profile in
+/// SOFTWARE\Microsoft\WlanSvc\Interfaces\{interface}\Profiles\{profile};
+/// the profile's name is in its XML file, named after the same GUID.
+fn wlan_profiles(h: &Hive, names: &HashMap<String, String>, out: &mut HashMap<u32, String>) {
+    let Some(ifs) = h.open("Microsoft\\WlanSvc\\Interfaces") else { return };
+    for i in ifs.subkeys() {
+        let Some(ps) = i.subkey("Profiles") else { continue };
+        for p in ps.subkeys() {
+            if let Some(idx) = p.u32("ProfileIndex") {
+                let g = p.name().to_ascii_uppercase();
+                out.insert(idx, names.get(&g).cloned().unwrap_or(g));
+            }
+        }
+    }
+}
+
+const SRUM_NETWORK: &str = "{973F5D5C-1D90-4944-BE8E-24B94231A174}";
+const SRUM_USAGE: &str = "{D10CA2FE-6FCF-4F6D-848E-B2E99266FA89}";
+const SRUM_CONNECTIVITY: &str = "{DD6636C4-8929-4683-974E-22C046A43763}";
+/// Most hourly rows kept per table (the newest).
+const MAX_SRUM_ROWS: usize = 250_000;
+
+/// SRUM times: OLE Automation dates (days since 1899-12-30) or FILETIMEs.
+fn srum_time(v: Option<&ese::Value>) -> u64 {
+    const OLE_EPOCH: f64 = 94_353_120_000_000_000.0;
+    match v {
+        Some(ese::Value::Float(d)) if d.is_finite() && *d > 0.0 => kokino_artifacts::bin::plausible((OLE_EPOCH + d * 864_000_000_000.0) as u64),
+        Some(v) => kokino_artifacts::bin::plausible(v.i64().unwrap_or(0).max(0) as u64),
+        None => 0,
+    }
+}
+
+/// The interface type from the top 16 bits of an interface LUID.
+fn if_type(luid: i64) -> String {
+    match (luid as u64) >> 48 {
+        0 => String::new(),
+        6 => "Ethernet".into(),
+        71 => "Wi-Fi".into(),
+        23 => "PPP".into(),
+        24 => "loopback".into(),
+        131 => "tunnel".into(),
+        243 | 244 => "mobile broadband".into(),
+        t => format!("interface type {}", t),
+    }
+}
+
+fn srum(w: &mut WindowsArtifacts, d: &[u8], file: usize, deleted: bool, profiles: &HashMap<u32, String>) {
+    let mut s = Srum { file: file as u32, ..Default::default() };
+    let db = match ese::Db::open(d) {
+        Ok(db) => db,
+        Err(e) => {
+            s.error = Some(format!("{:#}", e));
+            w.srum = Some(s);
+            return;
+        }
+    };
+    s.dirty = db.dirty();
+    let sids: HashMap<String, String> = w.users.iter().filter(|u| !u.sid.is_empty()).map(|u| (u.sid.clone(), u.name.clone())).collect();
+    // Id map: apps (paths), services and user SIDs, by index.
+    let mut ids: HashMap<i64, String> = HashMap::new();
+    if let Some(t) = db.table("SruDbIdMapTable") {
+        for r in db.rows(t, 1 << 20) {
+            let (Some(ty), Some(idx)) = (r.get("IdType").and_then(|v| v.i64()), r.get("IdIndex").and_then(|v| v.i64())) else { continue };
+            let blob = r.get("IdBlob").and_then(|v| v.bytes()).unwrap_or(&[]);
+            let text = match ty {
+                3 => kokino_artifacts::bin::sid(blob).map(|sid| sids.get(&sid).cloned().unwrap_or(sid)).unwrap_or_default(),
+                _ => {
+                    let t = kokino_artifacts::bin::utf16(blob);
+                    let (p, _) = device_path(&t);
+                    if ty == 1 { format!("{} (service)", p) } else { p }
+                }
+            };
+            ids.insert(idx, text);
+        }
+    } else {
+        s.error = Some("no SruDbIdMapTable: program and user names cannot be resolved".into());
+    }
+    let name = |r: &HashMap<String, ese::Value>, col: &str| -> String {
+        let i = r.get(col).and_then(|v| v.i64()).unwrap_or(0);
+        ids.get(&i).cloned().unwrap_or_else(|| if i == 0 { String::new() } else { format!("[id {}]", i) })
+    };
+    let num = |r: &HashMap<String, ese::Value>, col: &str| r.get(col).and_then(|v| v.i64()).unwrap_or(0).max(0) as u64;
+    let profile = |r: &HashMap<String, ese::Value>| {
+        let p = num(r, "L2ProfileId") as u32;
+        if p == 0 { String::new() } else { profiles.get(&p).cloned().unwrap_or_else(|| format!("profile {}", p)) }
+    };
+    if let Some(t) = db.table(SRUM_NETWORK) {
+        for r in db.rows(t, usize::MAX) {
+            s.network.push(SrumNet {
+                t: srum_time(r.get("TimeStamp")),
+                app: name(&r, "AppId"),
+                user: name(&r, "UserId"),
+                interface: if_type(r.get("InterfaceLuid").and_then(|v| v.i64()).unwrap_or(0)),
+                profile: profile(&r),
+                sent: num(&r, "BytesSent"),
+                received: num(&r, "BytesRecvd"),
+            });
+        }
+    }
+    if let Some(t) = db.table(SRUM_USAGE) {
+        for r in db.rows(t, usize::MAX) {
+            s.usage.push(SrumUsage {
+                t: srum_time(r.get("TimeStamp")),
+                app: name(&r, "AppId"),
+                user: name(&r, "UserId"),
+                foreground: num(&r, "ForegroundCycleTime"),
+                background: num(&r, "BackgroundCycleTime"),
+                read: num(&r, "ForegroundBytesRead") + num(&r, "BackgroundBytesRead"),
+                written: num(&r, "ForegroundBytesWritten") + num(&r, "BackgroundBytesWritten"),
+            });
+        }
+    }
+    if let Some(t) = db.table(SRUM_CONNECTIVITY) {
+        for r in db.rows(t, 1 << 20) {
+            let start = srum_time(r.get("ConnectStartTime"));
+            s.connections.push(SrumConn { start: if start > 0 { start } else { srum_time(r.get("TimeStamp")) }, seconds: num(&r, "ConnectedTime"), interface: if_type(r.get("InterfaceLuid").and_then(|v| v.i64()).unwrap_or(0)), profile: profile(&r) });
+        }
+    }
+    // Totals per program and user.
+    let mut apps: BTreeMap<(String, String), SrumApp> = BTreeMap::new();
+    let span = |t: u64, a: &mut SrumApp| {
+        if t > 0 {
+            a.first = if a.first == 0 { t } else { a.first.min(t) };
+            a.last = a.last.max(t);
+        }
+        a.records += 1;
+    };
+    for n in &s.network {
+        let a = apps.entry((n.app.clone(), n.user.clone())).or_insert_with(|| SrumApp { app: n.app.clone(), user: n.user.clone(), ..Default::default() });
+        a.sent += n.sent;
+        a.received += n.received;
+        span(n.t, a);
+    }
+    for u in &s.usage {
+        let a = apps.entry((u.app.clone(), u.user.clone())).or_insert_with(|| SrumApp { app: u.app.clone(), user: u.user.clone(), ..Default::default() });
+        a.read += u.read;
+        a.written += u.written;
+        a.foreground += u.foreground;
+        a.background += u.background;
+        span(u.t, a);
+    }
+    s.apps = apps.into_values().collect();
+    s.apps.sort_by(|a, b| b.sent.cmp(&a.sent).then(b.written.cmp(&a.written)));
+    let times = s.network.iter().map(|n| n.t).chain(s.usage.iter().map(|u| u.t)).filter(|&t| t > 0);
+    s.first = times.clone().min().unwrap_or(0);
+    s.last = times.max().unwrap_or(0);
+    s.dropped = keep_newest(&mut s.network, MAX_SRUM_ROWS, |x| x.t) + keep_newest(&mut s.usage, MAX_SRUM_ROWS, |x| x.t);
+    s.connections.sort_by_key(|c| c.start);
+    if deleted {
+        s.error.get_or_insert_with(|| "read from a deleted copy of SRUDB.dat".into());
+    }
+    w.srum = Some(s);
+}
+
+/// The SRUM reader on raw bytes, for the fuzzer.
+pub fn fuzz_srum(d: &[u8]) {
+    let mut w = WindowsArtifacts::default();
+    srum(&mut w, d, 0, false, &HashMap::new());
+}
+
+/// Sorts rows by time and keeps the newest `n`; returns how many were
+/// dropped.
+fn keep_newest<T>(v: &mut Vec<T>, n: usize, t: fn(&T) -> u64) -> u64 {
+    v.sort_by_key(t);
+    let drop = v.len().saturating_sub(n);
+    v.drain(..drop);
+    drop as u64
 }
 
 fn bags(w: &mut WindowsArtifacts, h: &Hive, key: &str, source: &str, f: &FileRow, i: usize) {
@@ -604,6 +892,8 @@ fn kind_name(k: Kind) -> &'static str {
         Kind::Sam => "SAM hive",
         Kind::NtUser => "NTUSER.DAT",
         Kind::UsrClass => "UsrClass.dat",
+        Kind::Srum => "SRUM database",
+        Kind::WlanProfile => "Wi-Fi profile",
         Kind::Amcache => "Amcache.hve",
         Kind::Evtx => "Event log",
         Kind::Prefetch => "Prefetch",
@@ -716,6 +1006,49 @@ fn system_hive(w: &mut WindowsArtifacts, h: &Hive) {
             });
         }
     }
+    bam(w, &cs);
+}
+
+/// Background and Desktop Activity Moderator (Windows 10 1709 and later):
+/// per user SID, the last time each program ran, in the first 8 bytes of a
+/// value named after it. 1709 to 1803 keep it under Services\bam\UserSettings,
+/// later versions under Services\bam\State\UserSettings. Entries are
+/// removed about a week after the program last ran, and at some reboots.
+fn bam(w: &mut WindowsArtifacts, cs: &Key) {
+    for (svc, label) in [("bam", "BAM"), ("dam", "DAM")] {
+        for sub in ["State\\UserSettings", "UserSettings"] {
+            let Some(us) = cs.open(&format!("Services\\{}\\{}", svc, sub)) else { continue };
+            for k in us.subkeys() {
+                let sid = k.name();
+                for v in k.values() {
+                    let t = kokino_artifacts::bin::plausible(kokino_artifacts::bin::u64_at(&v.data, 0).unwrap_or(0));
+                    if v.data.len() < 8 || t == 0 || v.name == "Version" || v.name == "SequenceNumber" {
+                        continue;
+                    }
+                    let (program, volume) = device_path(&v.name);
+                    w.execution.push(Execution {
+                        source: label.into(),
+                        tool: is_tool(&program),
+                        program,
+                        user: sid.clone(),
+                        times: vec![t],
+                        detail: if volume.is_empty() { "last run".into() } else { format!("last run, from {}", volume) },
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// "\Device\HarddiskVolume3\Windows\x.exe" -> ("\Windows\x.exe", "HarddiskVolume3").
+fn device_path(p: &str) -> (String, String) {
+    if let Some(rest) = p.strip_prefix("\\Device\\") {
+        if let Some(i) = rest.find('\\') {
+            return (rest[i..].to_string(), rest[..i].to_string());
+        }
+    }
+    (p.to_string(), String::new())
 }
 
 /// Executables run from places normal software does not live.
@@ -1345,6 +1678,11 @@ fn iso(ft: u64) -> String {
 fn finish(w: &mut WindowsArtifacts) {
     // Name accounts that events only identify by SID.
     let names: Vec<(String, String)> = w.users.iter().filter(|u| !u.sid.is_empty()).map(|u| (u.sid.clone(), u.name.clone())).collect();
+    for x in w.execution.iter_mut().filter(|x| x.user.starts_with("S-1-")) {
+        if let Some((_, n)) = names.iter().find(|(s, _)| *s == x.user) {
+            x.user = n.clone();
+        }
+    }
     for e in &mut w.events {
         for (sid, name) in &names {
             if e.summary.contains(sid.as_str()) {
@@ -1403,6 +1741,16 @@ fn finish(w: &mut WindowsArtifacts) {
     for b in &w.shellbags {
         if b.bag.opened > 0 {
             t.push(WinTime { t: b.bag.opened, kind: "OPEN".into(), what: b.bag.path.clone(), detail: format!("folder opened (ShellBags){}", if b.user.is_empty() { String::new() } else { format!(", user {}", b.user) }) });
+        }
+    }
+    if let Some(s) = &w.srum {
+        // Hours in which a program sent a lot (100 MiB or more), and
+        // network connections.
+        for n in s.network.iter().filter(|n| n.sent >= 100 << 20) {
+            t.push(WinTime { t: n.t, kind: "NET".into(), what: n.app.clone(), detail: format!("sent {} bytes, received {} in the hour before (SRUM){}{}", n.sent, n.received, if n.profile.is_empty() { String::new() } else { format!(", network {}", n.profile) }, if n.user.is_empty() { String::new() } else { format!(", user {}", n.user) }) });
+        }
+        for c in &s.connections {
+            t.push(WinTime { t: c.start, kind: "NET".into(), what: if c.profile.is_empty() { c.interface.clone() } else { c.profile.clone() }, detail: format!("connected for {} min ({}, SRUM)", c.seconds / 60, c.interface) });
         }
     }
     if let Some(j) = &w.journal {
@@ -1475,6 +1823,22 @@ pub fn impact(w: &WindowsArtifacts) -> Vec<String> {
         }
         if let Some(e) = &j.error {
             out.push(format!("Change journal: {}.", e));
+        }
+    }
+    if let Some(s) = &w.srum {
+        if s.first > 0 {
+            let top: Vec<String> = s.apps.iter().filter(|a| a.sent >= 1 << 20).take(3).map(|a| format!("{} ({} MiB)", base_name(&a.app), a.sent >> 20)).collect();
+            out.push(format!(
+                "SRUM covers {} to {}: {} program(s){}.{}",
+                iso(s.first),
+                iso(s.last),
+                s.apps.len(),
+                if top.is_empty() { String::new() } else { format!("; most data sent by {}", top.join(", ")) },
+                if s.dirty { " The database was not cleanly closed: the newest hours may be only in its transaction logs (SRU*.log), which are not read." } else { "" }
+            ));
+        }
+        if let Some(e) = &s.error {
+            out.push(format!("SRUM: {}.", e));
         }
     }
     if !w.shellbags.is_empty() {
