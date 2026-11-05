@@ -54,8 +54,11 @@ checked against public test images with known answers where they exist
 - [ ] Volume Shadow Copies
 
 ### Deeper NTFS and Windows
-- [ ] $UsnJrnl and $LogFile; names left in directory index slack ($I30)
-- [ ] ShellBags, SRUM, BAM/DAM, scheduled tasks, deleted registry keys and transaction logs
+- [x] $UsnJrnl (change journal: every file change, grouped per round, paths rebuilt from the journal for folders that are gone) (unreleased)
+- [x] Names of deleted files left in folder index slack ($I30) and in $LogFile (unreleased)
+- [x] ShellBags (UsrClass.dat and NTUSER.DAT) (unreleased)
+- [ ] $LogFile transactions in full (redo/undo of MFT changes)
+- [ ] SRUM, BAM/DAM, scheduled tasks, deleted registry keys and transaction logs
 - [ ] Legacy .evt event logs
 
 ### Content

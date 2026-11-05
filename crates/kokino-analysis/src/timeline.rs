@@ -6,8 +6,9 @@
 //!
 //! Browser activity joins the same timeline: page visits, download starts
 //! and searches, each pointing into `FsAnalysis::web`. So do Windows
-//! artifacts (program runs, files opened, USB devices, installs, networks
-//! and notable events), each pointing into `FsAnalysis::windows.timeline` or, numbered after
+//! artifacts (program runs, files and folders opened, USB devices,
+//! installs, networks, notable events and files created, deleted or renamed
+//! per the change journal), each pointing into `FsAnalysis::windows.timeline` or, numbered after
 //! those, `FsAnalysis::linux.timeline`.
 
 use crate::FileRow;
@@ -20,7 +21,7 @@ pub struct TimelineEvent {
     pub t: u64,
     pub macb: String,
     /// "SI" or "FN" (file times), "VISIT", "DL" or "SEARCH" (browser),
-    /// "EXEC", "OPEN", "USB", "INST", "NET" or "EVT" (Windows artifacts).
+    /// "EXEC", "OPEN", "USB", "INST", "NET", "EVT" or "USN" (Windows artifacts).
     pub src: &'static str,
     /// Index into `FsAnalysis::files`, the matching `web` list, or
     /// `windows.timeline`.
@@ -32,7 +33,7 @@ pub fn is_web(src: &str) -> bool {
 }
 
 pub fn is_windows(src: &str) -> bool {
-    matches!(src, "EXEC" | "OPEN" | "USB" | "INST" | "NET" | "EVT")
+    matches!(src, "EXEC" | "OPEN" | "USB" | "INST" | "NET" | "EVT" | "USN")
 }
 
 /// Events that do not point at a file row.
@@ -93,6 +94,7 @@ pub fn build(files: &[FileRow], web: &WebActivity, windows: &WindowsArtifacts, l
             "USB" => "USB",
             "INST" => "INST",
             "NET" => "NET",
+            "FILE" => "USN",
             _ => "EVT",
         };
         out.push(TimelineEvent { t: w.t, macb: String::new(), src, idx: i as u32 });

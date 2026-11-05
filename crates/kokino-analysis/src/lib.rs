@@ -211,7 +211,7 @@ fn content_facts<R: std::io::Read + std::io::Seek>(fs: &Fs, r: &mut R, e: FsEntr
         e,
     };
     let is_meta = (fs.is_ntfs() && row.e.record < 24) || row.e.path.starts_with("/$Extend");
-    if is_meta {
+    if is_meta || row.e.name_only.is_some() {
         return row;
     }
     // Named streams first: hiding a payload in the ADS of an empty file or a
@@ -420,6 +420,39 @@ mod tests {
             assert!(tl.iter().any(|e| e.src == src), "{} not in timeline", src);
         }
         assert!(fs.stats.impact.iter().any(|l| l.contains("USB storage device")));
+
+        // Change journal planted by make_win_fixture.py (journal()).
+        let j = w.journal.as_ref().expect("change journal");
+        assert!(j.error.is_none(), "{:?}", j.error);
+        assert_eq!(j.records, 87);
+        assert!(j.size > j.stored && j.created > 0, "{} {} {} {:?}", j.size, j.stored, j.created, j.max);
+        let ch = |path: &str, what: &str| j.changes.iter().find(|c| c.path == path && c.what == what).unwrap_or_else(|| panic!("{} {} missing: {:?}", what, path, j.changes.iter().map(|c| (&c.path, &c.what)).collect::<Vec<_>>()));
+        // A folder that exists only in the journal names its file's path.
+        assert!(ch("/Users/alice/Exfil/dump.7z", "created, data extended").c.first > 0);
+        ch("/Users/alice/Exfil/dump.7z", "deleted");
+        assert!(ch("/Users/alice/Exfil", "deleted").dir);
+        let first = ch("/Users/alice/AAAAAAAAAAAAAAAAAA.AAA", "renamed");
+        assert_eq!(first.old_path, "/Users/alice/nightjar-notes.txt");
+        ch("/Users/alice/ZZZZZZZZZZZZZZZZZZ.ZZZ", "deleted");
+        ch("/Users/alice/report-v3.docx", "created");
+        let gone = ch("/Users/alice/Pictures/chart.png", "deleted");
+        assert_eq!(gone.file.map(|i| fs.files[i as usize].e.path.as_str()), Some("/Users/alice/Pictures/chart.png"));
+        assert!(fs.indicators.iter().any(|i| i.id == "usn_wipe_rename" && i.count == 1));
+        assert!(!fs.indicators.iter().any(|i| i.id == "usn_journal_recreated" || i.id == "usnjrnl_missing"));
+        assert!(fs.stats.impact.iter().any(|l| l.starts_with("The change journal covers")));
+        assert!(tl.iter().any(|e| e.src == "USN"));
+
+        // ShellBags from UsrClass.dat (fixture_windows.py, hive_usrclass()).
+        let paths: Vec<&str> = w.shellbags.iter().map(|b| b.bag.path.as_str()).collect();
+        assert_eq!(paths, vec!["This PC", "C:", r"C:\Users", r"C:\Users\alice", r"C:\Users\alice\Documents", "E:", r"E:\Projects 2026", r"E:\Nightjar leak", r"\\fileserver.lab.test\finance", r"\\fileserver.lab.test\finance\Q3"]);
+        let leak = w.shellbags.iter().find(|b| b.bag.path == r"E:\Nightjar leak").unwrap();
+        assert_eq!((leak.user.as_str(), leak.source.as_str(), leak.bag.mru, leak.bag.mft), ("alice", "UsrClass.dat", Some(0), Some((41, 1))));
+        assert_eq!(kokino_core::time::filetime_to_iso(leak.bag.opened), "2026-10-20T09:47:00.0000000Z");
+        assert_eq!(kokino_core::time::filetime_to_iso(leak.bag.created)[..19], *"2026-10-20T09:40:00");
+        let projects = w.shellbags.iter().find(|b| b.bag.path == r"E:\Projects 2026").unwrap();
+        assert_eq!((projects.bag.mru, projects.bag.opened), (Some(1), 0));
+        assert!(w.sources.iter().any(|s| s.kind == "UsrClass.dat" && s.error.is_none()));
+        assert!(fs.stats.impact.iter().any(|l| l.contains("ShellBags record 10 folder(s)")));
     }
 
     /// Ground truth from scripts/make_af_fixture.py: every planted trace must

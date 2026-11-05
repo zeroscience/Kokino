@@ -5,6 +5,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- NTFS: names of deleted files whose MFT record was reused, recovered from folder index slack ($I30), the indexes of deleted folders, and $LogFile (which records every index change with the entry). Each is listed as a deleted, name-only entry with its $FILE_NAME times and size, the MFT record it had and a note saying where it was found and what that record holds now; earlier names of renamed or moved files are listed the same way. They have no content (reads say so) and are skipped by hashing. On the NIST CFReDS NTFS images the deleted files listed now match NIST's counts closely (case 08 exactly, VALIDATION.md); the missing names were mostly in $LogFile, not in index slack as VALIDATION.md had assumed. Hard links are recognized as second names of the same record.
+- NTFS change journal ($Extend\$UsnJrnl:$J, record versions 2 and 3, and $Max): every record read (sparse parts skipped), records of one round of changes combined into one change (created, data written, renamed with the old name, deleted, ...), paths rebuilt from today's folders or, for folders that are gone, from the journal itself, and each change linked to the file on the volume when its MFT reference and name match. New System summary page "Change journal" (filter by kind and path, paged), a journal summary on the overview (period covered, counts, when the journal was created), a "Change journal" section in the file details, and created, deleted and renamed files on the Timeline (source USN). Up to 250,000 changes are kept (the newest); the summary says when older ones were dropped.
+- ShellBags: every folder a user opened in Explorer, from UsrClass.dat (Windows 7 and later) and NTUSER.DAT (BagMRU and ShellNoRoam), with full paths rebuilt from the shell items (drives, folders with long names, network shares, ZIP folders, known folders, URIs, delegate items), last opened time, the folder's own times and MFT reference, and a link to the folder when it is on this volume. New System summary page "Folders (ShellBags)"; opened folders on the Timeline.
+- Two anti-forensics indicators (24 in total): `usn_wipe_rename` (the change journal shows files renamed AAAA.AAA to ZZZZ.ZZZ, SDelete's pattern; the journal keeps the original names) and `usn_journal_recreated` (the journal was created long after the volume, as when it is deleted and recreated).
+- Fuzz targets `indx` (folder index records and $LogFile pages), `usn` and `shellbags`, and another round of `ntfs` now that it reads indexes and $LogFile: 60,266,057 inputs, no problems found. Totals: 292,355,638 inputs over 24 targets (SECURITY.md).
+- Test image `disk-win.img` now also holds UsrClass.dat with ShellBags and a change journal (`scripts/make_win_fixture.py`); `scripts/validate_cfreds.py` counts names on NTFS too and can run one file system.
+
+### Changed
+- An NTFS record that cannot be parsed now gets its name back from its folder's index when the index still lists it, with a note pointing at the unreadable record (the `testfs1` fixture has one, a record split over two MFT runs).
+- Hashing (and `kokino files`) skip name-only entries, which have no content.
+
 ## [1.2.7] - 2026-11-04
 
 Virtual disks, optical media and Mac disks: VHD, VHDX and VMDK (with snapshots), ISO 9660 and UDF (with multisession history), HFS+ and APFS (with deleted files), and an update check that runs only when asked.

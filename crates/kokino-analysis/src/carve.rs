@@ -951,11 +951,11 @@ pub(crate) mod tests {
         let got: Vec<(&str, u64, bool)> = r.files.iter().map(|f| (f.kind.as_str(), f.len, f.complete)).collect();
         let want = [
             ("png", 720, true),
-            ("evtx-chunk", 65_536, true),
+            ("doc", 8192, true),
             ("sqlite", 2048, true),
             ("jpeg", 237, true),
             ("docx", 346, true),
-            ("doc", 8192, true),
+            ("evtx-chunk", 65_536, true),
             ("gif", 43, true),
             ("bmp", 198, true),
             ("pdf", 460, true),
@@ -969,7 +969,8 @@ pub(crate) mod tests {
         assert_eq!(got, want);
         let png = &r.files[0];
         assert_eq!(png.note, "same location as deleted file /Users/alice/Pictures/chart.png");
-        assert!(r.files[1].detail.starts_with("14 records") && r.files[1].detail.ends_with("Security"));
+        let evtx = r.files.iter().find(|f| f.kind == "evtx-chunk").unwrap();
+        assert!(evtx.detail.starts_with("14 records") && evtx.detail.ends_with("Security"));
         assert!(r.files.iter().all(|f| f.offset % 512 == 0 && f.md5.len() == 32 && f.sha256.len() == 64 && !f.beyond_region));
         assert_eq!(r.files.iter().filter(|f| f.region == "Outside partitions").count(), 9);
         // The hash is of exactly the carved bytes.

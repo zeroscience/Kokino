@@ -641,6 +641,7 @@ details.acq[open] .kv { animation: unfold .45s var(--spring); }
 .src.EXEC, .src.EVT { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
 .src.OPEN, .src.USB { color: var(--info); border-color: color-mix(in srgb, var(--info) 40%, transparent); }
 .src.INST, .src.NET { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.src.USN { color: var(--del); border-color: color-mix(in srgb, var(--del) 40%, transparent); }
 /* System summary tables */
 .tbl.sys td.nm { max-width: 460px; overflow-wrap: anywhere; }
 .tbl.sys tr.flagged td { background: color-mix(in srgb, var(--warn) 7%, transparent); }

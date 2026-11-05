@@ -368,6 +368,7 @@ pub fn scan<R: Read + Seek>(v: &IsoVolume, r: &mut R, mut progress: impl FnMut(u
         record_offset: 16 * SECTOR,
         error: None,
         unix: None,
+        name_only: None,
     }];
     let mut by_path: HashMap<String, u64> = HashMap::from([(String::new(), ROOT_RECORD)]);
     let mut live: HashMap<String, u64> = HashMap::new();
@@ -437,6 +438,7 @@ fn entry(rec: &Rec, record: u64, parent: u64, path: &str, is_dir: bool, deleted:
         link_target: rr.symlink.clone(),
     });
     FsEntry {
+        name_only: None,
         record,
         seq: 0,
         parent,

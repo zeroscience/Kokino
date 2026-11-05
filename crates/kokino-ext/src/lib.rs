@@ -885,6 +885,7 @@ impl<'a, R: Read + Seek> Walker<'a, R> {
         });
         let mode = if ino.mode != 0 { ino.mode } else { c.mode };
         FsEntry {
+            name_only: None,
             record,
             seq: 0,
             parent,

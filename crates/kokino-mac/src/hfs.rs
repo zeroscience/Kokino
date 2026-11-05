@@ -569,6 +569,7 @@ fn entry<R: Read + Seek>(v: &HfsVolume, r: &mut R, c: Option<&Cat>, record: u64,
     let xattr_names: Vec<String> = v.xattrs.get(&id).map(|x| x.iter().map(|(n, _)| n.clone()).collect()).unwrap_or_default();
     let quarantine = xattr_names.iter().any(|n| n == "com.apple.quarantine");
     FsEntry {
+        name_only: None,
         record,
         seq: 0,
         parent,

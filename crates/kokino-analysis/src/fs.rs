@@ -110,6 +110,9 @@ impl Fs {
     /// Up to `len` bytes of a stream from `offset` ("" is the main stream;
     /// FAT has no named streams).
     pub fn read<R: Read + Seek>(&self, r: &mut R, e: &FsEntry, stream: &str, offset: u64, len: usize) -> anyhow::Result<Vec<u8>> {
+        if let Some(n) = &e.name_only {
+            anyhow::bail!("no content: this name was recovered from {}, not from an MFT record", n.source);
+        }
         match self {
             Fs::Ntfs(n) => kokino_ntfs::read_stream_with(n, r, e.record, stream, offset, len),
             Fs::Fat(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
@@ -130,6 +133,9 @@ impl Fs {
 
     /// Where a stream's bytes live in the volume.
     pub fn extents<R: Read + Seek>(&self, r: &mut R, e: &FsEntry, stream: &str) -> anyhow::Result<Vec<Extent>> {
+        if e.name_only.is_some() {
+            return Ok(vec![]);
+        }
         match self {
             Fs::Ntfs(n) => kokino_ntfs::stream_extents(n, r, e.record, stream),
             Fs::Fat(_) if !stream.is_empty() => anyhow::bail!("no such stream"),

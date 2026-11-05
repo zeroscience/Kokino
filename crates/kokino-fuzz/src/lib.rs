@@ -24,6 +24,9 @@ pub const TARGETS: &[Target] = &[
     Target { name: "optical", run: optical, seeds: &["tests/fixtures/iso-rr-joliet.iso", "tests/fixtures/iso-udf.iso", "tests/fixtures/iso-multisession.iso"] },
     Target { name: "mac", run: mac, seeds: &["tests/fixtures/hfsplus.img", "tests/fixtures/apfs.img"] },
     Target { name: "ewf", run: ewf, seeds: &["tests/fixtures/disk-af-odd.E01", "tests/fixtures/disk-af.E01"] },
+    Target { name: "indx", run: indx, seeds: &["crates/kokino-fuzz/seeds/indx"] },
+    Target { name: "usn", run: usn, seeds: &["crates/kokino-fuzz/seeds/usn"] },
+    Target { name: "shellbags", run: shellbags, seeds: &["crates/kokino-fuzz/seeds/shellbags"] },
     Target { name: "registry", run: registry, seeds: &["tests/fixtures/win/Users_alice_NTUSER.DAT", "tests/fixtures/win/Windows_System32_config_SAM", "tests/fixtures/win/Windows_System32_config_SOFTWARE", "tests/fixtures/win/Windows_System32_config_SYSTEM", "tests/fixtures/win/Windows_AppCompat_Programs_Amcache.hve"] },
     Target { name: "evtx", run: evtx, seeds: &["tests/fixtures/win/Windows_System32_winevt_Logs_Security.evtx", "tests/fixtures/win/Windows_System32_winevt_Logs_System.evtx", "tests/fixtures/win/Windows_System32_winevt_Logs_Microsoft-Windows-PowerShell_4Operational.evtx"] },
     Target { name: "lnk", run: lnk, seeds: &["tests/fixtures/win/Users_alice_AppData_Roaming_Microsoft_Windows_Recent_keys.txt.lnk", "tests/fixtures/win/Users_alice_AppData_Roaming_Microsoft_Windows_Recent_nightjar.docx.lnk"] },
@@ -225,6 +228,39 @@ fn mac(d: &[u8]) {
     // The decompressors on the raw input too.
     let _ = kokino_mac::decmpfs::lzvn(d.get(..4096).unwrap_or(d), 1 << 16);
     let _ = kokino_mac::decmpfs::decompress(d.get(..4096).unwrap_or(d), d.get(4096..65536));
+}
+
+/// Folder index records and $LogFile pages: the name carver with a fixed
+/// folder, and with every parent accepted (the most permissive case).
+fn indx(d: &[u8]) {
+    let _ = kokino_ntfs::indx::scan_allocation(&mut d.to_vec(), (40, 3), true);
+    let _ = kokino_ntfs::indx::scan_root(d, (5, 5));
+    let _ = kokino_ntfs::indx::scan_logfile(&mut d.to_vec(), &|_| true);
+}
+
+fn usn(d: &[u8]) {
+    let mut g = kokino_artifacts::usn::Grouper::default();
+    // In two pieces, as the reader hands over chunks.
+    let half = d.len() / 2;
+    let used = kokino_artifacts::usn::parse(&d[..half], &mut |r| g.push(r));
+    kokino_artifacts::usn::parse(&d[used..], &mut |r| g.push(r));
+    let (changes, _) = g.finish();
+    for c in changes.iter().take(64) {
+        let _ = kokino_artifacts::usn::describe(c.reasons);
+    }
+    let _ = kokino_artifacts::usn::parse_max(d);
+}
+
+fn shellbags(d: &[u8]) {
+    if let Ok(h) = kokino_artifacts::registry::Hive::parse(d.to_vec()) {
+        for p in ["Local Settings\\Software\\Microsoft\\Windows\\Shell\\BagMRU", "Software\\Microsoft\\Windows\\Shell\\BagMRU"] {
+            if let Some(k) = h.open(p) {
+                let _ = kokino_artifacts::shellbags::walk(&k);
+            }
+        }
+    }
+    let _ = kokino_artifacts::shellbags::shell_item(d);
+    let _ = kokino_artifacts::shellbags::shell_item(d.get(..512).unwrap_or(d));
 }
 
 fn registry(d: &[u8]) {

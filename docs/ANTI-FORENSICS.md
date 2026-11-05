@@ -28,6 +28,8 @@ Every indicator is a fixed, documented rule in
 | `ads_unusual` | Data hiding | 0.30 | 5 | named stream other than well-known benign ones |
 | `encrypted_container` | Data hiding | 0.40 | 2 | >= 1 MiB, entropy >= 7.97, no known signature |
 | `usnjrnl_missing` | Log tampering | 0.50 | 1 | Windows system volume without $Extend/$UsnJrnl:$J |
+| `usn_journal_recreated` | Log tampering | 0.35 | 1 | on a Windows system volume, the change journal's ID (its creation time) is more than 2 days after $MFT was created |
+| `usn_wipe_rename` | Secure deletion | 0.85 | 2 | the change journal shows a file renamed to one repeated letter (AAAA.AAA); counted once per file |
 | `evtx_cleared` | Log tampering | 0.55 | 1 | Security.evtx missing or <= 68 KiB |
 | `prefetch_empty` | Log tampering | 0.30 | 1 | Windows\Prefetch exists with no live .pf files |
 | `browser_history_cleared` | Log tampering | 0.45 | 1 | a browser history database with no visits and no URLs, or a deleted history database |
@@ -58,12 +60,16 @@ not 500 pieces of evidence.
 `scripts/make_af_fixture.py` plants one instance of every rule into a clean
 NTFS volume and wraps it in an MBR disk. The test
 `finds_planted_antiforensics` asserts that each rule fires on exactly the
-planted file. New rules must add a planted case there.
+planted file. New rules must add a planted case there. The Windows artifact
+rules are planted in `scripts/make_win_fixture.py` (an SDelete rename chain
+in the change journal, tested by `finds_windows_artifacts`), and the
+journal rules are also tested on built-up data (`journal_rules`).
 
-## Known limits (1.2.6)
+## Known limits
 
-- Prefetch, EVTX and $UsnJrnl are checked by presence and size only; parsing
-  them (run counts, event 1102, journal gaps) is Milestone 1-2.
+- The change journal is checked for SDelete-style renames and for being
+  recreated; gaps inside the journal and its oldest record being much newer
+  than expected are not scored yet.
 - `wiped_content` cannot tell deliberate wiping from SSD TRIM.
 - Weights are expert-set. Milestone 1 calibrates them against labelled
   datasets and publishes the calibration with each release.

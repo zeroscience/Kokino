@@ -207,7 +207,7 @@ pub fn shell_items_path(d: &[u8]) -> String {
     parts.join("\\")
 }
 
-fn long_name(item: &[u8]) -> Option<String> {
+pub(crate) fn long_name(item: &[u8]) -> Option<String> {
     let at = item.windows(4).position(|w| w == [0x04, 0x00, 0xEF, 0xBE])?.checked_sub(4)?;
     let version = u16_at(item, at + 2)?;
     let off = match version {

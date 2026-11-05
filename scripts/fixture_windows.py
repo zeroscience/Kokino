@@ -10,7 +10,7 @@ RDP logon from 203.0.113.50 follows five failed passwords, a backdoor
 service and an admin account are added.
 
 build() returns {relative path on the volume: bytes}. Writers:
-  regf hives (SYSTEM, SOFTWARE, SAM, NTUSER.DAT, Amcache.hve)
+  regf hives (SYSTEM, SOFTWARE, SAM, NTUSER.DAT, UsrClass.dat, Amcache.hve)
   EVTX logs with template-based binary XML and valid CRCs
   Prefetch v30 (MAM / LZXPRESS Huffman compressed when run on Windows)
   LNK shortcuts, Jump Lists (OLE compound file + DestList, custom)
@@ -324,6 +324,66 @@ def hive_ntuser():
         path_key("Software\\Microsoft\\Windows\\CurrentVersion\\Run", [sz("OneDrive", "\"C:\\Users\\alice\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe\" /background")], ts=ft(2025, 3, 2, 8, 20)),
     ]
     return write_hive(Key("ROOT", [], merge(keys), ts=ft(2026, 10, 21, 2, 9)), "\\??\\C:\\Users\\alice\\ntuser.dat")
+
+
+def fat_dt(y, mo, d, h=0, mi=0, s=0):
+    """FAT date then time, as shell items store them."""
+    return struct.pack("<HH", ((y - 1980) << 9) | (mo << 5) | d, (h << 11) | (mi << 5) | (s // 2))
+
+
+def shell_folder(short, long, mft, modified, created):
+    """Folder file-entry shell item with a version 9 0xBEEF0004 block
+    (long name, created and accessed times, MFT reference)."""
+    f = bytearray(b"\0\0\x31\0" + b"\0" * 4) + fat_dt(*modified) + struct.pack("<H", 0x10) + short.encode() + b"\0"
+    if len(f) % 2:
+        f += b"\0"
+    ext = bytearray(0x2E)
+    struct.pack_into("<HI", ext, 2, 9, 0xBEEF0004)
+    ext[8:12] = fat_dt(*created)
+    ext[12:16] = fat_dt(*modified)
+    struct.pack_into("<HHQ", ext, 16, 0x2E, 0, mft[0] | mft[1] << 48)
+    ext += u16s(long) + struct.pack("<H", 0x14)
+    struct.pack_into("<H", ext, 0, len(ext))
+    f += ext
+    struct.pack_into("<H", f, 0, len(f))
+    return bytes(f) + b"\0\0"
+
+
+def shell_drive(letter):
+    d = bytearray(0x19)
+    d[2] = 0x2F
+    d[3:6] = (letter + ":\\").encode()
+    struct.pack_into("<H", d, 0, len(d))
+    return bytes(d) + b"\0\0"
+
+
+def shell_root(guid_bytes):
+    return struct.pack("<HBB", 20, 0x1F, 0x50) + guid_bytes + b"\0\0"
+
+
+def shell_network(location):
+    b = bytearray(b"\0\0\x41\x01\x00") + location.encode() + b"\0\0\0"
+    struct.pack_into("<H", b, 0, len(b))
+    return bytes(b) + b"\0\0"
+
+
+THIS_PC = bytes([0xE0, 0x4F, 0xD0, 0x20, 0xEA, 0x3A, 0x69, 0x10, 0xA2, 0xD8, 0x08, 0x00, 0x2B, 0x30, 0x30, 0x9D])
+
+
+def hive_usrclass():
+    """ShellBags: This PC > C: > Users > alice > Documents, the USB stick E:
+    with two folders (Nightjar leak opened last), and a network share."""
+    b = "Local Settings\\Software\\Microsoft\\Windows\\Shell\\BagMRU"
+    keys = [
+        path_key(b, [binary("0", shell_root(THIS_PC)), binary("1", shell_network("\\\\fileserver.lab.test\\finance")), binary("MRUListEx", mru_ex([1, 0])), dword("NodeSlots", 2)], ts=ft(2026, 10, 20, 9, 46)),
+        path_key(b + "\\0", [binary("0", shell_drive("C")), binary("1", shell_drive("E")), binary("MRUListEx", mru_ex([1, 0])), dword("NodeSlot", 3)], ts=ft(2026, 10, 20, 9, 45)),
+        path_key(b + "\\0\\0", [binary("0", shell_folder("Users", "Users", (64, 1), (2025, 3, 2, 7, 55), (2025, 3, 2, 7, 50))), binary("MRUListEx", mru_ex([0]))], ts=ft(2026, 10, 19, 18, 0)),
+        path_key(b + "\\0\\0\\0", [binary("0", shell_folder("alice", "alice", (70, 2), (2026, 10, 19, 17, 0), (2025, 3, 2, 8, 0))), binary("MRUListEx", mru_ex([0]))], ts=ft(2026, 10, 19, 18, 1)),
+        path_key(b + "\\0\\0\\0\\0", [binary("0", shell_folder("DOCUME~1", "Documents", (80, 2), (2026, 10, 19, 17, 30), (2025, 3, 2, 8, 0))), binary("MRUListEx", mru_ex([0]))], ts=ft(2026, 10, 19, 18, 2)),
+        path_key(b + "\\0\\1", [binary("0", shell_folder("PROJEC~1", "Projects 2026", (39, 1), (2026, 10, 1, 12, 0), (2026, 9, 30, 10, 0))), binary("1", shell_folder("NIGHTJ~1", "Nightjar leak", (41, 1), (2026, 10, 20, 9, 40), (2026, 10, 20, 9, 40))), binary("MRUListEx", mru_ex([1, 0]))], ts=ft(2026, 10, 20, 9, 47)),
+        path_key(b + "\\1", [binary("0", shell_folder("Q3", "Q3", (0, 0), (2026, 10, 18, 11, 0), (2026, 7, 1, 9, 0))), binary("MRUListEx", mru_ex([0]))], ts=ft(2026, 10, 20, 9, 46)),
+    ]
+    return write_hive(Key("ROOT", [], merge(keys), ts=ft(2026, 10, 20, 9, 47)), "\\??\\C:\\Users\\alice\\AppData\\Local\\Microsoft\\Windows\\UsrClass.dat")
 
 
 def hive_amcache():
@@ -709,6 +769,7 @@ def build():
         "Windows/System32/config/SAM": hive_sam(),
         "Windows/AppCompat/Programs/Amcache.hve": hive_amcache(),
         "Users/alice/NTUSER.DAT": hive_ntuser(),
+        "Users/alice/AppData/Local/Microsoft/Windows/UsrClass.dat": hive_usrclass(),
         "Windows/System32/winevt/Logs/Security.evtx": log_security(),
         "Windows/System32/winevt/Logs/System.evtx": log_system(),
         "Windows/System32/winevt/Logs/Microsoft-Windows-TerminalServices-LocalSessionManager%4Operational.evtx": log_rdp(),

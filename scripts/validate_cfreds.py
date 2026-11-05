@@ -15,7 +15,7 @@ For every deleted file Kokino lists, this script checks:
   - the warning: when some blocks are wrong, whether Kokino said so.
 and compares the number listed with NIST's "Metadata found".
 
-    python scripts/validate_cfreds.py target/validation/cfreds [kokino]
+    python scripts/validate_cfreds.py target/validation/cfreds [kokino] [fat|xfat|ntfs|ext]
 
 The folder holds the downloaded dfr-*.dd.bz2 images and the layout PDF.
 Each image is expanded to a temporary 1 GB file, analyzed and deleted again.
@@ -90,7 +90,7 @@ def main():
     results = []
     for f in sorted(os.listdir(folder)):
         m = re.match(r"dfr-(\d+)(-[a-z]+)?-(fat|xfat|ntfs|ext)\.dd\.bz2$", f)
-        if not m:
+        if not m or (len(sys.argv) > 3 and m.group(3) != sys.argv[3]):
             continue
         name = "%s-%s%s" % (m.group(3), m.group(1), m.group(2) or "")
         shutil.rmtree(tmp, ignore_errors=True)
@@ -146,15 +146,18 @@ def main():
                 r["incomplete"] += 1
                 r["incomplete_warned"] += bool(row["note"])
                 r["wrong_unwarned"] += not row["note"]
-        if m.group(3) == "ext":
+        if m.group(3) in ("ext", "ntfs"):
             # Deleted names with no content left (ext3/ext4 clear the block
-            # map) are not in `kokino files`; the full analysis has them.
+            # map; NTFS names found only in folder indexes or $LogFile) are
+            # not in `kokino files`; the full analysis has them.
             aj = os.path.join(tmp, "analysis.json")
             subprocess.run([exe, "analyze", "--json", aj, raw], capture_output=True)
             a = json.load(open(aj, encoding="utf-8")) if os.path.exists(aj) else {"filesystems": []}
-            r["names_found"] = sum(1 for fsa in a["filesystems"] for f in fsa["files"] if f["deleted"] and not f["is_dir"] and not f["orphan"])
+            # ext orphans are inode-N entries without a name; NTFS orphans keep theirs.
+            r["names_found"] = sum(1 for fsa in a["filesystems"] for f in fsa["files"] if f["deleted"] and not f["is_dir"] and (not f["orphan"] or m.group(3) == "ntfs"))
             r["journal_recovered"] = sum(1 for fsa in a["filesystems"] for f in fsa["files"] if f.get("unix", {}).get("journal_seq") is not None)
-            print("    deleted names found %d (NIST metadata found %s), recovered through the journal %d" % (r["names_found"], r["nist_metadata_found"], r["journal_recovered"]))
+            r["name_only"] = sum(1 for fsa in a["filesystems"] for f in fsa["files"] if f.get("name_only") and f["deleted"] and not f["is_dir"])
+            print("    deleted names found %d (NIST metadata found %s), recovered through the journal %d, names without a record %d" % (r["names_found"], r["nist_metadata_found"], r["journal_recovered"], r["name_only"]))
         results.append(r)
         shutil.rmtree(tmp, ignore_errors=True)
         print("%-16s NIST metadata %5s  listed %5d  names ok %5d/%-5d  complete %5d  blocks %7d/%-7d  incomplete %4d (other file %d, warned %d, wrong unwarned %d, not test data %d)  no content %d  %s" % (

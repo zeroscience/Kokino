@@ -11,5 +11,7 @@ pub mod jumplist;
 pub mod lnk;
 pub mod prefetch;
 pub mod registry;
+pub mod shellbags;
 pub mod sqlite;
+pub mod usn;
 pub mod xpress;

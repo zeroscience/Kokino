@@ -2,7 +2,9 @@
 
 Small, valid examples of the formats that have no small fixture in
 tests/fixtures: documents (ZIP, Office Open XML, OpenDocument, GZIP, PDF),
-thumbnail-size pictures, browser history databases and LZXPRESS buffers.
+thumbnail-size pictures, browser history databases, LZXPRESS buffers, NTFS
+folder index records and $LogFile pages, a change journal and a ShellBags
+hive.
 All content is invented. Needs Pillow for the pictures.
 
     python scripts/make_fuzz_seeds.py
@@ -175,6 +177,57 @@ def browsers():
     put("browser", "firefox-places.sqlite", db(firefox))
 
 
+def index_entry(file, parent, name, size, t=134_000_000_000_000_000):
+    enc = name.encode("utf-16-le")
+    klen = 66 + len(enc)
+    n = (16 + klen + 7) & ~7
+    e = bytearray(n)
+    struct.pack_into("<QHH", e, 0, file, n, klen)
+    struct.pack_into("<QQQQQQQI", e, 16, parent, t, t + 1, t + 2, t + 3, (size + 4095) & ~4095, size, 0x20)
+    e[16 + 64] = len(enc) // 2
+    e[16 + 65] = 1
+    e[16 + 66:16 + 66 + len(enc)] = enc
+    return bytes(e)
+
+
+def with_fixups(sig, body, usn=7):
+    """A 4 KiB record (INDX or RCRD) with its update sequence array applied."""
+    r = bytearray(body)
+    r[0:4] = sig
+    struct.pack_into("<HHH", r, 4, 0x28, 9, 0)
+    struct.pack_into("<H", r, 0x28, usn)
+    for i in range(1, 9):
+        at = i * 512 - 2
+        r[0x28 + i * 2:0x2A + i * 2] = r[at:at + 2]
+        struct.pack_into("<H", r, at, usn)
+    return bytes(r)
+
+
+def ntfs_logs():
+    """INDX record with names in its slack, a $LogFile page with an index
+    entry, a change journal and a ShellBags hive (all invented)."""
+    folder = 40 | 3 << 48
+    live = index_entry(41 | 1 << 48, folder, "keep.txt", 10)
+    end = bytearray(16)
+    struct.pack_into("<HHI", end, 8, 16, 0, 2)
+    stale = index_entry(42 | 1 << 48, folder, "gone report.docx", 20000) + index_entry(44 | 1 << 48, folder, "second.bin", 7)
+    body = bytearray(4096)
+    first = 0x40
+    used = first + len(live) + 16
+    body[first:used] = live + bytes(end)
+    body[used:used + len(stale)] = stale
+    struct.pack_into("<III", body, 0x18, first - 0x18, used - 0x18, 4096 - 0x18)
+    put("indx", "indx-slack.bin", with_fixups(b"INDX", body))
+    page = bytearray(4096)
+    entry = index_entry(65 | 1 << 48, 5 | 5 << 48, "Albireo.txt", 1024)
+    page[0x100:0x100 + len(entry)] = entry
+    put("indx", "logfile-page.bin", with_fixups(b"RCRD", page, usn=3))
+    import make_win_fixture
+    put("usn", "journal.bin", make_win_fixture.journal(70 | 2 << 48, 90 | 1 << 48, 126 | 1 << 48, 0))
+    import fixture_windows
+    put("shellbags", "UsrClass.dat", fixture_windows.hive_usrclass())
+
+
 def xpress():
     for n in ["text", "random", "long"]:
         raw = open(os.path.join(FIX, "win", "xpress-%s.raw" % n), "rb").read()
@@ -187,6 +240,7 @@ if __name__ == "__main__":
     photos()
     browsers()
     xpress()
+    ntfs_logs()
     for sub in sorted(os.listdir(OUT)):
         files = os.listdir(os.path.join(OUT, sub))
         print("%-8s %2d files, %d bytes" % (sub, len(files), sum(os.path.getsize(os.path.join(OUT, sub, f)) for f in files)))

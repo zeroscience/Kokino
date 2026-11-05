@@ -76,6 +76,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/timeline", get(timeline))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/web", get(web))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/windows", get(windows))
+        .route("/cases/{cid}/evidence/{eid}/fs/{fi}/journal", get(journal))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/indicator/{id}", get(indicator_files))
         .route("/cases/{cid}/evidence/{eid}/binmap", get(image_binmap))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/file/{idx}/binmap", get(file_binmap))
@@ -537,8 +538,9 @@ fn row(i: usize, f: &FileRow, l: &Loaded, fi: usize, hs: &Option<Arc<HashStatus>
         "ext": f.ext, "sig": f.sig, "sig_label": f.sig_label, "category": f.category,
         "mismatch": f.mismatch, "entropy": f.entropy, "flags": f.flags,
         "ads": f.e.ads().count(), "children": kids, "hash": hash,
-        "modified": f.e.si.map(|t| filetime_to_iso(t.modified)).unwrap_or_default(),
-        "created": f.e.si.map(|t| filetime_to_iso(t.created)).unwrap_or_default(),
+        "modified": f.e.si.or(f.e.fname).map(|t| filetime_to_iso(t.modified)).unwrap_or_default(),
+        "created": f.e.si.or(f.e.fname).map(|t| filetime_to_iso(t.created)).unwrap_or_default(),
+        "name_only": f.e.name_only.as_ref().map(|n| n.source.as_str()),
     })
 }
 
@@ -639,6 +641,15 @@ async fn file_detail(State(st): St, Path((cid, eid, fi, idx)): Path<(String, Str
         .filter(|e| e.idx as usize == idx && !kokino_analysis::timeline::is_artifact(e.src))
         .map(|e| json!({"t": filetime_to_iso(e.t), "macb": e.macb, "src": e.src}))
         .collect();
+    // What the change journal recorded for this file, newest first.
+    let journal: Vec<Value> = f
+        .windows
+        .journal
+        .iter()
+        .flat_map(|j| j.changes.iter().rev().filter(|c| c.file == Some(idx as u32)))
+        .take(500)
+        .map(|c| json!({"t": filetime_to_iso(c.c.t), "first": if c.c.first > 0 { filetime_to_iso(c.c.first) } else { String::new() }, "what": c.what, "path": c.path, "old_path": c.old_path, "usn": c.c.usn}))
+        .collect();
     let streams: Vec<Value> = r
         .e
         .streams
@@ -653,7 +664,8 @@ async fn file_detail(State(st): St, Path((cid, eid, fi, idx)): Path<(String, Str
         "attribute_names": attr_names(r.e.attributes), "hard_links": r.e.hard_links, "usn": r.e.usn,
         "reparse": r.e.has_reparse, "uniform": r.uniform, "ads_sig": r.ads_sig, "error": r.e.error,
         "si": times_json(r.e.si), "fn": times_json(r.e.fname),
-        "record_image_offset": r.e.record_offset + vol,
+        "record_image_offset": if r.e.name_only.is_some() && r.e.record_offset == 0 { None } else { Some(r.e.record_offset + vol) },
+        "name_only": r.e.name_only, "journal": journal,
         "data_image_offset": r.e.data_offset().map(|o| o + vol),
         "streams": streams, "indicators": indicators, "events": events, "hashes": hashes,
         "unix": r.e.unix.as_ref().map(|u| json!({
@@ -1093,7 +1105,70 @@ async fn windows(State(st): St, Path((cid, eid, fi)): Path<(String, String, usiz
         o.remove("timeline");
         o.remove("hits");
     }
-    Ok(Json(json!({"schema": l.analysis.schema, "fs": f.volume.fs_label, "windows": f.windows, "linux": linux, "files": files})))
+    let mut files = files;
+    for b in &f.windows.shellbags {
+        files.insert(b.file, path(Some(b.file)));
+        if let Some(v) = b.on_volume {
+            files.insert(v, path(Some(v)));
+        }
+    }
+    // The change journal is paged separately (see `journal`); here only
+    // its summary.
+    let journal = f.windows.journal.as_ref().map(|j| {
+        let count = |bit: u32| j.changes.iter().filter(|c| c.c.reasons & bit != 0).count();
+        json!({"file": j.file, "path": path(Some(j.file)), "size": j.size, "stored": j.stored, "max": j.max, "created": j.created,
+            "first": j.first, "last": j.last, "records": j.records, "dropped": j.dropped, "error": j.error, "changes": j.changes.len(),
+            "created_files": count(kokino_artifacts::usn::FILE_CREATE), "deleted_files": count(kokino_artifacts::usn::FILE_DELETE), "renamed_files": count(kokino_artifacts::usn::RENAME_NEW_NAME)})
+    });
+    Ok(Json(json!({"schema": l.analysis.schema, "fs": f.volume.fs_label, "windows": f.windows.without_journal(), "journal": journal, "linux": linux, "files": files})))
+}
+
+#[derive(Deserialize)]
+struct JournalQ {
+    q: Option<String>,
+    /// created, deleted, renamed or changed (anything else)
+    kind: Option<String>,
+    /// Only changes linked to this file.
+    file: Option<u32>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    /// "asc" for oldest first; newest first otherwise.
+    order: Option<String>,
+}
+
+/// The change journal of a volume, filtered and paged.
+async fn journal(State(st): St, Path((cid, eid, fi)): Path<(String, String, usize)>, Query(q): Query<JournalQ>) -> R {
+    use kokino_artifacts::usn::{FILE_CREATE, FILE_DELETE, RENAME_NEW_NAME};
+    let l = st.loaded(&cid, &eid)?;
+    let f = fs_of(&l, fi)?;
+    let Some(j) = f.windows.journal.as_ref() else { return Ok(Json(json!({"total": 0, "offset": 0, "items": []}))) };
+    let needle = q.q.unwrap_or_default().to_lowercase();
+    let kind = q.kind.unwrap_or_default();
+    let ok = |c: &kokino_analysis::windows::JournalChange| {
+        let r = c.c.reasons;
+        let k = match kind.as_str() {
+            "created" => r & FILE_CREATE != 0,
+            "deleted" => r & FILE_DELETE != 0,
+            "renamed" => r & RENAME_NEW_NAME != 0,
+            "changed" => r & (FILE_CREATE | FILE_DELETE | RENAME_NEW_NAME) == 0,
+            _ => true,
+        };
+        k && q.file.is_none_or(|x| c.file == Some(x)) && (needle.is_empty() || c.path.to_lowercase().contains(&needle) || c.old_path.to_lowercase().contains(&needle))
+    };
+    let off = q.offset.unwrap_or(0);
+    let lim = q.limit.unwrap_or(300).min(3000);
+    let iso = |t: u64| if t == 0 { String::new() } else { filetime_to_iso(t) };
+    let item = |c: &kokino_analysis::windows::JournalChange| {
+        json!({"t": iso(c.c.t), "first": iso(c.c.first), "usn": c.c.usn, "record": c.c.record, "seq": c.c.seq, "path": c.path, "old_path": c.old_path,
+            "what": c.what, "dir": c.dir, "file": c.file, "file_path": c.file.and_then(|i| f.files.get(i as usize)).map(|r| r.e.path.clone())})
+    };
+    let hits: Vec<&kokino_analysis::windows::JournalChange> = j.changes.iter().filter(|c| ok(c)).collect();
+    let items: Vec<Value> = if q.order.as_deref() == Some("asc") {
+        hits.iter().skip(off).take(lim).map(|c| item(c)).collect()
+    } else {
+        hits.iter().rev().skip(off).take(lim).map(|c| item(c)).collect()
+    };
+    Ok(Json(json!({"total": hits.len(), "offset": off, "items": items})))
 }
 
 #[derive(Deserialize)]
@@ -1848,7 +1923,7 @@ async fn del_patch(State(st): St, Extension(me): Me, Path((cid, eid)): Path<(Str
 /// (they are listed in full in the GUI).
 /// Windows artifacts: the facts a report reader needs, each with its source.
 fn report_windows(h: &mut String, w: &kokino_analysis::windows::WindowsArtifacts, f: &FsAnalysis) {
-    if w.sources.is_empty() {
+    if w.is_empty() {
         return;
     }
     let t = |ft: u64| if ft == 0 { String::new() } else { filetime_to_iso(ft) };
@@ -1894,6 +1969,44 @@ fn report_windows(h: &mut String, w: &kokino_analysis::windows::WindowsArtifacts
             h.push_str(&format!("<tr><td>{}</td><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>", esc(&u.name), esc(&u.serial), esc(&u.drive_letter), t(u.first_connected), t(u.last_connected), t(u.last_removed)));
         }
         h.push_str("</table>");
+    }
+    // Folders opened on other drives and on shares: where data went.
+    let away: Vec<&kokino_analysis::windows::ShellBag> = w
+        .shellbags
+        .iter()
+        .filter(|b| b.bag.kind != "drive" && (b.bag.path.starts_with("\\\\") || (b.bag.path.len() > 2 && b.bag.path.as_bytes()[1] == b':' && !b.bag.path.starts_with("C:"))))
+        .collect();
+    if !away.is_empty() {
+        h.push_str("<h4>Folders opened on other drives and network shares (ShellBags)</h4><table><tr><th>Folder</th><th>User</th><th>Last opened (UTC)</th><th>Hive</th></tr>");
+        for b in away.iter().take(500) {
+            h.push_str(&format!("<tr><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td></tr>", esc(&b.bag.path), esc(&b.user), t(b.bag.opened), src(Some(b.file))));
+        }
+        h.push_str("</table>");
+    }
+    if let Some(j) = w.journal.as_ref().filter(|j| j.records > 0) {
+        let del = j.changes.iter().filter(|c| c.c.reasons & kokino_artifacts::usn::FILE_DELETE != 0).count();
+        h.push_str(&format!(
+            "<h4>Change journal</h4><p>{} records from {} to {} (UTC): {} file changes, {} deletions.{}</p>",
+            j.records,
+            t(j.first),
+            t(j.last),
+            j.changes.len() as u64 + j.dropped,
+            del,
+            if j.dropped > 0 { format!(" The oldest {} changes were not kept.", j.dropped) } else { String::new() }
+        ));
+        // A rename from a real name to AAAA.AAA starts a wipe: the old name is the file's own.
+        let wiped: Vec<&kokino_analysis::windows::JournalChange> = j
+            .changes
+            .iter()
+            .filter(|c| kokino_analysis::antiforensics::sdelete_like(&c.c.name) && c.c.old.as_ref().is_some_and(|o| !kokino_analysis::antiforensics::sdelete_like(&o.0)))
+            .collect();
+        if !wiped.is_empty() {
+            h.push_str("<table><tr><th>Wiped file (original name)</th><th>Renamed to</th><th>Time (UTC)</th></tr>");
+            for c in wiped.iter().take(500) {
+                h.push_str(&format!("<tr><td class=bad><code>{}</code></td><td><code>{}</code></td><td>{}</td></tr>", esc(&c.old_path), esc(&c.path), t(c.c.t)));
+            }
+            h.push_str("</table>");
+        }
     }
     let odd: Vec<&kokino_analysis::windows::Autorun> = w.autoruns.iter().filter(|a| a.unusual).collect();
     if !odd.is_empty() {

@@ -500,6 +500,7 @@ fn file_entry(fe: &[u8], record: u64, parent: u64, path: String, name: String, o
         record_offset: off,
         error: note,
         unix: Some(UnixMeta { inode: le64(fe, if efe { 200 } else { 160 }), mode, uid: uid as u32, gid: gid as u32, deleted_time: 0, inode_offset: off, journal_seq: None, link_target: None }),
+        name_only: None,
     }
 }
 

@@ -232,6 +232,24 @@ const RULES: &[Rule] = &[
         caveat: "Some imaging or hardening workflows disable it; confirm with system configuration.",
     },
     Rule {
+        id: "usn_wipe_rename",
+        title: "Change journal shows files renamed to AAAA.AAA-style names",
+        category: "Secure deletion",
+        weight: 0.85,
+        k: 2.0,
+        explanation: "The NTFS change journal recorded files renamed to a single repeated letter (AAAA.AAA ... ZZZZ.ZZZ), the pattern SDelete and similar wipers leave when they destroy a file's name before deleting it. The journal keeps the original names and folders of those files.",
+        caveat: "Rarely produced by anything else. Each count is one file.",
+    },
+    Rule {
+        id: "usn_journal_recreated",
+        title: "Change journal created long after the volume",
+        category: "Log tampering",
+        weight: 0.35,
+        k: 1.0,
+        explanation: "On a Windows system volume the change journal is created when Windows is installed. This journal's ID (its creation time) is much later than the volume, which happens when it is deleted (fsutil usn deletejournal) and Windows creates a new one: all earlier records are gone.",
+        caveat: "Windows also recreates a damaged journal (for example after chkdsk), and some disk and backup tools reset it. Compare the creation time with the system's event logs.",
+    },
+    Rule {
         id: "evtx_cleared",
         title: "Security event log missing or reset",
         category: "Log tampering",
@@ -292,7 +310,8 @@ fn prefetch_tool(file_name: &str) -> Option<&'static str> {
     tool_name(exe)
 }
 
-fn sdelete_like(name: &str) -> bool {
+/// A name made of one repeated letter (AAAA.AAA), as SDelete leaves.
+pub fn sdelete_like(name: &str) -> bool {
     let chars: Vec<char> = name.chars().filter(|c| *c != '.').collect();
     chars.len() >= 3 && chars.iter().all(|c| *c == chars[0] && c.is_ascii_alphabetic())
 }
@@ -360,6 +379,12 @@ pub fn evaluate(files: &mut [FileRow], now: u64, web: &WebActivity, win: &Window
         if !usn {
             hits.entry("usnjrnl_missing").or_default().push(by_path.get("/$extend").copied().unwrap_or(0));
         }
+        if let (Some(j), Some(mft)) = (&win.journal, files.iter().find(|f| f.e.record == 0 && f.e.name == "$MFT").and_then(|f| f.e.si)) {
+            const DAY: u64 = 86_400 * SECOND;
+            if j.created > 0 && mft.created > 0 && j.created > mft.created + 2 * DAY {
+                hits.entry("usn_journal_recreated").or_default().push(j.file as usize);
+            }
+        }
         match by_path.get("/windows/system32/winevt/logs/security.evtx") {
             None => {
                 if let Some(i) = by_path.get("/windows/system32/winevt/logs") {
@@ -374,6 +399,14 @@ pub fn evaluate(files: &mut [FileRow], now: u64, web: &WebActivity, win: &Window
             if pf == 0 {
                 hits.entry("prefetch_empty").or_default().push(*pi);
             }
+        }
+    }
+    if let Some(j) = &win.journal {
+        let mut wiped: Vec<u64> = j.changes.iter().filter(|c| c.c.reasons & kokino_artifacts::usn::RENAME_NEW_NAME != 0 && sdelete_like(&c.c.name)).map(|c| c.c.record).collect();
+        wiped.sort();
+        wiped.dedup();
+        for _ in wiped {
+            hits.entry("usn_wipe_rename").or_default().push(j.file as usize);
         }
     }
 
@@ -496,5 +529,62 @@ mod tests {
         let s = strength(0.5, 1.0, 100);
         assert!((s - 0.5).abs() < 1e-3);
         assert_eq!(strength(0.5, 1.0, 0), 0.0);
+    }
+
+    fn row(record: u64, path: &str, is_dir: bool, created: u64, stream: Option<&str>) -> FileRow {
+        let e = kokino_ntfs::FsEntry {
+            record,
+            seq: 1,
+            parent: 5,
+            parent_seq: 5,
+            name: path.rsplit('/').next().unwrap_or("").into(),
+            dos_name: None,
+            path: path.into(),
+            is_dir,
+            deleted: false,
+            orphan: false,
+            size: 0,
+            alloc_size: 0,
+            resident: true,
+            attributes: 0,
+            hard_links: 1,
+            usn: None,
+            si: Some(kokino_ntfs::Times { created, modified: created, accessed: created, mft_modified: created }),
+            fname: None,
+            streams: stream.map(|n| vec![kokino_ntfs::Stream { name: n.into(), size: 1 << 20, resident: false, first_offset: None }]).unwrap_or_default(),
+            has_reparse: false,
+            record_offset: 0,
+            error: None,
+            unix: None,
+            name_only: None,
+        };
+        FileRow { e, ext: String::new(), sig: None, sig_label: None, category: None, mismatch: false, entropy: None, uniform: None, ads_sig: None, flags: vec![] }
+    }
+
+    /// The change journal rules (the SDelete pattern is planted in
+    /// disk-win.img; a recreated journal is built here).
+    #[test]
+    fn journal_rules() {
+        const DAY: u64 = 864_000_000_000;
+        let installed = 133_800_000_000_000_000;
+        let mut files = vec![row(0, "/$MFT", false, installed, None), row(30, "/Windows/System32", true, installed, None), row(40, "/$Extend/$UsnJrnl", false, installed, Some("$J"))];
+        let mut win = WindowsArtifacts::default();
+        let mut j = crate::windows::Journal { file: 2, created: installed + DAY / 24, ..Default::default() };
+        win.journal = Some(j.clone());
+        let none = evaluate(&mut files, installed + 400 * DAY, &WebActivity::default(), &win, &LinuxArtifacts::default(), false);
+        assert!(!none.iter().any(|i| i.id.starts_with("usn")), "{:?}", none);
+        j.created = installed + 300 * DAY;
+        for n in ["AAAA.AAA", "BBBB.BBB"] {
+            let mut c = crate::windows::JournalChange::default();
+            c.c.record = 77;
+            c.c.name = n.into();
+            c.c.reasons = kokino_artifacts::usn::RENAME_NEW_NAME;
+            j.changes.push(c);
+        }
+        win.journal = Some(j);
+        let hit = evaluate(&mut files, installed + 400 * DAY, &WebActivity::default(), &win, &LinuxArtifacts::default(), false);
+        let ids: Vec<(&str, u64)> = hit.iter().map(|i| (i.id.as_str(), i.count)).collect();
+        assert!(ids.contains(&("usn_journal_recreated", 1)) && ids.contains(&("usn_wipe_rename", 1)), "{:?}", ids);
+        assert!(files[2].flags.iter().any(|f| f == "usn_journal_recreated"));
     }
 }

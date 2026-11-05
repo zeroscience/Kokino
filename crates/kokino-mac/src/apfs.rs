@@ -661,6 +661,7 @@ fn dir_entry(record: u64, parent: u64, path: String, name: String) -> FsEntry {
         record_offset: 0,
         error: None,
         unix: None,
+        name_only: None,
     }
 }
 
@@ -700,6 +701,7 @@ fn file_entry<R: Read + Seek>(c: &ApfsContainer, r: &mut R, v: &Volume, vi: usiz
         record_offset: 0,
         error: None,
         unix: Some(UnixMeta { inode: id, mode: ino.mode, uid: ino.owner, gid: ino.group, deleted_time: 0, inode_offset: 0, journal_seq: None, link_target }),
+        name_only: None,
     }
 }
 

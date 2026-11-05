@@ -720,7 +720,7 @@ function fileRow(ctx, r, i, onclick) {
     h("td.num", r.is_dir ? (r.children ? num(r.children) + " items" : "") : bytes(r.size)),
     h("td", ts(r.modified, 19, fsClock(ctx))),
     h("td", r.sig_label ? h("span", { style: { color: r.mismatch ? "var(--bad)" : null } }, r.sig_label + (r.mismatch ? " (mismatch)" : "")) : h("span.muted", r.ext ? "." + r.ext : "")),
-    h("td.num.mono", r.record),
+    r.name_only ? h("td.num.muted", { title: `No MFT record holds this name; recovered from ${r.name_only}` }, "name only") : h("td.num.mono", r.record),
   );
 }
 
@@ -848,6 +848,7 @@ async function fileDrawer(ctx, idx, startOffset) {
   const optical = isOptical(f.fs);
   const ntfs = isNtfs(f.fs);
   const u = f.unix;
+  const nameOnly = f.name_only;
   const names = fat ? ["created", "modified", "accessed"] : ["created", "modified", "accessed", "mft_modified"];
   const labels = { created: "Born (B)", modified: optical ? "Recorded / modified (M)" : "Modified (M)", accessed: fat ? "Accessed (A, date only)" : "Accessed (A)", mft_modified: ext ? "Inode changed (C)" : optical ? "Attributes changed (C)" : "MFT changed (C)" };
   const tsTable = h("table.ts", h("tr", h("th", ""), h("th", fat ? "Directory entry" : ext ? "Inode" : optical ? "Directory record" : "$STANDARD_INFORMATION"), ntfs ? h("th", "$FILE_NAME") : null),
@@ -900,6 +901,7 @@ async function fileDrawer(ctx, idx, startOffset) {
         r.is_dir ? h("span.pill", "Directory") : null,
         f.resident ? h("span.pill.info", ext ? "Stored in the inode" : "Resident in MFT") : null,
         u && u.journal_seq != null ? h("span.pill.info", { title: "ext3/ext4 clear a deleted file's block map; this content was read through an older copy of its inode kept in the file-system journal" }, `Recovered from the journal (transaction ${u.journal_seq})`) : null,
+        nameOnly ? h("span.pill.warn", { title: "No MFT record holds this name any more. It was found in a folder index ($I30) or the NTFS log ($LogFile), with its $FILE_NAME times and size, but without content." }, `Name only, from ${nameOnly.source}`) : null,
         fat && r.deleted && !r.is_dir ? h("span.pill.warn", { title: "The FAT chain is cleared on delete, so the clusters after the first are assumed to follow it" }, "Recovered as contiguous") : null,
         f.attribute_names.map((a) => h("span.pill", a)),
       ),
@@ -912,6 +914,7 @@ async function fileDrawer(ctx, idx, startOffset) {
       h("div.card.flat", h("h3", "Identity"), h("div.kv", { style: { marginTop: "8px" } },
         fat || optical ? [h("span", "Entry id / parent"), h("span.mono", { title: "Assigned by Kokino in directory order; this file system has no record numbers" }, `${r.record} / ${f.parent}`)]
           : ext ? [h("span", "Inode / entry id"), h("span.mono", { title: "Entry ids are assigned by Kokino; hard links share one inode" }, `${u ? u.inode : ""} / ${r.record}`)]
+          : nameOnly ? [h("span", "Former MFT record / seq"), h("span.mono", nameOnly.mft_record != null ? `${nameOnly.mft_record} / ${nameOnly.mft_seq}` : "not known"), h("span", "Parent record / seq"), h("span.mono", `${f.parent} / ${f.parent_seq}`)]
           : [h("span", "MFT record / seq"), h("span.mono", `${r.record} / ${r.seq}`), h("span", "Parent record / seq"), h("span.mono", `${f.parent} / ${f.parent_seq}`)],
         u ? [h("span", "Mode"), h("span.mono", `${u.mode_string} (${u.mode.padStart(6, "0")})`), h("span", "Owner uid / gid"), h("span.mono", `${u.uid} / ${u.gid}`)] : null,
         u && u.link_target != null ? [h("span", "Link target"), h("span.mono", { style: { wordBreak: "break-all" } }, u.link_target)] : null,
@@ -922,14 +925,17 @@ async function fileDrawer(ctx, idx, startOffset) {
         f.uniform != null ? [h("span", "Sampled content"), h("span", { style: { color: "var(--warn)" } }, `every sampled byte is 0x${f.uniform.toString(16).padStart(2, "0")}`)] : null,
         fat ? null : [h("span", "Hard links"), h("span", f.hard_links)],
         ntfs ? [h("span", "USN"), h("span.mono", f.usn ?? "")] : null,
-        h("span", fat ? "Directory entry at" : ext ? "Inode at" : optical ? "Directory record at" : "MFT record at"), h("a.mono", { href: "#", onclick: (e) => { e.preventDefault(); jump(f.record_image_offset); } }, `image offset ${num(f.record_image_offset)} -> hex`),
+        f.record_image_offset != null ? [h("span", fat ? "Directory entry at" : ext ? "Inode at" : optical ? "Directory record at" : nameOnly ? (nameOnly.source === "$LogFile" ? "Log record at" : "Index entry at") : "MFT record at"), h("a.mono", { href: "#", onclick: (e) => { e.preventDefault(); jump(f.record_image_offset); } }, `image offset ${num(f.record_image_offset)} -> hex`)] : null,
         u && u.journal_seq != null ? [h("span", "Inode copy in journal"), h("a.mono", { href: "#", onclick: (e) => { e.preventDefault(); jump(u.inode_image_offset); } }, `image offset ${num(u.inode_image_offset)} -> hex`)] : null,
         f.data_image_offset != null ? [h("span", ext ? "First data block" : optical ? "First data sector" : "First data cluster"), h("a.mono", { href: "#", onclick: (e) => { e.preventDefault(); jump(f.data_image_offset); } }, `image offset ${num(f.data_image_offset)} -> hex`)] : null,
         f.error ? [h("span", "Parser note"), h("span", { style: { color: "var(--warn)" } }, f.error)] : null,
       )),
       f.streams.length > 1 ? h("div.card.flat", h("h3", "Data streams"), h("table.ts", h("tr", h("th", "Name"), h("th", "Size"), h("th", "")),
         f.streams.map((s) => h("tr", h("td.mono", s.name || "(unnamed $DATA)"), h("td", bytes(s.size)), h("td", h("button.sm", { onclick: () => { stream = s.name; page = 0; loadHex(); } }, "View"), " ", canWrite() ? h("a.btn.sm", { href: apiUrl(`${base}/export?stream=${encodeURIComponent(s.name)}`) }, "Export") : null))))) : null,
-      !r.is_dir ? h("div.card.flat",
+      f.journal && f.journal.length ? h("div.card.flat", h("h3", "Change journal"), h("p.muted", { style: { margin: "4px 0 8px" } }, "What the NTFS change journal recorded for this file, newest first."),
+        h("table.ts", f.journal.map((c) => h("tr", h("td.mono", ts(c.t, 19)), h("td", h("b", c.what)), h("td.mono", { style: { wordBreak: "break-all" } }, c.old_path ? `${c.old_path} -> ${c.path}` : c.path))))) : null,
+      nameOnly && !r.is_dir ? h("div.card.flat", h("h3", "Content"), h("p.muted", { style: { margin: 0 } }, "None: only the name, times and size survive. Carving may still find the content in free space.")) : null,
+      !r.is_dir && !nameOnly ? h("div.card.flat",
         h("div.hd", h("h3", "Content"), h("span.sp"), pageInfo,
           h("button.sm", { onclick: () => { if (page > 0) { page--; loadHex(); } } }, "Prev"),
           h("button.sm", { onclick: () => { page++; loadHex(); } }, "Next"),
@@ -942,12 +948,12 @@ async function fileDrawer(ctx, idx, startOffset) {
           : [h("span", "MD5"), h("span.mono.sel", f.hashes.md5), h("span", "SHA-1"), h("span.mono.sel", f.hashes.sha1), h("span", "SHA-256"), h("span.mono.sel", { style: { wordBreak: "break-all" } }, f.hashes.sha256)],
         h("span", "Hash sets"), f.hashes.sets.length ? h("div.row.wrap", f.hashes.sets.map((s) => h("span.pill", { class: s.kind === "notable" ? "bad" : null, title: `${s.kind === "notable" ? "Known bad" : "Known good"}, matched by ${ALGO[s.algo]}` }, s.name))) : h("span.muted", "no match"),
         h("span", "Hashed"), h("span.muted", ts(f.hashes.hashed_at, 19)))) : null,
-      !r.is_dir && r.size > 0 ? lazy("Byte map", () => byteMap(`${base}/binmap`, showAt)) : null,
-      !r.is_dir && r.size > 0 ? lazy("Strings", () => stringsPanel(`${base}/strings`, showAt)) : null,
+      !r.is_dir && !nameOnly && r.size > 0 ? lazy("Byte map", () => byteMap(`${base}/binmap`, showAt)) : null,
+      !r.is_dir && !nameOnly && r.size > 0 ? lazy("Strings", () => stringsPanel(`${base}/strings`, showAt)) : null,
       f.events.length ? h("div.card.flat", h("h3", "Timeline events"), h("table.ts", f.events.map((e) => h("tr", h("td.mono", ts(e.t, undefined, { raw: deviceClock(f.fs) })), h("td", macb(e.macb)), h("td", h("span.src." + e.src, ext && e.src === "SI" ? "INODE" : e.src)))))) : null,
     ),
   );
-  loadHex();
+  if (!nameOnly) loadHex();
 }
 
 function macb(s) { return h("span.macb", [...s].map((c) => (c === "." ? "." : h("b", c)))); }
@@ -984,11 +990,11 @@ async function timelineTab(ctx) {
     const params = new URLSearchParams({ q: q.value, from: f && !raw ? dayStart(f) : f, to: t && !raw ? dayStart(next(t)) : t, only, offset, limit: 400 });
     const r = await api(`${base}?${params}`);
     total = r.total;
-    const WIN = { EXEC: "Program run", OPEN: "File or folder opened", USB: "USB device", INST: "Program installed", NET: "Network", EVT: "Event" };
+    const WIN = { EXEC: "Program run", OPEN: "File or folder opened", USB: "USB device", INST: "Program installed", NET: "Network", EVT: "Event", USN: "File change (change journal)" };
     const rows = r.items.map((e) => {
       const art = e.web || e.windows;
       const click = e.web ? () => webDetail(e.src === "DL" ? "Download" : e.src === "SEARCH" ? "Search" : "Page visit", [[`Time (${zoneName()})`, ts(e.t)], ["What", e.path], ["Where", e.detail]])
-        : e.windows ? () => webDetail(WIN[e.src] || e.src, [[`Time (${zoneName()})`, ts(e.t)], ["What", e.path], ["Detail", e.detail], ["More", h("a", { href: `#/c/${ctx.cid}/e/${ctx.eid}/system?fi=${ctx.fi}&sec=${{ EXEC: "exec", OPEN: "files", USB: "devices", NET: "devices", INST: "software" }[e.src] || "events"}`, onclick: closeModal }, "Open in the System summary")]])
+        : e.windows ? () => webDetail(WIN[e.src] || e.src, [[`Time (${zoneName()})`, ts(e.t)], ["What", e.path], ["Detail", e.detail], ["More", h("a", { href: `#/c/${ctx.cid}/e/${ctx.eid}/system?fi=${ctx.fi}&sec=${{ EXEC: "exec", OPEN: "files", USB: "devices", NET: "devices", INST: "software", USN: "journal" }[e.src] || "events"}`, onclick: closeModal }, "Open in the System summary")]])
         : () => fileDrawer(ctx, e.idx);
       return h("tr", { class: e.deleted ? "deleted" : null, onclick: click },
         h("td.mono", ts(e.t, undefined, art ? {} : fsClock(ctx))), h("td", art ? h("span.muted", e.macb) : macb(e.macb)), h("td", h("span.src." + e.src, { title: WIN[e.src] || (e.src === "DEL" ? "Inode deleted (dtime)" : null) }, !ntfs && e.src === "SI" ? "INODE" : e.src)),
@@ -1324,7 +1330,7 @@ async function searchTab(ctx) {
 }
 
 // ---------------------------------------------------------------- Windows system summary
-const SYS_SECTIONS = [["overview", "Overview"], ["exec", "Programs run"], ["files", "Files and folders"], ["devices", "USB and networks"], ["logons", "Accounts and logons"], ["events", "Events"], ["software", "Software and autostart"], ["sources", "Sources"]];
+const SYS_SECTIONS = [["overview", "Overview"], ["exec", "Programs run"], ["files", "Files and folders"], ["folders", "Folders (ShellBags)"], ["journal", "Change journal"], ["devices", "USB and networks"], ["logons", "Accounts and logons"], ["events", "Events"], ["software", "Software and autostart"], ["sources", "Sources"]];
 // The Windows artifacts API sends raw FILETIMEs (100 ns since 1601); minute
 // precision survives the conversion to a JavaScript number.
 const ftIso = (t) => (t ? new Date(t / 10000 - 11644473600000).toISOString().replace(/\.\d+Z$/, "Z") : "");
@@ -1454,7 +1460,7 @@ async function systemTab(ctx) {
   const what = isMac(r.fs) ? "macOS system artifacts (property lists, unified logs, KnowledgeC, quarantine events) are not read yet; the files themselves are in the Explorer."
     : isExt(r.fs) ? "Accounts, logons, shell histories, logs, the journal, packages and persistence of this Linux volume."
     : isFat(r.fs) || isOptical(r.fs) ? "Windows or Linux system files found on this volume (a removable drive or disc usually has none)."
-    : "Registry, event logs, Prefetch, shortcuts and Jump Lists of this Windows volume.";
+    : "Registry, event logs, Prefetch, shortcuts, Jump Lists, ShellBags and the change journal of this Windows volume.";
   const intro = h("div.hd", h("div", h("h1", "System summary"), h("div.muted", what + " " + zoneSentence())), h("span.sp"), fsPicker(ctx, "system"));
   if (isExt(r.fs) && r.schema < 5) {
     return render(h("div.stack", intro, h("div.card.empty", h("p", "This evidence was analyzed before Kokino read Linux system files."),
@@ -1466,7 +1472,7 @@ async function systemTab(ctx) {
   }
   if (r.linux && r.linux.sources && r.linux.sources.length) return linuxSystem(ctx, r);
   const w = r.windows;
-  if (!w.sources.length) {
+  if (!w.sources.length && !r.journal) {
     return render(h("div.stack", intro, h("div.card.empty", isExt(r.fs) ? "No Linux system files (passwd, logs, shell histories, package databases) on this volume." : "No Windows registry hives, event logs, Prefetch files, shortcuts or Jump Lists on this volume.")));
   }
   const fileOf = (i) => (i == null ? "" : r.files[i] || "");
@@ -1507,8 +1513,56 @@ async function systemTab(ctx) {
               failed ? h("li", `${failed} failed logon(s)`) : null,
             ])
             : h("p.muted", "Nothing that stands out. Review the sections for context."))),
+        r.journal ? card("Change journal ($UsnJrnl)", journalSummary()) : null,
         card("Accounts", usersTable()),
       ];
+    },
+    folders: () => {
+      let q = "";
+      const out = h("div");
+      const fill = () => out.replaceChildren(table([`Last opened (${zoneName()})`, "Folder", "Kind", "User", "Folder times when opened (local)", "MFT record", "Source"],
+        w.shellbags.filter((b) => !q || (b.path + " " + b.user).toLowerCase().includes(q)).map((b) =>
+          h("tr", { class: b.deleted ? "deleted" : null, onclick: () => open(b.on_volume != null ? b.on_volume : b.file), title: b.on_volume != null ? fileOf(b.on_volume) : fileOf(b.file) },
+            h("td.mono", t16(b.opened)), h("td.nm", h("b", b.path), b.written && b.written !== b.opened ? h("div.muted", `subfolder list changed ${t16(b.written)}`) : null),
+            h("td", h("span.pill" + (b.kind === "network" || b.path.startsWith("\\\\") ? ".info" : b.kind === "drive" ? ".warn" : ""), b.kind), b.on_volume != null ? h("span.pill.ok", { style: { marginLeft: "4px" }, title: "The same folder (MFT record, sequence number and name) is on this volume" }, "on this volume") : null),
+            h("td", b.user),
+            h("td.muted", b.created ? `created ${ts(ftIso(b.created), 16, { raw: true })}` : "", b.modified ? h("div", `modified ${ts(ftIso(b.modified), 16, { raw: true })}`) : null),
+            h("td.mono", b.mft ? `${b.mft[0]} / ${b.mft[1]}` : ""), h("td.muted", b.source)))));
+      fill();
+      return [filterBox("Filter by folder or user...", (v) => { q = v; fill(); }),
+        h("p.muted", { style: { fontSize: "12.5px" } }, "Explorer keeps the view settings of every folder a user opened, in UsrClass.dat (Windows 7 and later) or NTUSER.DAT, and keeps them after the folder, the USB stick or the network share is gone. A time is shown when the folder was the most recently opened one in its parent. The folder's own times are as they were when it was opened, in the computer's local time; the MFT record ties a folder to this or another NTFS volume."), out];
+    },
+    journal: () => {
+      const kinds = [["", "All"], ["created", "Created"], ["deleted", "Deleted"], ["renamed", "Renamed"], ["changed", "Other changes"]];
+      let kind = "", q = "", order = "", shown = 0, total = 0;
+      const out = h("tbody");
+      const status = h("div.muted");
+      const more = h("button", { onclick: () => load(false) }, "Show more");
+      const load = async (reset) => {
+        if (reset) { out.replaceChildren(); shown = 0; }
+        const p = new URLSearchParams({ q, kind, order, offset: shown, limit: 500 });
+        const res = await api(`/cases/${ctx.cid}/evidence/${ctx.eid}/fs/${ctx.fi}/journal?${p}`);
+        total = res.total;
+        for (const c of res.items) {
+          out.append(h("tr", { class: c.what.includes("deleted") ? "deleted" : null, onclick: () => (c.file != null ? open(c.file) : webDetail(c.path, [[`Time (${zoneName()})`, ts(c.t)], ["First record", c.first ? ts(c.first) : ""], ["What", c.what], ["Earlier name", c.old_path], ["MFT record / seq", `${c.record} / ${c.seq}`], ["USN", String(c.usn)]])), title: c.file_path || "" },
+            h("td.mono", ts(c.t, 19)), h("td.nm", h("b", c.path), c.old_path ? h("div.muted", `was ${c.old_path}`) : null),
+            h("td", h("span.pill" + (c.what.includes("deleted") ? ".bad" : c.what.includes("created") ? ".ok" : c.what.includes("renamed") ? ".warn" : ""), c.what)),
+            h("td.mono", `${c.record} / ${c.seq}`), h("td", c.file != null ? h("span.pill.info", { title: c.file_path }, "on this volume") : null)));
+        }
+        shown += res.items.length;
+        status.textContent = `${num(shown)} of ${num(total)} change(s)`;
+        more.style.display = shown < total ? "" : "none";
+      };
+      const s2 = h("div.seg");
+      const drawK = () => s2.replaceChildren(...kinds.map(([k, l]) => h("button", { class: kind === k ? "on" : null, onclick: () => { kind = k; drawK(); load(true); } }, l)));
+      const ord = h("select", { onchange: () => { order = ord.value; load(true); } }, h("option", { value: "" }, "Newest first"), h("option", { value: "asc" }, "Oldest first"));
+      drawK();
+      load(true);
+      return [r.journal ? card("Change journal ($UsnJrnl)", journalSummary()) : h("div.card.empty", "No change journal on this volume."),
+        h("div.row.wrap", s2, filterBox("Filter by path or earlier name...", (v) => { q = v; load(true); }), ord),
+        h("p.muted", { style: { fontSize: "12.5px" } }, "Windows writes a record to the NTFS change journal for every change to a file. Records of one round of changes (from opening the file to closing it) are combined here into one line. Paths use folders as they are now, or as the journal last named them when the folder is gone; [folder N-S] is a folder neither knows. Click a change to open the file, when it is still on the volume."),
+        h("table.tbl.sys", h("thead", h("tr", [`Time (${zoneName()})`, "File", "What happened", "Record / seq", ""].map((c) => h("th", c)))), out),
+        h("div.row", status, more)];
     },
     exec: () => {
       const srcs = ["", "Prefetch", "UserAssist", "Amcache", "ShimCache", "Event 4688"];
@@ -1604,6 +1658,14 @@ async function systemTab(ctx) {
         h("td", s.error ? h("span.bad-text", s.error) : s.note ? h("span.muted", s.note) : h("span.pill.ok", "read"), s.deleted ? h("span.pill.bad", { style: { marginLeft: "6px" } }, "deleted") : null)))),
     ],
   };
+  function journalSummary() {
+    const j = r.journal;
+    const kv = (rows) => h("div.kv", rows.filter(([, v]) => v).map(([k, v]) => [h("span", k), h("span", v)]));
+    return h("div.stack", kv([["Covers", j.first ? `${t16(j.first)} to ${t16(j.last)}` : "no records"], ["Records", num(j.records)],
+      ["Changes", `${num(j.changes + j.dropped)}: ${num(j.created_files)} created, ${num(j.deleted_files)} deleted, ${num(j.renamed_files)} renamed${j.dropped ? ` (the oldest ${num(j.dropped)} not kept)` : ""}`],
+      ["Journal created", t16(j.created)], ["Size", `${bytes(j.size)} (${bytes(j.stored)} stored; older records aged out)`], ["Maximum size", j.max ? bytes(j.max.max_size) : ""], ["File", j.path]]),
+      j.error ? h("p.bad-text", j.error) : null);
+  }
   function usersTable() {
     return table(["Account", "RID", "Created", "Last logon", "Logons", "Password set", "Profile"],
       w.users.map((u) => h("tr", h("td", h("b", u.name), u.disabled ? h("span.pill", { style: { marginLeft: "6px" } }, "disabled") : null, h("div.muted.mono", u.sid)), h("td.num", u.rid ?? ""),

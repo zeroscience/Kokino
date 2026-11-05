@@ -254,18 +254,26 @@ def _int_bytes(v, signed):
             n += 1
 
 
-def add_nonresident_data(rec, lcn, clusters, size, cluster):
-    """Append an unnamed non-resident $DATA attribute with a single run."""
+def add_nonresident_data(rec, lcn, clusters, size, cluster, name="", sparse=0):
+    """Append a non-resident $DATA attribute (unnamed unless `name`) with a
+    single run, after `sparse` sparse clusters."""
+    runlist = b""
+    if sparse:
+        sc = _int_bytes(sparse, False)
+        runlist += bytes([len(sc)]) + sc
     cnt = _int_bytes(clusters, False)
     off = _int_bytes(lcn, True)
-    runlist = bytes([(len(off) << 4) | len(cnt)]) + cnt + off + b"\0"
-    total = (0x40 + len(runlist) + 7) & ~7
+    runlist += bytes([(len(off) << 4) | len(cnt)]) + cnt + off + b"\0"
+    enc = name.encode("utf-16le")
+    runs_off = (0x40 + len(enc) + 7) & ~7
+    total = (runs_off + len(runlist) + 7) & ~7
     attr_id = struct.unpack_from("<H", rec, 0x28)[0]
     a = bytearray(total)
-    struct.pack_into("<IIBBHHH", a, 0, 0x80, total, 1, 0, 0x40, 0, attr_id)
-    struct.pack_into("<QQHH", a, 0x10, 0, clusters - 1, 0x40, 0)
-    struct.pack_into("<QQQ", a, 0x28, clusters * cluster, size, size)
-    a[0x40:0x40 + len(runlist)] = runlist
+    struct.pack_into("<IIBBHHH", a, 0, 0x80, total, 1, len(name), 0x40, 0x8000 if sparse else 0, attr_id)
+    struct.pack_into("<QQHH", a, 0x10, 0, sparse + clusters - 1, runs_off, 0)
+    struct.pack_into("<QQQ", a, 0x28, (sparse + clusters) * cluster, size, size)
+    a[0x40:0x40 + len(enc)] = enc
+    a[runs_off:runs_off + len(runlist)] = runlist
     struct.pack_into("<H", rec, 0x28, attr_id + 1)
     end = struct.unpack_from("<H", rec, 0x14)[0]
     for x in attrs(rec):

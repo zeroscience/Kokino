@@ -184,11 +184,12 @@ every block right. Blocks are full 512-byte blocks, as NIST counts them.
   Kokino marks every deleted FAT file "Recovered as contiguous" and now
   warns when that guess runs into another file's space. exFAT keeps the
   chain, and there Kokino recovers these same cases completely.
-- **NTFS lists fewer deleted files than NIST counts** in cases 08, 10, 13
-  and 14. NIST counts names that survive only in directory index slack
-  (`$I30`) after the file's MFT record was reused. Kokino reads every MFT
-  record but does not yet parse index slack; those entries carry names and
-  times but no content.
+- **NTFS deleted files whose MFT record was reused** (cases 08, 10, 13
+  and 14) have no content left to check, so the table above lists only
+  those with a record. NIST counts them because their names survive. On
+  these Windows 7 images the names are in `$LogFile`, which records every
+  folder index change with the entry itself, more than in index slack
+  (`$I30`). Kokino now reads both and lists such names (see below).
 - **Names** in other scripts (case 04: Korean, Arabic, Urdu, Hebrew,
   Devanagari) come out right on FAT, exFAT and NTFS. The tags inside those
   files use English names, so they were checked by hand.
@@ -198,6 +199,29 @@ every block right. Blocks are full 512-byte blocks, as NIST counts them.
 - **Wrong content without a warning**: 4 files of 3,323 (in ntfs-01-recycle,
   fat-08, ntfs-08 and ntfs-14), each overwritten by a file that left no
   trace Kokino can see yet.
+
+### NTFS: names without an MFT record (unreleased)
+
+Deleted files Kokino lists on the NTFS images with the full analysis:
+those with an MFT record (the table above) plus names found only in
+folder indexes or `$LogFile`, against NIST's count of deleted files with
+metadata.
+
+| Image | Deleted with metadata (NIST) | With an MFT record | Names without a record | Kokino in all |
+|---|--:|--:|--:|--:|
+| `ntfs-08` | 25 | 13 | 12 | 25 |
+| `ntfs-10` | 757 | 260 | 508 | 768 |
+| `ntfs-13` | 135 | 118 | 20 | 138 |
+| `ntfs-14` | 15 | 10 | 3 | 13 |
+
+Case 08 now matches exactly. Every name without a record carries the MFT
+record it had and says which file holds that record now (in case 08,
+Albireo.txt's record 65 holds Sheliak.txt). The 11 extra names in case
+10 and 3 in case 13 (and the 2 missing in case 14) are not explained yet:
+NIST's layout gives counts, not the names, so they could not be matched
+one by one. The other NTFS cases list no name without a record, or one
+from the tools that made the image. Hard links (case 15) are recognized
+as a second name of the same record, not as a lost file.
 
 ## NIST CFReDS: deleted file recovery on ext2, ext3 and ext4
 

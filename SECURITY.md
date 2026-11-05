@@ -99,7 +99,16 @@ Virtual disks, optical media and Mac disks (1.2.7):
 | `optical` | ISO 9660 descriptors, sessions, directory records, Rock Ridge and Joliet; UDF anchor, volume descriptors, partition maps, file set, file entries, allocation descriptors and directory entries | 15 + 15 min | 4,318,442 | 3 (overflow, out-of-range reads) |
 | `mac` | HFS+ volume header, catalog, extents and attributes B-trees, journal scan; APFS checkpoints, object maps, file-system trees, old-node scan; decmpfs with zlib and LZVN | 3 x 15 min | 232,151 | 3 (overflows, out-of-range read) |
 
-In all: 232,089,581 inputs over 21 targets, and 28 distinct problems
+Deeper NTFS and Windows (unreleased):
+
+| Target | What it covers | Rounds | Inputs in all | Distinct problems found |
+|---|---|---|--:|---|
+| `ntfs` | again, now that the walk also reads every folder's index slack and $LogFile for names | 10 min | 196,853 | none |
+| `indx` | folder index (INDX) records with their fixups, deleted folders' index roots, $LogFile record pages; the name carver with a fixed folder and with any parent accepted | 10 min | 35,329,154 | none |
+| `usn` | change journal records (versions 2, 3 and 4), split across two buffers as the reader hands them over, grouping into changes, $Max | 10 min | 8,954,455 | none |
+| `shellbags` | BagMRU trees in a hive, every shell item kind (root, drive, folder with extension blocks, network, ZIP, URI, control panel, delegate) | 10 min | 15,785,595 | none |
+
+In all: 292,355,638 inputs over 24 targets, and 28 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed

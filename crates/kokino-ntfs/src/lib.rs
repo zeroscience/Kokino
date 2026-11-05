@@ -13,6 +13,7 @@ use ntfs::structured_values::{NtfsFileName, NtfsFileNamespace, NtfsStandardInfor
 pub use ntfs::Ntfs;
 use ntfs::{NtfsAttribute, NtfsAttributeFlags, NtfsAttributeType, NtfsFile, NtfsFileFlags, NtfsReadSeek};
 
+pub mod indx;
 pub mod lznt1;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -68,7 +69,25 @@ pub struct FsEntry {
     /// Owner, mode and inode on Unix file systems (ext2/3/4); None elsewhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unix: Option<UnixMeta>,
+    /// Set for NTFS names recovered from a folder index ($I30) or $LogFile
+    /// rather than from an MFT record; such entries have no content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_only: Option<NameOnly>,
 }
+
+/// Where a name without an MFT record came from.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NameOnly {
+    /// The file's own MFT reference, when known.
+    pub mft_record: Option<u64>,
+    pub mft_seq: u16,
+    /// "$I30 slack", "$I30 of a deleted folder" or "$LogFile".
+    pub source: String,
+}
+
+/// Names without an MFT record get record numbers from here up (MFT
+/// references are 48-bit), so they never collide with real records.
+pub const NAME_ONLY_BASE: u64 = 1 << 48;
 
 /// What a Unix inode adds to an entry.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -236,6 +255,9 @@ fn scan_inner<R: Read + Seek>(ntfs: &Ntfs, r: &mut R, mut progress: impl FnMut(u
     };
 
     let mut entries = Vec::with_capacity(total.min(1 << 20) as usize);
+    let mut indexes: Vec<FolderIndex> = vec![];
+    // Every (parent, name, record) a $FILE_NAME gives, hard links included.
+    let mut links: Vec<(u64, String, u64)> = vec![];
     let mut unreadable = vec![];
     for rec in 0..total {
         if rec % 2048 == 0 && !progress(rec, total) {
@@ -260,7 +282,13 @@ fn scan_inner<R: Read + Seek>(ntfs: &Ntfs, r: &mut R, mut progress: impl FnMut(u
             }
         };
         match guarded(|| entry_from_file(&file, r)) {
-            Ok(Some(e)) => entries.push(e),
+            Ok(Some((e, mut ix))) => {
+                links.extend(ix.names.drain(..).map(|(p, n)| (p, n, e.record)));
+                if !ix.runs.is_empty() || !ix.root.is_empty() {
+                    indexes.push(FolderIndex { record: e.record, ..ix });
+                }
+                entries.push(e)
+            }
             Ok(None) => {}
             Err(e) => {
                 unreadable.push(UnreadableRecord { record: rec, reason: e.to_string() });
@@ -271,6 +299,7 @@ fn scan_inner<R: Read + Seek>(ntfs: &Ntfs, r: &mut R, mut progress: impl FnMut(u
     progress(total, total);
     note_reused_clusters(ntfs, r, &mut entries);
     resolve_paths(&mut entries);
+    index_names(ntfs, r, &mut entries, indexes, links, total, &unreadable);
     Ok(NtfsScan { volume, entries, unreadable })
 }
 
@@ -353,7 +382,19 @@ fn volume_details<R: Read + Seek>(ntfs: &Ntfs, r: &mut R) -> (String, String, bo
 /// Most attributes taken from one file record and its extension records.
 const MAX_ATTRIBUTES: usize = 65_536;
 
-fn entry_from_file<R: Read + Seek>(file: &NtfsFile, r: &mut R) -> anyhow::Result<Option<FsEntry>> {
+/// Where a folder's index lives: $INDEX_ALLOCATION:$I30 runs as (volume
+/// offset or None for sparse, length), and for deleted folders the
+/// $INDEX_ROOT value.
+#[derive(Default)]
+struct FolderIndex {
+    record: u64,
+    runs: Vec<(Option<u64>, u64)>,
+    root: Vec<u8>,
+    /// Every name the record's $FILE_NAMEs give: (parent record, lowercase).
+    names: Vec<(u64, String)>,
+}
+
+fn entry_from_file<R: Read + Seek>(file: &NtfsFile, r: &mut R) -> anyhow::Result<Option<(FsEntry, FolderIndex)>> {
     let flags = file.flags();
     let in_use = flags.contains(NtfsFileFlags::IN_USE);
     let mut e = FsEntry {
@@ -380,8 +421,10 @@ fn entry_from_file<R: Read + Seek>(file: &NtfsFile, r: &mut R) -> anyhow::Result
         record_offset: file.position().value().map(|v| v.get()).unwrap_or(0),
         error: None,
         unix: None,
+        name_only: None,
     };
     let mut best_ns: i32 = -1;
+    let mut ix = FolderIndex::default();
 
     // In-use records may spread attributes across extension records via an
     // $ATTRIBUTE_LIST; deleted records are read in place since their extension
@@ -405,13 +448,13 @@ fn entry_from_file<R: Read + Seek>(file: &NtfsFile, r: &mut R) -> anyhow::Result
                 }
             };
             if let Ok(attr) = item.to_attribute() {
-                take_attribute(&attr, r, &mut e, &mut best_ns);
+                take_attribute(&attr, r, &mut e, &mut best_ns, &mut ix);
             }
         }
     } else {
         for attr in file.attributes_raw() {
             match attr {
-                Ok(attr) => take_attribute(&attr, r, &mut e, &mut best_ns),
+                Ok(attr) => take_attribute(&attr, r, &mut e, &mut best_ns, &mut ix),
                 Err(err) => {
                     e.error = Some(err.to_string());
                     break;
@@ -428,10 +471,13 @@ fn entry_from_file<R: Read + Seek>(file: &NtfsFile, r: &mut R) -> anyhow::Result
         e.size = s.size;
         e.resident = s.resident;
     }
-    Ok(Some(e))
+    if !e.is_dir || !e.deleted {
+        ix.root.clear();
+    }
+    Ok(Some((e, ix)))
 }
 
-fn take_attribute<R: Read + Seek>(attr: &NtfsAttribute, r: &mut R, e: &mut FsEntry, best_ns: &mut i32) {
+fn take_attribute<R: Read + Seek>(attr: &NtfsAttribute, r: &mut R, e: &mut FsEntry, best_ns: &mut i32, ix: &mut FolderIndex) {
     let Ok(ty) = attr.ty() else { return };
     match ty {
         NtfsAttributeType::StandardInformation => {
@@ -445,6 +491,7 @@ fn take_attribute<R: Read + Seek>(attr: &NtfsAttribute, r: &mut R, e: &mut FsEnt
             if let Ok(f) = attr.structured_value::<_, NtfsFileName>(r) {
                 let ns = f.namespace();
                 let name = f.name().to_string_lossy();
+                ix.names.push((f.parent_directory_reference().file_record_number(), name.to_lowercase()));
                 if ns == NtfsFileNamespace::Dos {
                     e.dos_name = Some(name.clone());
                 }
@@ -492,8 +539,146 @@ fn take_attribute<R: Read + Seek>(attr: &NtfsAttribute, r: &mut R, e: &mut FsEnt
             }
         }
         NtfsAttributeType::ReparsePoint => e.has_reparse = true,
+        NtfsAttributeType::IndexAllocation | NtfsAttributeType::IndexRoot if attr.name().map(|n| n.to_string_lossy()).unwrap_or_default() == "$I30" => match attr.value(r) {
+            Ok(NtfsAttributeValue::NonResident(v)) if ty == NtfsAttributeType::IndexAllocation => {
+                for run in v.data_runs().take(MAX_ATTRIBUTES).map_while(Result::ok) {
+                    ix.runs.push((run.data_position().value().map(|p| p.get()), run.allocated_size()));
+                }
+            }
+            Ok(NtfsAttributeValue::Resident(v)) if ty == NtfsAttributeType::IndexRoot => ix.root = v.data().to_vec(),
+            _ => {}
+        },
         _ => {}
     }
+}
+
+/// Most index bytes read from one folder, and from $LogFile.
+const MAX_INDEX: u64 = 64 << 20;
+const MAX_LOG: u64 = 256 << 20;
+
+/// Reads runs of (volume offset or None for sparse, length) into one
+/// buffer, with a map of (buffer offset, volume offset, length).
+fn read_runs<R: Read + Seek>(r: &mut R, runs: &[(Option<u64>, u64)], max: u64) -> (Vec<u8>, Vec<(usize, u64, u64)>) {
+    let mut data = vec![];
+    let mut map = vec![];
+    for (vol, len) in runs {
+        if data.len() as u64 + len > max {
+            break;
+        }
+        let at = data.len();
+        data.resize(at + *len as usize, 0);
+        if let Some(v) = vol {
+            if r.seek(SeekFrom::Start(*v)).is_err() || r.read_exact(&mut data[at..]).is_err() {
+                data.truncate(at);
+                break;
+            }
+            map.push((at, *v, *len));
+        }
+    }
+    (data, map)
+}
+
+fn map_back(map: &[(usize, u64, u64)], off: usize) -> Option<u64> {
+    map.iter().find(|(at, _, len)| off >= *at && ((off - at) as u64) < *len).map(|(at, v, _)| v + (off - at) as u64)
+}
+
+/// Names that no MFT record accounts for, from the slack of every folder's
+/// INDX records, the whole index of deleted folders, and $LogFile. A name
+/// is dropped when an entry in that folder already has it with the same
+/// MFT record (the index tree moves entries around and leaves copies, and
+/// the log repeats them). Renamed and moved files keep their old names this
+/// way, and deleted files whose MFT record was reused keep their name,
+/// times and size.
+#[allow(clippy::too_many_arguments)]
+fn index_names<R: Read + Seek>(ntfs: &Ntfs, r: &mut R, entries: &mut Vec<FsEntry>, indexes: Vec<FolderIndex>, links: Vec<(u64, String, u64)>, mft_records: u64, unreadable: &[UnreadableRecord]) {
+    let by_rec: HashMap<u64, usize> = entries.iter().enumerate().map(|(i, e)| (e.record, i)).collect();
+    let mut names: HashMap<u64, Vec<(String, u64)>> = HashMap::new();
+    for (parent, name, rec) in links {
+        names.entry(parent).or_default().push((name, rec));
+    }
+    let mut got: Vec<(indx::IndexName, Option<u64>)> = vec![];
+    for ix in indexes {
+        let Some(dir) = by_rec.get(&ix.record).map(|&i| &entries[i]).filter(|d| d.is_dir) else { continue };
+        let key = (dir.record, dir.seq);
+        if !ix.runs.is_empty() {
+            let (mut data, map) = read_runs(r, &ix.runs, MAX_INDEX);
+            for n in indx::scan_allocation(&mut data, key, dir.deleted) {
+                let vol = map_back(&map, n.offset);
+                got.push((n, vol));
+            }
+        }
+        if !ix.root.is_empty() {
+            got.extend(indx::scan_root(&ix.root, key).into_iter().map(|n| (n, None)));
+        }
+    }
+    if let Ok(ext) = stream_extents(ntfs, r, 2, "") {
+        let runs: Vec<(Option<u64>, u64)> = ext.iter().map(|x| (x.vol, x.len)).collect();
+        let (mut data, map) = read_runs(r, &runs, MAX_LOG);
+        let dirs: std::collections::HashSet<(u64, u16)> = entries.iter().filter(|e| e.is_dir).map(|e| (e.record, e.seq)).collect();
+        for n in indx::scan_logfile(&mut data, &|p| dirs.contains(&p)) {
+            let vol = map_back(&map, n.offset);
+            got.push((n, vol));
+        }
+    }
+    // Names whose record is known first: a later copy without one is then
+    // recognized as the same file.
+    got.sort_by_key(|(n, _)| n.file.is_none_or(|f| f.0 >= mft_records));
+    let mut found = vec![];
+    for (n, vol) in got {
+        // 8.3 names repeat a long name's entry; the first 24 records are
+        // NTFS's own files, whose names change only when it is formatted.
+        if n.namespace == 2 || n.file.is_some_and(|f| f.0 < 24) {
+            continue;
+        }
+        let Some(dir) = by_rec.get(&n.parent.0).map(|&i| &entries[i]) else { continue };
+        // A reference past the end of the MFT means the header in front was
+        // not this entry's.
+        let file = n.file.filter(|f| f.0 < mft_records);
+        let lname = n.name.to_lowercase();
+        let rec = file.map(|f| f.0);
+        if names.get(&dir.record).is_some_and(|v| v.iter().any(|(nm, r)| *nm == lname && (rec.is_none() || rec == Some(*r)))) {
+            continue;
+        }
+        names.entry(dir.record).or_default().push((lname, rec.unwrap_or(u64::MAX)));
+        let src = n.source.label();
+        let note = match file {
+            None => format!("Name found in {} with its times and size; which MFT record it had is not known, so there is no content.", src),
+            Some((rec, seq)) => match by_rec.get(&rec).map(|&i| &entries[i]) {
+                Some(o) if o.seq == seq => format!("Earlier name of MFT record {}, now {}: the file was renamed or moved (name found in {}).", rec, o.path, src),
+                Some(o) => format!("MFT record {} now holds another file ({}): this file's own record was reused, so its content cannot be read through the file system (carving may still find it). Name, times and size are from {}.", rec, o.path, src),
+                None if unreadable.iter().any(|u| u.record == rec) => format!("Name of MFT record {}, which could not be parsed (see the unreadable records); name, times and size are from {}.", rec, src),
+                None => format!("MFT record {} holds no file now: name, times and size are from {}; there is no content.", rec, src),
+            },
+        };
+        let path = if dir.path == "/" { format!("/{}", n.name) } else { format!("{}/{}", dir.path, n.name) };
+        found.push(FsEntry {
+            record: NAME_ONLY_BASE + found.len() as u64,
+            seq: file.map(|f| f.1).unwrap_or(0),
+            parent: dir.record,
+            parent_seq: dir.seq,
+            is_dir: n.is_dir(),
+            deleted: true,
+            orphan: dir.orphan,
+            size: n.size,
+            alloc_size: n.alloc_size,
+            resident: false,
+            attributes: n.flags & 0xFFFF,
+            hard_links: 0,
+            usn: None,
+            si: None,
+            fname: Some(n.times),
+            streams: vec![],
+            has_reparse: false,
+            record_offset: vol.unwrap_or(0),
+            error: Some(note),
+            unix: None,
+            name_only: Some(NameOnly { mft_record: file.map(|f| f.0), mft_seq: file.map(|f| f.1).unwrap_or(0), source: src.to_string() }),
+            name: n.name,
+            dos_name: None,
+            path,
+        });
+    }
+    entries.extend(found);
 }
 
 fn resolve_paths(entries: &mut [FsEntry]) {
@@ -787,8 +972,13 @@ mod tests {
         // testfs1 uses 512-byte clusters; one 1 KiB record straddles two
         // non-contiguous MFT runs, which the ntfs crate cannot read. It must
         // be reported, not silently dropped.
-        assert_eq!(sub, 511);
+        assert_eq!(sub, 512);
         assert_eq!(scan.unreadable.len(), 1);
+        // Its name survives in the folder's index.
+        let named = scan.entries.iter().find(|e| e.name_only.is_some()).unwrap();
+        assert_eq!((named.path.as_str(), named.name_only.as_ref().unwrap().mft_record), ("/many_subdirs/187", Some(scan.unreadable[0].record)));
+        assert!(named.error.as_ref().unwrap().contains("could not be parsed"));
+        assert_eq!(scan.entries.iter().filter(|e| e.name_only.is_some()).count(), 1);
         let mt = scan.entries.iter().find(|e| e.path == "/empty-file").unwrap();
         assert_eq!(kokino_core::time::filetime_to_iso(mt.si.unwrap().modified), "2021-01-01T12:37:00.0000000Z"); // touch -t ran in UTC+1
     }

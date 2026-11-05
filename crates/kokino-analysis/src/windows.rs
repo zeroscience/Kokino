@@ -1,17 +1,19 @@
 //! Windows system artifacts found on an NTFS volume.
 //!
-//! Locates the registry hives (SYSTEM, SOFTWARE, SAM, every NTUSER.DAT,
-//! Amcache.hve), event logs, Prefetch files, Recent-folder shortcuts and
-//! Jump Lists by their Windows paths, deleted copies included, reads them
-//! through the NTFS layer and turns them into what an examiner asks first:
-//! which computer and accounts, which USB devices and networks, what was
-//! installed and set to start automatically, what ran, which files and
-//! folders were opened, and the notable events (logons, log clearing,
-//! service and account creation, remote desktop, PowerShell).
+//! Locates the registry hives (SYSTEM, SOFTWARE, SAM, every NTUSER.DAT and
+//! UsrClass.dat, Amcache.hve), event logs, Prefetch files, Recent-folder
+//! shortcuts, Jump Lists and the NTFS change journal by their Windows paths,
+//! deleted copies included, reads them through the NTFS layer and turns
+//! them into what an examiner asks first: which computer and accounts,
+//! which USB devices and networks, what was installed and set to start
+//! automatically, what ran, which files and folders were opened (ShellBags
+//! included), what happened to files (the change journal), and the notable
+//! events (logons, log clearing, service and account creation, remote
+//! desktop, PowerShell).
 
 use crate::FileRow;
 use kokino_artifacts::registry::{Hive, Key};
-use kokino_artifacts::{evtx, jumplist, lnk, prefetch, registry};
+use kokino_artifacts::{evtx, jumplist, lnk, prefetch, registry, shellbags, usn};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -41,11 +43,87 @@ pub struct WindowsArtifacts {
     /// Every artifact file that was read, with what happened.
     pub sources: Vec<Source>,
     pub timeline: Vec<WinTime>,
+    /// Folders users opened in Explorer.
+    #[serde(default)]
+    pub shellbags: Vec<ShellBag>,
+    /// The NTFS change journal ($UsnJrnl) of this volume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub journal: Option<Journal>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ShellBag {
+    #[serde(flatten)]
+    pub bag: shellbags::Bag,
+    pub user: String,
+    /// "UsrClass.dat" or "NTUSER.DAT"
+    pub source: String,
+    pub file: u32,
+    pub deleted: bool,
+    /// The folder on this volume, when the MFT reference and name match.
+    pub on_volume: Option<u32>,
+}
+
+/// What the change journal holds.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Journal {
+    /// The $UsnJrnl file (index into the volume's files).
+    pub file: u32,
+    /// Size of the $J stream and how much of it is stored (the rest is
+    /// sparse: records that aged out).
+    pub size: u64,
+    pub stored: u64,
+    pub max: Option<usn::JournalMax>,
+    /// When this journal was created (its ID).
+    pub created: u64,
+    pub first: u64,
+    pub last: u64,
+    pub records: u64,
+    /// Changes not kept (the oldest), beyond the limit.
+    pub dropped: u64,
+    pub changes: Vec<JournalChange>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct JournalChange {
+    #[serde(flatten)]
+    pub c: usn::Change,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub old_path: String,
+    pub what: String,
+    pub dir: bool,
+    /// The file on this volume, when its MFT reference and name match.
+    pub file: Option<u32>,
 }
 
 impl WindowsArtifacts {
     pub fn is_empty(&self) -> bool {
-        self.sources.is_empty()
+        self.sources.is_empty() && self.journal.is_none()
+    }
+
+    /// A copy without the change journal, which can hold hundreds of
+    /// thousands of changes and is served page by page instead.
+    pub fn without_journal(&self) -> WindowsArtifacts {
+        WindowsArtifacts {
+            computer: self.computer.clone(),
+            users: self.users.clone(),
+            usb: self.usb.clone(),
+            networks: self.networks.clone(),
+            interfaces: self.interfaces.clone(),
+            programs: self.programs.clone(),
+            autoruns: self.autoruns.clone(),
+            execution: self.execution.clone(),
+            access: self.access.clone(),
+            events: self.events.clone(),
+            event_counts: self.event_counts.clone(),
+            logs: self.logs.clone(),
+            sources: self.sources.clone(),
+            timeline: vec![],
+            shellbags: self.shellbags.clone(),
+            journal: None,
+        }
     }
 }
 
@@ -223,7 +301,7 @@ pub struct Source {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WinTime {
     pub t: u64,
-    /// EXEC, OPEN, USB, INST, NET or EVT
+    /// EXEC, OPEN, USB, INST, NET, EVT or FILE (change journal)
     pub kind: String,
     pub what: String,
     pub detail: String,
@@ -237,6 +315,7 @@ enum Kind {
     Software,
     Sam,
     NtUser,
+    UsrClass,
     Amcache,
     Evtx,
     Prefetch,
@@ -256,6 +335,9 @@ fn classify(path: &str) -> Option<Kind> {
     }
     if parts.len() == 4 && parts[1] == "users" && parts[3] == "ntuser.dat" {
         return Some(Kind::NtUser);
+    }
+    if parts.len() == 8 && parts[1] == "users" && parts[3..].join("/") == "appdata/local/microsoft/windows/usrclass.dat" {
+        return Some(Kind::UsrClass);
     }
     if p.starts_with("/windows/system32/winevt/logs/") && p.ends_with(".evtx") {
         return Some(Kind::Evtx);
@@ -300,9 +382,10 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
             fs.read(r, &f.e, "", 0, f.e.size as usize)
         };
         let res = data.and_then(|d| match kind {
-            Kind::System | Kind::Software | Kind::Sam | Kind::NtUser | Kind::Amcache => {
+            Kind::System | Kind::Software | Kind::Sam | Kind::NtUser | Kind::UsrClass | Kind::Amcache => {
                 // A deleted hive is reported but not used when a live one exists.
-                if f.e.deleted && hives.iter().any(|(k, j, _)| *k == kind && (kind != Kind::NtUser || user_of(&files[*j].e.path).eq_ignore_ascii_case(&user_of(&f.e.path)))) {
+                let per_user = matches!(kind, Kind::NtUser | Kind::UsrClass);
+                if f.e.deleted && hives.iter().any(|(k, j, _)| *k == kind && (!per_user || user_of(&files[*j].e.path).eq_ignore_ascii_case(&user_of(&f.e.path)))) {
                     src.note = Some("older deleted copy; the live hive is used".into());
                     return Ok(());
                 }
@@ -355,12 +438,163 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
             Kind::Software => software_hive(&mut w, h),
             Kind::Sam => sam_hive(&mut w, h),
             Kind::Amcache => amcache_hive(&mut w, h, *i),
-            Kind::NtUser => ntuser_hive(&mut w, h, &user_of(&f.e.path), *i),
+            Kind::NtUser => {
+                ntuser_hive(&mut w, h, &user_of(&f.e.path), *i);
+                for key in ["Software\\Microsoft\\Windows\\Shell\\BagMRU", "Software\\Microsoft\\Windows\\ShellNoRoam\\BagMRU"] {
+                    bags(&mut w, h, key, "NTUSER.DAT", f, *i);
+                }
+            }
+            Kind::UsrClass => bags(&mut w, h, "Local Settings\\Software\\Microsoft\\Windows\\Shell\\BagMRU", "UsrClass.dat", f, *i),
             _ => {}
         }
     }
+    link_bags(&mut w, files);
+    if fs.is_ntfs() {
+        journal(&mut w, fs, r, files, &mut *progress);
+    }
     finish(&mut w);
     w
+}
+
+fn bags(w: &mut WindowsArtifacts, h: &Hive, key: &str, source: &str, f: &FileRow, i: usize) {
+    let Some(k) = h.open(key) else { return };
+    let user = user_of(&f.e.path);
+    for bag in shellbags::walk(&k) {
+        w.shellbags.push(ShellBag { bag, user: user.clone(), source: source.into(), file: i as u32, deleted: f.e.deleted, on_volume: None });
+    }
+}
+
+/// Folders whose MFT reference and name match a folder on this volume. The
+/// drive letter is not checked (a USB stick can hold the same record
+/// numbers), so the name must match too.
+fn link_bags(w: &mut WindowsArtifacts, files: &[FileRow]) {
+    if w.shellbags.is_empty() {
+        return;
+    }
+    let by_rec: HashMap<u64, usize> = files.iter().enumerate().filter(|(_, f)| f.e.is_dir && f.e.name_only.is_none()).map(|(i, f)| (f.e.record, i)).collect();
+    for b in &mut w.shellbags {
+        let Some((rec, seq)) = b.bag.mft else { continue };
+        let Some(&i) = by_rec.get(&rec) else { continue };
+        let e = &files[i].e;
+        let name = b.bag.path.rsplit('\\').next().unwrap_or("");
+        let seq_ok = e.seq == seq || (e.deleted && e.seq == seq.wrapping_add(1));
+        if seq_ok && e.name.eq_ignore_ascii_case(name) {
+            b.on_volume = Some(i as u32);
+        }
+    }
+}
+
+/// Most of $J read, and changes kept (the newest).
+const MAX_JOURNAL: u64 = 1 << 30;
+const MAX_CHANGES: usize = 250_000;
+
+fn journal<R: Read + Seek>(w: &mut WindowsArtifacts, fs: &crate::fs::Fs, r: &mut R, files: &[FileRow], progress: crate::Progress) {
+    let Some((ji, jf)) = files.iter().enumerate().find(|(_, f)| !f.e.deleted && f.e.path.eq_ignore_ascii_case("/$Extend/$UsnJrnl")) else { return };
+    let Some(size) = jf.e.streams.iter().find(|s| s.name == "$J").map(|s| s.size) else { return };
+    let mut j = Journal { file: ji as u32, size, ..Default::default() };
+    j.max = fs.read(r, &jf.e, "$Max", 0, 32).ok().and_then(|d| usn::parse_max(&d));
+    j.created = j.max.map(|m| kokino_artifacts::bin::plausible(m.journal_id)).unwrap_or(0);
+    let mut ext = match fs.extents(r, &jf.e, "$J") {
+        Ok(x) => x,
+        Err(e) => {
+            j.error = Some(format!("{:#}", e));
+            w.journal = Some(j);
+            return;
+        }
+    };
+    ext.sort_by_key(|x| x.offset);
+    let stored: u64 = ext.iter().filter(|x| x.vol.is_some() && x.offset < size).map(|x| x.len.min(size - x.offset)).sum();
+    j.stored = stored;
+    let mut g = usn::Grouper::default();
+    let (mut done, mut carry, mut next) = (0u64, Vec::<u8>::new(), None);
+    const CHUNK: u64 = 4 << 20;
+    'outer: for x in ext.iter().filter(|x| x.offset < size) {
+        let len = x.len.min(size - x.offset);
+        let Some(v) = x.vol else {
+            carry.clear();
+            continue;
+        };
+        if next != Some(x.offset) {
+            carry.clear();
+        }
+        let mut at = 0;
+        while at < len {
+            if done >= MAX_JOURNAL {
+                j.error = Some(format!("only the first {} bytes of the journal were read", MAX_JOURNAL));
+                break 'outer;
+            }
+            if !progress("Change journal", done, stored.min(MAX_JOURNAL)) {
+                break 'outer;
+            }
+            let n = (len - at).min(CHUNK) as usize;
+            let mut buf = std::mem::take(&mut carry);
+            let base = buf.len();
+            buf.resize(base + n, 0);
+            if r.seek(std::io::SeekFrom::Start(v + at)).is_err() || r.read_exact(&mut buf[base..]).is_err() {
+                j.error = Some(format!("could not read the journal at volume offset {}", v + at));
+                break 'outer;
+            }
+            let used = usn::parse(&buf, &mut |rec| g.push(rec));
+            if buf.len() - used <= 0x1_0000 {
+                carry = buf[used..].to_vec();
+            }
+            at += n as u64;
+            done += n as u64;
+        }
+        next = Some(x.offset + len);
+    }
+    j.records = g.records;
+    j.first = g.first;
+    j.last = g.last;
+    let (mut changes, folders) = g.finish();
+    if changes.len() > MAX_CHANGES {
+        j.dropped = (changes.len() - MAX_CHANGES) as u64;
+        changes.drain(..changes.len() - MAX_CHANGES);
+    }
+    // Paths: folders as they are now when the reference still matches, else
+    // as the journal last named them.
+    let by_rec: HashMap<u64, usize> = files.iter().enumerate().filter(|(_, f)| f.e.name_only.is_none()).map(|(i, f)| (f.e.record, i)).collect();
+    let mut cache: HashMap<(u64, u16), String> = HashMap::new();
+    fn folder(rf: (u64, u16), files: &[FileRow], by_rec: &HashMap<u64, usize>, folders: &HashMap<(u64, u16), (String, (u64, u16))>, cache: &mut HashMap<(u64, u16), String>, depth: u32) -> String {
+        if rf.0 == kokino_ntfs::ROOT_RECORD {
+            return String::new();
+        }
+        if let Some(p) = cache.get(&rf) {
+            return p.clone();
+        }
+        let p = match by_rec.get(&rf.0).map(|&i| &files[i].e) {
+            Some(e) if e.is_dir && e.seq == rf.1 && !e.deleted => e.path.clone(),
+            _ => match folders.get(&rf) {
+                Some((name, parent)) if depth < 64 && *parent != rf => format!("{}/{}", folder(*parent, files, by_rec, folders, cache, depth + 1), name),
+                _ => format!("/[folder {}-{}]", rf.0, rf.1),
+            },
+        };
+        cache.insert(rf, p.clone());
+        p
+    }
+    let mut by_ref: HashMap<u64, Vec<usize>> = HashMap::new();
+    for (i, f) in files.iter().enumerate() {
+        let rec = match &f.e.name_only {
+            Some(n) => n.mft_record,
+            None => Some(f.e.record),
+        };
+        if let Some(rec) = rec {
+            by_ref.entry(rec).or_default().push(i);
+        }
+    }
+    for c in changes {
+        let path = format!("{}/{}", folder((c.parent, c.parent_seq), files, &by_rec, &folders, &mut cache, 0), c.name);
+        let old_path = c.old.as_ref().map(|(n, p, s)| format!("{}/{}", folder((*p, *s), files, &by_rec, &folders, &mut cache, 0), n)).unwrap_or_default();
+        let file = by_ref.get(&c.record).and_then(|v| {
+            v.iter().copied().find(|&i| {
+                let e = &files[i].e;
+                let seq = e.name_only.as_ref().map(|n| n.mft_seq).unwrap_or(e.seq);
+                (seq == c.seq || (e.deleted && seq == c.seq.wrapping_add(1))) && (e.name.eq_ignore_ascii_case(&c.name) || c.old.as_ref().is_some_and(|o| e.name.eq_ignore_ascii_case(&o.0)))
+            })
+        });
+        j.changes.push(JournalChange { what: usn::describe(c.reasons), dir: c.attributes & 0x10 != 0, path, old_path, file: file.map(|i| i as u32), c });
+    }
+    w.journal = Some(j);
 }
 
 fn kind_name(k: Kind) -> &'static str {
@@ -369,6 +603,7 @@ fn kind_name(k: Kind) -> &'static str {
         Kind::Software => "SOFTWARE hive",
         Kind::Sam => "SAM hive",
         Kind::NtUser => "NTUSER.DAT",
+        Kind::UsrClass => "UsrClass.dat",
         Kind::Amcache => "Amcache.hve",
         Kind::Evtx => "Event log",
         Kind::Prefetch => "Prefetch",
@@ -1165,6 +1400,20 @@ fn finish(w: &mut WindowsArtifacts) {
     for e in &w.events {
         t.push(WinTime { t: e.time, kind: "EVT".into(), what: e.title.clone(), detail: e.summary.chars().take(300).collect() });
     }
+    for b in &w.shellbags {
+        if b.bag.opened > 0 {
+            t.push(WinTime { t: b.bag.opened, kind: "OPEN".into(), what: b.bag.path.clone(), detail: format!("folder opened (ShellBags){}", if b.user.is_empty() { String::new() } else { format!(", user {}", b.user) }) });
+        }
+    }
+    if let Some(j) = &w.journal {
+        // Created, deleted and renamed files; plain writes stay in the
+        // journal table.
+        let notable = usn::FILE_CREATE | usn::FILE_DELETE | usn::RENAME_NEW_NAME;
+        for c in j.changes.iter().filter(|c| c.c.reasons & notable != 0) {
+            let detail = if c.old_path.is_empty() { format!("{} (change journal)", c.what) } else { format!("{} from {} (change journal)", c.what, c.old_path) };
+            t.push(WinTime { t: c.c.t, kind: "FILE".into(), what: c.path.clone(), detail });
+        }
+    }
     t.retain(|x| x.t > 0);
     t.sort_by(|a, b| a.t.cmp(&b.t));
     w.timeline = t;
@@ -1210,6 +1459,27 @@ pub fn impact(w: &WindowsArtifacts) -> Vec<String> {
     let odd = w.autoruns.iter().filter(|a| a.unusual).count();
     if odd > 0 {
         out.push(format!("{} autostart entr{} run from unusual locations.", odd, if odd == 1 { "y" } else { "ies" }));
+    }
+    if let Some(j) = &w.journal {
+        if j.records > 0 {
+            let del = j.changes.iter().filter(|c| c.c.reasons & usn::FILE_DELETE != 0).count();
+            out.push(format!(
+                "The change journal covers {} to {}: {} records, {} file changes ({} deletions){}.",
+                iso(j.first),
+                iso(j.last),
+                j.records,
+                j.changes.len() as u64 + j.dropped,
+                del,
+                if j.dropped > 0 { format!("; the oldest {} are not kept", j.dropped) } else { String::new() }
+            ));
+        }
+        if let Some(e) = &j.error {
+            out.push(format!("Change journal: {}.", e));
+        }
+    }
+    if !w.shellbags.is_empty() {
+        let away = w.shellbags.iter().filter(|b| matches!(b.bag.kind.as_str(), "drive" | "network") || b.bag.path.starts_with("\\\\")).count();
+        out.push(format!("ShellBags record {} folder(s) users opened in Explorer{}.", w.shellbags.len(), if away > 0 { format!(", including {} drive or network location(s)", away) } else { String::new() }));
     }
     out
 }
