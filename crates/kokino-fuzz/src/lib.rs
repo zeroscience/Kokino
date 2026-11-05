@@ -27,7 +27,7 @@ pub const TARGETS: &[Target] = &[
     Target { name: "indx", run: indx, seeds: &["crates/kokino-fuzz/seeds/indx"] },
     Target { name: "usn", run: usn, seeds: &["crates/kokino-fuzz/seeds/usn"] },
     Target { name: "shellbags", run: shellbags, seeds: &["crates/kokino-fuzz/seeds/shellbags"] },
-    Target { name: "ese", run: ese, seeds: &["tests/fixtures/win/SRUDB-4k.dat", "tests/fixtures/win/SRUDB.dat"] },
+    Target { name: "ese", run: ese, seeds: &["tests/fixtures/win/SRUDB-4k.dat", "tests/fixtures/win/SRUDB.dat", "tests/fixtures/win/ese-deep.dat"] },
     Target { name: "registry", run: registry, seeds: &["tests/fixtures/win/Users_alice_NTUSER.DAT", "tests/fixtures/win/Windows_System32_config_SAM", "tests/fixtures/win/Windows_System32_config_SOFTWARE", "tests/fixtures/win/Windows_System32_config_SYSTEM", "tests/fixtures/win/Windows_AppCompat_Programs_Amcache.hve"] },
     Target { name: "evtx", run: evtx, seeds: &["tests/fixtures/win/Windows_System32_winevt_Logs_Security.evtx", "tests/fixtures/win/Windows_System32_winevt_Logs_System.evtx", "tests/fixtures/win/Windows_System32_winevt_Logs_Microsoft-Windows-PowerShell_4Operational.evtx"] },
     Target { name: "lnk", run: lnk, seeds: &["tests/fixtures/win/Users_alice_AppData_Roaming_Microsoft_Windows_Recent_keys.txt.lnk", "tests/fixtures/win/Users_alice_AppData_Roaming_Microsoft_Windows_Recent_nightjar.docx.lnk"] },

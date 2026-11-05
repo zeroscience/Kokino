@@ -523,7 +523,7 @@ const WIKI = [
     body: [
       p("Evidence can be made to attack the tool that reads it: a disk image, registry hive or picture crafted to crash Kokino, hang an ingest, or use up the examiner's memory. Kokino is written in Rust with ", code("unsafe"), " code forbidden in every crate, and every parser that reads evidence has been fuzzed."),
       h("h3", "Fuzzing"),
-      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks, optical media, Mac disks, NTFS folder indexes and $LogFile, the change journal, ShellBags and ESE databases (SRUM) ran ", h("b", "319,208,594 inputs"), " and found ", h("b", "28 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
+      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks, optical media, Mac disks, NTFS folder indexes and $LogFile, the change journal, ShellBags and ESE databases (SRUM) ran ", h("b", "319,500,138 inputs"), " and found ", h("b", "28 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
       h("div.scroll", h("table.tbl",
         h("thead", h("tr", h("th", "Target"), h("th", "Covers"), h("th", "Inputs"), h("th", "Found"))),
         h("tbody", [
@@ -538,7 +538,7 @@ const WIKI = [
         ["indx", "NTFS folder index records and $LogFile pages: the name carver behind names without an MFT record", "35,329,154", "none"],
         ["usn", "NTFS change journal records (versions 2 to 4), grouping into changes, $Max", "8,954,455", "none"],
         ["shellbags", "BagMRU trees and every shell item kind", "15,785,595", "none"],
-        ["ese", "ESE databases (pages, B+ trees, catalog, records, long values, 7-bit and XPRESS compression) and SRUM", "532,995", "none"],
+        ["ese", "ESE databases (pages, B+ trees, catalog, records, long values, 7-bit and XPRESS compression) and SRUM, two rounds", "824,539", "none"],
         ["ewf", "E01 (EWF) images: sections, chunk tables, zlib chunks, stored hashes", "42,686", "1 (overflow)"],
         ["registry", "Registry hives (SYSTEM, SOFTWARE, SAM, NTUSER.DAT, Amcache): cells, key and value lists, the whole key tree", "23,242,474", "1 (hang)"],
         ["evtx", "Windows event logs: chunks, binary XML templates and substitutions", "3,188,571", "none"],

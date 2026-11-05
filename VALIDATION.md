@@ -27,6 +27,7 @@ exFAT and NTFS images; 1.2.6 for the ext images. Run on Windows 10.
 | Digital Corpora `nps-2009-canon2` (FAT32 camera card, E01) | Image hashes against the published SHA-1; recovered pictures against the real files | Both images verify (E01 stored MD5 and published SHA-1); 34 of 36 recoverable pictures recovered byte for byte; the 3 overwritten deleted pictures flagged |
 | Digital Corpora `nps-2009-ntfs1` (NTFS, E01) | File list against the DFXML; compressed and EFS-encrypted copies against the plain originals | All files with correct names and sizes; all 9 compressed copies identical to the originals (after adding NTFS decompression, see below); encrypted copies read as ciphertext and now flagged |
 | NIST CFReDS DFR, 22 ext images (ext2, ext3, ext4) | Every deleted file with content, block by block; deleted names against NIST's layout | 962 of 965 tagged files complete, 99.9996% of blocks right; 302 files recovered through the ext3/ext4 journal; 2,782 deleted names listed; wrong content without a warning in 1 file |
+| A real Windows 10 22H2 SRUM database (SRUDB.dat, 70 MB, unreleased) | Every row and value of every table against Windows' own esent.dll | All 310,255 rows and 2,800,979 values the same, after two fixes (below) |
 | NIST CFReDS DFR, 61 images (FAT12/16/32, exFAT, NTFS) | Every deleted file Kokino lists, block by block, against the files' own tags; counts against NIST's layout | 3,048 of 3,323 deleted test files complete, 1,367,020 of 1,370,338 blocks right (99.8%); exFAT 100%, NTFS 100% of blocks; wrong content without a warning in 4 files |
 
 The validation found real problems in Kokino, all fixed before these
@@ -222,6 +223,54 @@ NIST's layout gives counts, not the names, so they could not be matched
 one by one. The other NTFS cases list no name without a record, or one
 from the tools that made the image. Hard links (case 15) are recognized
 as a second name of the same record, not as a lost file.
+
+## SRUM: a real Windows 10 database (unreleased)
+
+Kokino's ESE reader was first tested only on databases written for the
+purpose by esent.dll. To check it on real data, the SRUM database of the
+maintainer's own Windows 10 22H2 computer was copied through a shadow
+copy (`esentutl /y C:\Windows\System32\sru\SRUDB.dat /vss /d <copy>`):
+70 MB, 4 KiB pages, cleanly shut down, about 60 days of records. The copy
+was read twice, by Kokino and by Windows' own esent.dll (through its API,
+on a second copy), and every row of every table was compared value by
+value. The database holds personal usage data and is not published; the
+comparison was made with local tools, not shipped.
+
+The first run found two problems:
+
+1. **Large tables read as empty.** Kokino followed only branch pages
+   flagged "parent of leaf"; in a tree of three or more levels the branch
+   pages above those carry neither that flag nor the leaf flag. SRUM's id
+   map (163,087 rows) and several hourly tables read as empty or nearly
+   so: 5,000 rows in all instead of 310,255. Kokino now follows every
+   non-leaf page of the tree, and only pages that carry the tree's object
+   id. Regression test: `win/ese-deep.dat`.
+2. **UTF-16 text in a column declared as ANSI** (SRUM's `Tag` column,
+   code page 1252) was cut after its first character. Text that is
+   clearly UTF-16 is now read as UTF-16.
+
+After the fixes:
+
+| Table | Rows |
+|---|--:|
+| SruDbIdMapTable (programs, services, users) | 163,087 |
+| Application resource usage | 92,077 |
+| Network data usage | 932 |
+| Network connectivity | 476 |
+| Other SRUM tables (8) and ESE's own system tables (4) | 53,683 |
+| In all, 16 tables | 310,255 |
+
+All 2,800,979 values are the same in both readers. In the SRUM view every
+program and user id resolves, no record lacks a time, and the records
+cover the expected 60 days. Many program ids on this computer have the
+form `!!<file>!<date>!<hex>!...` instead of a path; Kokino now shows them
+by their file name.
+
+Not covered by this database: column compression. Windows stored none of
+its values compressed (7-bit or XPRESS), so the 7-bit path is covered only
+by the esent.dll-written fixtures and XPRESS only by a test vector. A
+dirty database (whose newest records are only in the transaction logs) was
+not checked either.
 
 ## NIST CFReDS: deleted file recovery on ext2, ext3 and ext4
 

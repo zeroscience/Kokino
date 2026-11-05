@@ -199,23 +199,31 @@ impl<'a> Db<'a> {
     /// Every leaf entry of the B+ tree rooted at `root`, in key order.
     fn walk(&self, root: u32, f: &mut dyn FnMut(&[u8], &[u8])) {
         let mut seen = HashSet::new();
-        self.walk_page(root, 0, &mut seen, f);
+        let Some(objid) = self.page(root).and_then(|p| u32_at(p, 0x18)) else { return };
+        self.walk_page(root, objid, 0, &mut seen, f);
     }
 
-    fn walk_page(&self, n: u32, depth: usize, seen: &mut HashSet<u32>, f: &mut dyn FnMut(&[u8], &[u8])) {
+    fn walk_page(&self, n: u32, objid: u32, depth: usize, seen: &mut HashSet<u32>, f: &mut dyn FnMut(&[u8], &[u8])) {
         if depth > MAX_DEPTH || seen.len() > MAX_PAGES_WALKED || !seen.insert(n) {
             return;
         }
         let Some(p) = self.page(n) else { return };
+        // Every page of a tree carries the tree's object id; a page of
+        // another tree (reused or stale) is not followed.
+        if u32_at(p, 0x18) != Some(objid) {
+            return;
+        }
         let flags = self.flags(p);
         if flags & 0x2 != 0 {
             for e in self.entries(p) {
                 f(&e.key, e.data);
             }
-        } else if flags & 0x4 != 0 {
+        } else if flags & 0x8 == 0 {
+            // A branch page. Only those right above the leaves carry 0x4
+            // ("parent of leaf"); higher ones carry neither flag.
             for e in self.entries(p) {
                 if let Some(child) = e.data.len().checked_sub(4).and_then(|o| u32_at(e.data, o)) {
-                    self.walk_page(child, depth + 1, seen, f);
+                    self.walk_page(child, objid, depth + 1, seen, f);
                 }
             }
         }
@@ -407,9 +415,16 @@ fn decode(c: &Column, b: &[u8]) -> Value {
         6 => Value::Float(u32_at(b, 0).map(f32::from_bits).unwrap_or(0.0) as f64),
         7 | 8 => Value::Float(u64_at(b, 0).map(f64::from_bits).unwrap_or(0.0)),
         10 | 12 if c.codepage == 1200 => Value::Text(utf16(b)),
+        // Programs also store UTF-16 in columns declared as ANSI (SRUM
+        // does): two or more characters, every second byte zero.
+        10 | 12 if looks_utf16(b) => Value::Text(utf16(b)),
         10 | 12 => Value::Text(ansi(b)),
         _ => Value::Bytes(b.to_vec()),
     }
+}
+
+fn looks_utf16(b: &[u8]) -> bool {
+    b.len() >= 4 && b.len().is_multiple_of(2) && b[0] != 0 && b.chunks(2).all(|c| c[1] == 0)
 }
 
 /// Undoes ESE column compression (Windows 8 and later). The first byte
@@ -555,6 +570,23 @@ mod tests {
             assert!(net.iter().all(|r| r["TimeStamp"].f64().unwrap() > 46_000.0));
             let usage = db.rows(db.table("{D10CA2FE-6FCF-4F6D-848E-B2E99266FA89}").unwrap(), usize::MAX);
             assert_eq!(usage.iter().map(|r| r["ForegroundBytesRead"].i64().unwrap()).sum::<i64>(), 2_147_483_648);
+        }
+    }
+
+    /// A tree of three levels (scripts/make_srum_fixture.py deep): branch
+    /// pages above the parents of leaves carry neither page flag, as in
+    /// Windows' own SRUM databases with many ids. Also UTF-16 text in a
+    /// column declared as code page 1252.
+    #[test]
+    fn deep_tree_and_utf16_in_ansi() {
+        let Some(d) = fixture("ese-deep.dat") else { return };
+        let db = Db::open(&d).unwrap();
+        let t = db.table("Deep").unwrap();
+        let rows = db.rows(t, usize::MAX);
+        assert_eq!(rows.len(), 400);
+        for (i, r) in rows.iter().enumerate() {
+            assert_eq!(r["N"], Value::Int(i as i64));
+            assert_eq!(r["Note"], Value::Text(format!("row {}", i)));
         }
     }
 

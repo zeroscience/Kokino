@@ -1534,6 +1534,8 @@ async function systemTab(ctx) {
     },
     srum: () => {
       const s = w.srum;
+      // SRUM names many programs "!!<file>!<date>!<hex>!..." instead of a path.
+      const progName = (p) => (p.startsWith("!!") ? p.slice(2).split("!")[0] : p.split("\\").pop());
       if (!s) return [h("div.card.empty", "No SRUM database (Windows\\System32\\sru\\SRUDB.dat) on this volume.")];
       const kv = (rows) => h("div.kv", rows.filter(([, v]) => v).map(([k, v]) => [h("span", k), h("span", v)]));
       let q = "", pick = null;
@@ -1544,7 +1546,7 @@ async function systemTab(ctx) {
         const p = new URLSearchParams({ app: a.app, user: a.user, limit: 1000 });
         const [net, use] = await Promise.all([api(`/cases/${ctx.cid}/evidence/${ctx.eid}/fs/${ctx.fi}/srum?${p}`), api(`/cases/${ctx.cid}/evidence/${ctx.eid}/fs/${ctx.fi}/srum?kind=usage&${p}`)]);
         detail.replaceChildren(
-          card(`${a.app.split("\\").pop()}, hour by hour`, h("p.muted", { style: { margin: 0 } }, a.app + (a.user ? `, user ${a.user}` : "")),
+          card(`${progName(a.app)}, hour by hour`, h("p.muted", { style: { margin: 0 } }, a.app + (a.user ? `, user ${a.user}` : "")),
             net.items.length ? table([`Hour ending (${zoneName()})`, "Sent", "Received", "Network", "Interface"], net.items.map((x) => h("tr", h("td.mono", t16(x.t)), h("td.num", { class: x.sent >= 104857600 ? "bad-text" : null }, bytes(x.sent)), h("td.num", bytes(x.received)), h("td", x.profile), h("td", x.interface)))) : null,
             net.total > net.items.length ? h("p.muted", `newest ${num(net.items.length)} of ${num(net.total)} hours`) : null,
             use.items.length ? table([`Hour ending (${zoneName()})`, "Disk read", "Disk written", "CPU cycles (foreground)", "CPU cycles (background)"], use.items.map((x) => h("tr", h("td.mono", t16(x.t)), h("td.num", bytes(x.read)), h("td.num", bytes(x.written)), h("td.num", num(x.foreground)), h("td.num", num(x.background))))) : null));
@@ -1553,7 +1555,7 @@ async function systemTab(ctx) {
       const fill = () => out.replaceChildren(table(["Program", "User", "Sent", "Received", "Disk read", "Disk written", "First", "Last"],
         s.apps.filter((a) => !q || (a.app + " " + a.user).toLowerCase().includes(q)).map((a) =>
           h("tr", { class: pick === a ? "sel" : null, onclick: () => { loadRows(a); fill(); } },
-            h("td.nm", h("b", a.app.split("\\").pop()), h("div.muted", a.app)), h("td", a.user),
+            h("td.nm", h("b", progName(a.app)), h("div.muted", a.app)), h("td", a.user),
             h("td.num", { class: a.sent >= 1073741824 ? "bad-text" : null }, bytes(a.sent)), h("td.num", bytes(a.received)), h("td.num", bytes(a.read)), h("td.num", bytes(a.written)),
             h("td.mono", t16(a.first)), h("td.mono", t16(a.last))))));
       fill();

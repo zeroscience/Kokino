@@ -109,8 +109,9 @@ Deeper NTFS and Windows (unreleased):
 | `shellbags` | BagMRU trees in a hive, every shell item kind (root, drive, folder with extension blocks, network, ZIP, URI, control panel, delegate) | 10 min | 15,785,595 | none |
 | `ese` | ESE databases (seeds written by esent.dll, 4 and 32 KiB pages): header, pages and tags, B+ trees, catalog, every table's records, long values, 7-bit and XPRESS decompression, and the SRUM reader on top | 15 min | 532,995 | none |
 | `registry` | again, as BAM and DAM are read from the SYSTEM hive | 5 min | 26,319,961 | none |
+| `ese` | again, after the check against a real SRUM database: every branch level of deeper B+ trees, with a three-level tree as an extra seed | 10 min | 291,544 | none |
 
-In all: 319,208,594 inputs over 25 targets, and 28 distinct problems
+In all: 319,500,138 inputs over 25 targets, and 28 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed

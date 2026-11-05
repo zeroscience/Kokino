@@ -903,6 +903,10 @@ fn kind_name(k: Kind) -> &'static str {
 }
 
 fn base_name(p: &str) -> &str {
+    // SRUM names many programs "!!<file>!<date>!<hex>!..." instead of a path.
+    if let Some(r) = p.strip_prefix("!!") {
+        return r.split('!').next().unwrap_or(r);
+    }
     p.rsplit(['\\', '/']).next().unwrap_or(p)
 }
 
@@ -1928,5 +1932,7 @@ mod tests {
         assert_eq!(classify("/Users/alice/AppData/Roaming/Microsoft/Windows/Recent/CustomDestinations/x.temp").map(kind_name), Some("Jump List"));
         assert!(classify("/Users/alice/Documents/NTUSER.DAT").is_none());
         assert_eq!(yyyymmdd("20261019"), kokino_artifacts::bin::unix_to_filetime(1_792_368_000));
+        assert_eq!(base_name("\\Device\\HarddiskVolume3\\Tools\\rclone.exe"), "rclone.exe");
+        assert_eq!(base_name("!!rclone.exe!2026/10/20:09:00:00!1a2b!"), "rclone.exe");
     }
 }

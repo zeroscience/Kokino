@@ -29,6 +29,11 @@ keeps as it is.
 
 Needs Windows. Usage: python scripts/make_srum_fixture.py [page size]
 (32768 by default, as Windows uses for SRUM).
+
+python scripts/make_srum_fixture.py deep writes tests/fixtures/win/ese-deep.dat
+instead: one table "Deep" of 400 rows with 180-byte keys (a B+ tree of
+three levels or more, 4 KiB pages), N = 0..399, and Note = "row N" stored
+as UTF-16 in a column declared as code page 1252.
 """
 import ctypes
 import datetime
@@ -49,6 +54,8 @@ JET_bitColumnCompressed = 0x80000
 JET_paramSystemPath, JET_paramTempPath, JET_paramLogFilePath, JET_paramBaseName = 0, 1, 2, 3
 JET_paramRecovery, JET_paramDatabasePageSize, JET_paramCreatePathIfNotExist = 34, 64, 100
 JET_bitDbOverwriteExisting = 0x200
+JET_bitIndexPrimary = 0x2
+JET_coltypBinary, JET_coltypText = 9, 10
 JET_prepInsert = 0
 
 
@@ -86,7 +93,7 @@ WIFI = (71 << 48) | 0x8001  # InterfaceLuid: IfType 71 (802.11) in the top 16 bi
 ETH = (6 << 48) | 0x8000
 
 
-def build(path, page_size):
+def build(path, page_size, deep=False):
     work = tempfile.mkdtemp(prefix="kokino-ese-")
     inst = c_void_p()
     sp = esent.JetSetSystemParameterW
@@ -105,7 +112,7 @@ def build(path, page_size):
     esent.JetCreateDatabaseW.argtypes = [c_void_p, c_wchar_p, c_wchar_p, POINTER(c_uint32), c_ulong]
     check(esent.JetCreateDatabaseW(ses, tmpdb, None, byref(db), JET_bitDbOverwriteExisting), "create db")
 
-    def table(name, cols, rows):
+    def table(name, cols, rows, key=None):
         check(esent.JetBeginTransaction(ses), "begin")
         tid = c_void_p()
         esent.JetCreateTableW.argtypes = [c_void_p, c_uint32, c_wchar_p, c_ulong, c_ulong, POINTER(c_void_p)]
@@ -117,6 +124,11 @@ def build(path, page_size):
             cid = c_ulong()
             check(esent.JetAddColumnW(ses, tid, cname, byref(d), None, 0, byref(cid)), "column " + cname)
             ids[cname] = cid.value
+        if key:
+            # Primary index on one column: "+Name\0\0".
+            k = "+%s\0\0" % key
+            esent.JetCreateIndexW.argtypes = [c_void_p, c_void_p, c_wchar_p, c_ulong, c_wchar_p, c_ulong, c_ulong]
+            check(esent.JetCreateIndexW(ses, tid, "Primary", JET_bitIndexPrimary, k, 2 * len(k), 100), "index " + key)
         check(esent.JetCommitTransaction(ses, 0), "commit")
         esent.JetSetColumn.argtypes = [c_void_p, c_void_p, c_ulong, c_void_p, c_ulong, c_ulong, c_void_p]
         esent.JetUpdate.argtypes = [c_void_p, c_void_p, c_void_p, c_ulong, c_void_p]
@@ -135,11 +147,40 @@ def build(path, page_size):
         esent.JetCloseTable.argtypes = [c_void_p, c_void_p]
         check(esent.JetCloseTable(ses, tid), "close table")
 
+    if deep:
+        # ese-deep.dat: 180-byte keys allow only a few entries per page, so
+        # 400 rows make a B+ tree of three levels or more, whose upper
+        # branch pages carry neither the leaf nor the parent-of-leaf flag.
+        # Note holds UTF-16 in a column declared as code page 1252, as
+        # Windows' own SRUM writes some text columns.
+        rows = [{"Key": (b"K" * 172) + b"%08d" % i, "N": struct.pack("<i", i), "Note": ("row %d" % i).encode("utf-16-le")} for i in range(400)]
+        table("Deep", [("Key", JET_coltypBinary, 0), ("N", JET_coltypLong, JET_bitColumnFixed), ("Note", JET_coltypText, 0)], rows, key="Key")
     L = lambda v: struct.pack("<i", v)
     Q = lambda v: struct.pack("<q", v)
     D = lambda dt: struct.pack("<d", ole_date(dt))
     U16 = lambda s: (s + "\0").encode("utf-16-le")
 
+    if not deep:
+        srum_tables(table, L, Q, D, U16)
+
+    esent.JetCloseDatabase.argtypes = [c_void_p, c_uint32, c_ulong]
+    check(esent.JetCloseDatabase(ses, db, 0), "close db")
+    esent.JetDetachDatabaseW.argtypes = [c_void_p, c_wchar_p]
+    check(esent.JetDetachDatabaseW(ses, tmpdb), "detach")
+    esent.JetEndSession.argtypes = [c_void_p, c_ulong]
+    check(esent.JetEndSession(ses, 0), "end session")
+    esent.JetTerm.argtypes = [c_void_p]
+    check(esent.JetTerm(inst), "term")
+    # The engine preallocates 256 pages; the never-written ones at the end
+    # are cut off to keep the fixture small (a reader must cope with a
+    # database cut short anyway).
+    d = open(tmpdb, "rb").read()
+    last = max(i for i in range(len(d) // page_size) if any(d[i * page_size:(i + 1) * page_size]))
+    open(path, "wb").write(d[:(last + 1) * page_size])
+    shutil.rmtree(work, ignore_errors=True)
+
+
+def srum_tables(table, L, Q, D, U16):
     idmap = [
         (0, 1, U16("\\Device\\HarddiskVolume3\\Users\\alice\\AppData\\Local\\Temp\\rclone.exe")),
         (0, 2, U16("\\Device\\HarddiskVolume3\\Program Files\\Mozilla Firefox\\firefox.exe")),
@@ -182,31 +223,21 @@ def build(path, page_size):
     table("{DD6636C4-8929-4683-974E-22C046A43763}", common + [("InterfaceLuid", JET_coltypLongLong, JET_bitColumnFixed), ("L2ProfileId", JET_coltypLong, JET_bitColumnFixed),
           ("ConnectedTime", JET_coltypLong, JET_bitColumnFixed), ("ConnectStartTime", JET_coltypLongLong, JET_bitColumnFixed), ("L2ProfileFlags", JET_coltypLong, JET_bitColumnFixed)], conn)
 
-    esent.JetCloseDatabase.argtypes = [c_void_p, c_uint32, c_ulong]
-    check(esent.JetCloseDatabase(ses, db, 0), "close db")
-    esent.JetDetachDatabaseW.argtypes = [c_void_p, c_wchar_p]
-    check(esent.JetDetachDatabaseW(ses, tmpdb), "detach")
-    esent.JetEndSession.argtypes = [c_void_p, c_ulong]
-    check(esent.JetEndSession(ses, 0), "end session")
-    esent.JetTerm.argtypes = [c_void_p]
-    check(esent.JetTerm(inst), "term")
-    # The engine preallocates 256 pages; the never-written ones at the end
-    # are cut off to keep the fixture small (a reader must cope with a
-    # database cut short anyway).
-    d = open(tmpdb, "rb").read()
-    last = max(i for i in range(len(d) // page_size) if any(d[i * page_size:(i + 1) * page_size]))
-    open(path, "wb").write(d[:(last + 1) * page_size])
-    shutil.rmtree(work, ignore_errors=True)
 
 
 def main():
     if esent is None:
         sys.exit("needs Windows (esent.dll)")
-    page = int(sys.argv[1]) if len(sys.argv) > 1 else 32768
     os.makedirs(OUT, exist_ok=True)
-    name = "SRUDB.dat" if page == 32768 else "SRUDB-%dk.dat" % (page // 1024)
-    p = os.path.join(OUT, name)
-    build(p, page)
+    if sys.argv[1:] == ["deep"]:
+        page = 4096
+        p = os.path.join(OUT, "ese-deep.dat")
+        build(p, page, deep=True)
+    else:
+        page = int(sys.argv[1]) if len(sys.argv) > 1 else 32768
+        name = "SRUDB.dat" if page == 32768 else "SRUDB-%dk.dat" % (page // 1024)
+        p = os.path.join(OUT, name)
+        build(p, page)
     print("wrote %s (%d bytes, %d-byte pages)" % (p, os.path.getsize(p), page))
 
 
