@@ -22,7 +22,7 @@
   <img src="https://img.shields.io/badge/rust-1.80%2B-orange?logo=rust&logoColor=white" alt="Rust 1.80+">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey" alt="Platforms: Windows, Linux, macOS">
   <img src="https://img.shields.io/badge/GUI-browser-1f6feb" alt="Browser GUI">
-  <img src="https://img.shields.io/badge/version-1.2.8-00bcd4" alt="Version 1.2.8">
+  <img src="https://img.shields.io/badge/version-1.2.9-00bcd4" alt="Version 1.2.9">
   <img src="https://img.shields.io/badge/evidence-read--only-2ea44f" alt="Evidence read-only">
   <img src="https://img.shields.io/badge/audit%20log-hash--chained-2ea44f" alt="Hash-chained audit log">
   <a href="SECURITY.md#fuzzing-the-parsers"><img src="https://img.shields.io/badge/parsers%20fuzzed-380M%20inputs-2ea44f" alt="Parsers fuzzed: 380 million inputs"></a>
@@ -66,11 +66,11 @@
 
 ---
 
-Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workbench for disk images. Give it an E01, raw, VHD, VHDX or VMDK image, or a disc image, and it reads every NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF volume down to the last record, live and deleted, brings back what was erased, and rebuilds what happened on the machine: Windows registry, event logs and execution traces, Linux logons, shell histories and persistence, browser history, carved files and edited pictures.
+Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workbench for disk images. Give it an E01, raw, VHD, VHDX or VMDK image, or a disc image, and it reads every NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF volume down to the last record, live and deleted, brings back what was erased, and rebuilds what happened on the machine: Windows registry (deleted keys included), event logs, execution traces and scheduled tasks, Linux logons, shell histories and persistence, browser history (Internet Explorer's included, even from a formatted disk), carved files and edited pictures.
 
 Every finding links to the exact bytes it came from, every indicator of anti-forensic activity explains itself, and every examiner action lands in a hash-chained audit log, so the results hold up in a report and in court.
 
-> Status: 1.2.8 goes deeper into Windows: the NTFS change journal, names of deleted files from folder index slack and $LogFile, ShellBags, BAM/DAM and SRUM (with Kokino's own ESE database reader, checked against Windows' own on a real database). Reads E01, raw and virtual disks, and NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF. Validated against NIST CFReDS and Digital Corpora test images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed ([SECURITY.md](SECURITY.md)). Next: Ex01, macOS artifacts and APFS snapshots (see [What's next](#whats-next)).
+> Status: 1.2.9 adds scheduled tasks (with tasks hidden from the Task Scheduler flagged), Internet Explorer history, cache and downloads (index.dat, with records recovered from the free space of a formatted disk) and deleted registry keys and values, on top of 1.2.8's change journal, ShellBags, BAM/DAM and SRUM. Reads E01, raw and virtual disks, and NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF. Validated against NIST CFReDS and Digital Corpora test images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed ([SECURITY.md](SECURITY.md)). Next: Ex01, macOS artifacts and APFS snapshots (see [What's next](#whats-next)).
 
 ## Features
 

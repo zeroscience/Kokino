@@ -111,19 +111,19 @@ Deeper NTFS and Windows (1.2.8):
 | `registry` | again, as BAM and DAM are read from the SYSTEM hive | 5 min | 26,319,961 | none |
 | `ese` | again, after the check against a real SRUM database: every branch level of deeper B+ trees, with a three-level tree as an extra seed | 10 min | 291,544 | none |
 
-Scheduled tasks (unreleased):
+Scheduled tasks (1.2.9):
 
 | Target | What it covers | Rounds | Inputs in all | Distinct problems found |
 |---|---|---|--:|---|
 | `task` | task XML (elements, entities, triggers, actions), the TaskCache Actions and DynamicInfo blobs, and TaskCache read from a SOFTWARE hive | 10 min | 19,733,957 | none |
 
-Internet Explorer index.dat (unreleased):
+Internet Explorer index.dat (1.2.9):
 
 | Target | What it covers | Rounds | Inputs in all | Distinct problems found |
 |---|---|---|--:|---|
 | `iecache` | index.dat (header, hash tables, allocation bitmap, URL, LEAK and REDR records, history titles, cache headers, IE 9 download entries), the conversion of each kind of file into web activity, and records read from free space at every 128-byte boundary | 10 + 10 min | 21,653,615 | 1: a record cut off by the end of the file, with its data offset past the bytes that exist, was sliced out of range (panic); fixed |
 
-Deleted registry keys (unreleased):
+Deleted registry keys (1.2.9):
 
 | Target | What it covers | Rounds | Inputs in all | Distinct problems found |
 |---|---|---|--:|---|

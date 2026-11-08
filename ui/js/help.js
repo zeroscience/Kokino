@@ -81,7 +81,7 @@ export function aboutPage(info) {
     h("div.grid.g2",
       h("div.card.stack",
         h("h3", "What it is"),
-        p("Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workbench for disk images. Give it an E01, raw, VHD, VHDX or VMDK image, or a disc image, and it reads every NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF volume down to the last record, live and deleted, brings back what was erased, and rebuilds what happened on the machine: Windows registry, event logs and execution traces, Linux logons, shell histories and persistence, browser history, carved files and edited pictures."),
+        p("Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workbench for disk images. Give it an E01, raw, VHD, VHDX or VMDK image, or a disc image, and it reads every NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF volume down to the last record, live and deleted, brings back what was erased, and rebuilds what happened on the machine: Windows registry (deleted keys included), event logs, execution traces and scheduled tasks, Linux logons, shell histories and persistence, browser history (Internet Explorer's included, even from a formatted disk), carved files and edited pictures."),
         p("Every finding links to the exact bytes it came from, every indicator of anti-forensic activity explains itself, and every examiner action lands in a hash-chained audit log, so the results hold up in a report and in court."),
         p("One portable binary serves this browser interface on Windows, Linux and macOS, alone on a workstation or for a whole lab over HTTPS."),
         p("The name comes from the Kokino observatory, a Bronze Age megalithic site in North Macedonia (", link("https://en.wikipedia.org/wiki/Kokino", "Wikipedia"), "); the wiki has the story."),
@@ -199,7 +199,7 @@ const WIKI = [
         ["Summary", "Disk layout, counts, the impact summary in plain sentences, the anti-forensics gauge and an activity histogram (click a day to open the timeline)."],
         ["Explorer", "The folder tree including deleted and orphaned entries. Click a file for its detail drawer: both timestamp sets side by side, data streams, signature, entropy, where its MFT record lies on disk, its timeline events and a hex preview."],
         ["Timeline", "MACB events from $SI and $FN interleaved with browser visits, downloads and searches, Windows artifacts and, on NTFS, files created, deleted and renamed per the change journal (USN). Filter by text, date, source, deleted or flagged."],
-        ["Web activity", "Browser history per profile: visits, downloads and searches. Click a profile card to filter by it."],
+        ["Web activity", "Browser history per profile (Chrome family, Firefox, Internet Explorer): visits, downloads, searches and Internet Explorer's cache. Click a profile card to filter by it."],
         ["Anti-forensics", "Each indicator with its weight, caveat and the exact files: click Show files to list them, then a file to open it."],
         ["Hex", "The whole image, any size. See Hex and exports."],
       ]),
@@ -289,7 +289,7 @@ const WIKI = [
   {
     id: "system", title: "System summary (Windows; Linux is under Linux disks)", icon: "monitor",
     body: [
-      p("For a Windows volume, Kokino reads the registry hives (SYSTEM, SOFTWARE, SAM, each user's NTUSER.DAT and UsrClass.dat, Amcache.hve), the event logs, Prefetch files, Recent-folder shortcuts, Jump Lists, the NTFS change journal ($UsnJrnl) and the SRUM database, deleted copies included, and shows them on the System summary page:"),
+      p("For a Windows volume, Kokino reads the registry hives (SYSTEM, SOFTWARE, SAM, each user's NTUSER.DAT and UsrClass.dat, Amcache.hve), the event logs, Prefetch files, Recent-folder shortcuts, Jump Lists, the NTFS change journal ($UsnJrnl), the SRUM database and the scheduled task files, deleted copies included, recovers deleted keys and values from the hives' free space, and shows them on the System summary page:"),
       ul(
         h("span", h("b", "Overview:"), " computer name, Windows version and build, install date, owner, time zone and last shutdown, plus highlights (log clearing, anti-forensic tools, unusual autostart entries)."),
         h("span", h("b", "Programs run:"), " Prefetch (run count and last eight run times, Windows 10/11 compressed files included), UserAssist (per user, with run count and focus time), BAM and DAM (the last run of each program per user, kept about a week, Windows 10 1709 and later), Amcache (path, SHA-1, first seen), ShimCache and process-creation events (4688)."),
@@ -303,8 +303,8 @@ const WIKI = [
         h("span", h("b", "Events:"), " notable events in plain language: log clearing (1102, 104), logons, account and group changes, services and scheduled tasks, remote desktop, PowerShell script blocks, Defender detections, boots and shutdowns. Click one for every field."),
         h("span", h("b", "Software and autostart:"), " installed programs, Run keys and services, with entries running from user-writable locations marked; and scheduled tasks, from the task files in Windows\\System32\\Tasks and the registry's TaskCache, which also records when each task was created and last ran. Windows' own tasks are behind a toggle. A task whose TaskCache\\Tree key lost its SD value is flagged: it still runs, but schtasks and the Task Scheduler do not list it (the Tarrask technique). A task registered without a task file, or a task file no longer registered, is marked too."),
       ),
-      p("The same records join the Timeline (filter Windows) and feed anti-forensics indicators: an event log cleared, an anti-forensic tool in execution records, files renamed AAAA.AAA through ZZZZ.ZZZ in the change journal (SDelete's pattern; the journal keeps their original names), a change journal created long after Windows was installed (deleted and recreated), and a scheduled task hidden from the Task Scheduler."),
-      p("Not yet read: registry transaction logs (.LOG1/.LOG2; a hive that was not cleanly saved is marked), deleted registry keys, SRUM's energy and app timeline tables, legacy .job task files (Windows XP) and Windows 7 ShimCache."),
+      p("The same records join the Timeline (filter Windows) and feed anti-forensics indicators: an event log cleared, an anti-forensic tool in execution records, files renamed AAAA.AAA through ZZZZ.ZZZ in the change journal (SDelete's pattern; the journal keeps their original names), a change journal created long after Windows was installed (deleted and recreated), a scheduled task hidden from the Task Scheduler, and registry keys that record user activity found deleted."),
+      p("Not yet read: registry transaction logs (.LOG1/.LOG2; a hive that was not cleanly saved is marked), SRUM's energy and app timeline tables, legacy .job task files (Windows XP) and Windows 7 ShimCache."),
     ],
   },
   {
@@ -350,7 +350,8 @@ const WIKI = [
     body: [
       p("Carving recovers files that no file system record describes any more, by their content. It runs after analysis (or with ", h("b", "Carve unallocated space"), " on the Carved files page) over every free cluster or block (NTFS, FAT, exFAT, ext2/3/4, HFS+), the space outside partitions and volumes Kokino cannot parse yet. On ext3 and ext4 it is often the only way back to a deleted file's content."),
       ul(
-        h("span", h("b", "Formats:"), " JPEG, PNG, GIF, BMP, WebP, PDF, Word, Excel and PowerPoint (DOCX/XLSX/PPTX and the older DOC/XLS/PPT), OpenDocument, EPUB, ZIP, JAR, APK, Outlook MSG, SQLite, Windows executables, DLLs and drivers, GZIP, 7-Zip, WAV, AVI, MP4/MOV, Jump Lists and 64 KiB event log chunks (with their record count and time range, often all that is left of a cleared log)."),
+        h("span", h("b", "Formats:"), " JPEG, PNG, GIF, BMP, WebP, PDF, Word, Excel and PowerPoint (DOCX/XLSX/PPTX and the older DOC/XLS/PPT), OpenDocument, EPUB, ZIP, JAR, APK, Outlook MSG, SQLite, Windows executables, DLLs and drivers, GZIP, 7-Zip, WAV, AVI, MP4/MOV, Jump Lists, 64 KiB event log chunks (with their record count and time range, often all that is left of a cleared log) and Internet Explorer index.dat files."),
+        h("span", h("b", "Internet Explorer records:"), " every 128-byte boundary of free space is also checked for single index.dat records (history visits, cache entries, cookies, downloads, redirects), which keep that alignment when the file is deleted. They are listed under ie-records with the user, URL, time and whether they lie inside a carved index.dat. On a formatted disk this is often all that is left of the browsing history."),
         h("span", h("b", "Whole files:"), " each format's own structure says where the file ends (JPEG markers, PNG chunks, the ZIP central directory, the PE section table, the SQLite page count, the end of a GZIP stream...), so random bytes that only resemble a header are not listed. A file whose end is missing is kept and marked incomplete."),
         h("span", h("b", "Contiguous:"), " carving assumes a file's clusters were contiguous. One that runs past the end of its free region is marked: its tail may belong to another file."),
         h("span", h("b", "Deleted files:"), " when a carved file starts where a deleted file's data started, the deleted file's path is shown."),

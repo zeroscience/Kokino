@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.9] - 2026-11-08
+
+More Windows: scheduled tasks (hidden ones flagged), Internet Explorer history with records recovered from free space, and deleted registry keys and values.
+
 ### Added
 - Scheduled tasks (new module `kokino_artifacts::task`): every task file under `Windows\System32\Tasks` (author, registration date, account and privilege level, triggers in plain words, what it runs, hidden and disabled flags) joined with the registry's TaskCache (SOFTWARE), which adds when each task was created and last ran, the result of its last run, and a binary copy of its actions for tasks whose file is gone. Shown in a new "Scheduled tasks" card in the System summary (Windows' own tasks behind a toggle), with tasks that are not Windows' own, or run from unusual places, in the autostart list; task registrations and last runs on the Timeline; a table in the case report and lines in the impact summary. Tasks registered without a task file, and task files no longer registered, are marked. Checked on a real Windows 7 SOFTWARE hive (83 tasks, VALIDATION.md).
 - Anti-forensics indicator `task_hidden_sd` (25 in total): a task whose TaskCache\Tree key lost its SD value, which hides it from schtasks and the Task Scheduler while it keeps running (the Tarrask technique). Only where the hive's other tasks have an SD value: Windows 7 writes none.

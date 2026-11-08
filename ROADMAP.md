@@ -61,10 +61,10 @@ checked against public test images with known answers where they exist
 - [x] SRUM (network and resource use per program, connections) with an ESE database reader (1.2.8)
 - [x] BAM/DAM (1.2.8)
 - [ ] SRUM energy, push notification and app timeline tables; other ESE databases (Windows Search, WebCache of Internet Explorer 10 and 11 and old Edge)
-- [x] Internet Explorer 4 to 9 history, cache and downloads (index.dat), with deleted entries and records carved from free space (unreleased)
+- [x] Internet Explorer 4 to 9 history, cache and downloads (index.dat), with deleted entries and records carved from free space (1.2.9)
 - [ ] Internet Explorer cookies (index.dat and the cookie text files)
-- [x] Scheduled tasks (task files and TaskCache, hidden tasks flagged) (unreleased)
-- [x] Deleted registry keys and values from free cells in the hives (unreleased)
+- [x] Scheduled tasks (task files and TaskCache, hidden tasks flagged) (1.2.9)
+- [x] Deleted registry keys and values from free cells in the hives (1.2.9)
 - [ ] Registry transaction logs (.LOG1/.LOG2) applied to hives that were not cleanly saved
 - [ ] Legacy .evt event logs
 

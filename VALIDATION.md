@@ -23,7 +23,8 @@ Thanks to the people behind these collections:
 
 Kokino version: 1.2.5 plus the fixes listed in the changelog for the FAT,
 exFAT and NTFS images; 1.2.6 for the ext images; 1.2.8 for NTFS names
-without an MFT record and the SRUM database. Run on Windows 10.
+without an MFT record and the SRUM database; 1.2.9 for scheduled tasks,
+Internet Explorer and deleted registry keys. Run on Windows 10.
 
 ## Summary
 
@@ -33,9 +34,9 @@ without an MFT record and the SRUM database. Run on Windows 10.
 | Digital Corpora `nps-2009-ntfs1` (NTFS, E01) | File list against the DFXML; compressed and EFS-encrypted copies against the plain originals | All files with correct names and sizes; all 9 compressed copies identical to the originals (after adding NTFS decompression, see below); encrypted copies read as ciphertext and now flagged |
 | NIST CFReDS DFR, 22 ext images (ext2, ext3, ext4) | Every deleted file with content, block by block; deleted names against NIST's layout | 962 of 965 tagged files complete, 99.9996% of blocks right; 302 files recovered through the ext3/ext4 journal; 2,782 deleted names listed; wrong content without a warning in 1 file |
 | A real Windows 10 22H2 SRUM database (SRUDB.dat, 70 MB, 1.2.8) | Every row and value of every table against Windows' own esent.dll | All 310,255 rows and 2,800,979 values the same, after two fixes (below) |
-| Digital Detective practice files: SOFTWARE hive of a Windows 7 laptop (unreleased) | Scheduled tasks in TaskCache | 83 tasks read, none falsely flagged as hidden, after one fix (below) |
-| Digital Detective practice files: SOFTWARE and SYSTEM hives (unreleased) | Deleted keys and values in the hives' free space | 181 deleted keys (176 with full paths) and 627 values without a key recovered: Windows Installer and servicing entries removed at setup, a removed shadow copy device |
-| Digital Detective practice files: Internet Explorer 9 index.dat files and the formatted E01 (unreleased) | History, cache and downloads read live; records carved from free space against the live counts | All 16 files read; all 15 index.dat files and all 5,920 records recovered from the formatted volume, the same counts as live, after two fixes (below) |
+| Digital Detective practice files: SOFTWARE hive of a Windows 7 laptop (1.2.9) | Scheduled tasks in TaskCache | 83 tasks read, none falsely flagged as hidden, after one fix (below) |
+| Digital Detective practice files: SOFTWARE and SYSTEM hives (1.2.9) | Deleted keys and values in the hives' free space | 181 deleted keys (176 with full paths) and 627 values without a key recovered: Windows Installer and servicing entries removed at setup, a removed shadow copy device |
+| Digital Detective practice files: Internet Explorer 9 index.dat files and the formatted E01 (1.2.9) | History, cache and downloads read live; records carved from free space against the live counts | All 16 files read; all 15 index.dat files and all 5,920 records recovered from the formatted volume, the same counts as live, after two fixes (below) |
 | NIST CFReDS DFR, 61 images (FAT12/16/32, exFAT, NTFS) | Every deleted file Kokino lists, block by block, against the files' own tags; counts against NIST's layout | 3,048 of 3,323 deleted test files complete, 1,367,020 of 1,370,338 blocks right (99.8%); exFAT 100%, NTFS 100% of blocks; wrong content without a warning in 4 files |
 
 The validation found real problems in Kokino, all fixed before these
@@ -280,7 +281,7 @@ by the esent.dll-written fixtures and XPRESS only by a test vector. A
 dirty database (whose newest records are only in the transaction logs) was
 not checked either.
 
-## Scheduled tasks: a real Windows 7 hive (unreleased)
+## Scheduled tasks: a real Windows 7 hive (1.2.9)
 
 The SOFTWARE hive in Digital Detective's practice files (`2011-10-19-Data.zip`,
 a Windows 7 laptop) was read by Kokino's TaskCache reader. It lists 83 tasks
@@ -294,7 +295,7 @@ in TaskCache\Tree at all; Windows 10 added it. Kokino now treats a missing
 SD value as hiding a task only when the hive's other tasks have one. After
 the fix: 83 tasks, none hidden, none flagged.
 
-## Internet Explorer: the Digital Detective practice case (unreleased)
+## Internet Explorer: the Digital Detective practice case (1.2.9)
 
 Digital Detective's practice files (`2011-10-19-Data.zip` and
 `2011-10-19-Image.zip`, a Windows 7 laptop with Internet Explorer 9) hold the
@@ -333,7 +334,7 @@ the carved files. Before the fix, records inside a carved file longer than
 the 1 MiB read window were skipped (only 1,539 of the cache's records were
 listed), and the clock offset was truncated to UTC+02:45 instead of rounded.
 
-## Deleted registry keys: the Digital Detective hives (unreleased)
+## Deleted registry keys: the Digital Detective hives (1.2.9)
 
 The SOFTWARE and SYSTEM hives in Digital Detective's practice files (a
 Windows 7 laptop) were searched for deleted keys and values
