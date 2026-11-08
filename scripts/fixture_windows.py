@@ -271,6 +271,67 @@ def wlan_profile_xml():
             '\t<connectionType>ESS</connectionType>\n</WLANProfile>\n').encode()
 
 
+# Scheduled tasks (task files and TaskCache). Ground truth:
+#   \Microsoft\Windows\Defrag\ScheduledDefrag  Windows' own, registered normally
+#   \Updater Check     C:\Users\Public\updsvc.exe -silent at alice's logon and every
+#                      5 min; created 2026-10-21 02:16:40, last ran 09:00:05 (UTC)
+#   \Microsoft\Windows\WinUpdate\Sync  C:\ProgramData\winupd\svch.exe as SYSTEM,
+#                      hidden: its Tree key has no SD value (Tarrask); created 02:18:10
+#   \OneDrive Cleanup  registered (Actions blob only), but its task file is gone
+TASKS = [
+    # path, id, sd, created, last run, (command, arguments), user, author, trigger xml, file?
+    ("Microsoft\\Windows\\Defrag\\ScheduledDefrag", "{1D9E2E56-6B40-4C9C-9D38-0B6D1F0A0001}", True, (2025, 3, 2, 8, 5, 0), (2026, 10, 18, 3, 0, 0),
+     ("%windir%\\system32\\defrag.exe", "-c -h -o -$"), "S-1-5-18", "Microsoft Corporation",
+     "<CalendarTrigger><StartBoundary>2025-01-01T01:00:00</StartBoundary><ScheduleByWeek><WeeksInterval>1</WeeksInterval></ScheduleByWeek></CalendarTrigger>", True),
+    ("Updater Check", "{1D9E2E56-6B40-4C9C-9D38-0B6D1F0A0002}", True, (2026, 10, 21, 2, 16, 40), (2026, 10, 21, 9, 0, 5),
+     ("C:\\Users\\Public\\updsvc.exe", "-silent"), SID_ALICE, "LAB-PC\\alice",
+     "<LogonTrigger><UserId>LAB-PC\\alice</UserId></LogonTrigger><TimeTrigger><Repetition><Interval>PT5M</Interval></Repetition><StartBoundary>2026-10-21T04:20:00</StartBoundary></TimeTrigger>", True),
+    ("Microsoft\\Windows\\WinUpdate\\Sync", "{1D9E2E56-6B40-4C9C-9D38-0B6D1F0A0003}", False, (2026, 10, 21, 2, 18, 10), (2026, 10, 21, 8, 0, 0),
+     ("C:\\ProgramData\\winupd\\svch.exe", ""), "S-1-5-18", "LAB-PC\\alice",
+     "<BootTrigger/><CalendarTrigger><StartBoundary>2026-10-21T04:00:00</StartBoundary><ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay></CalendarTrigger>", True),
+    ("OneDrive Cleanup", "{1D9E2E56-6B40-4C9C-9D38-0B6D1F0A0004}", True, (2026, 10, 21, 2, 19, 0), (0, 0, 0, 0, 0, 0),
+     ("C:\\Users\\alice\\AppData\\Local\\Temp\\clean.cmd", ""), SID_ALICE, "LAB-PC\\alice", "<LogonTrigger/>", False),
+]
+
+
+def task_xml(path, cmd, user, author, triggers, created):
+    y, mo, d, h, mi, s = created
+    esc = lambda t: t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    args = "<Arguments>%s</Arguments>" % esc(cmd[1]) if cmd[1] else ""
+    x = ('<?xml version="1.0" encoding="UTF-16"?>\r\n<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\r\n'
+         '  <RegistrationInfo>\r\n    <Date>%04d-%02d-%02dT%02d:%02d:%02d</Date>\r\n    <Author>%s</Author>\r\n    <URI>\\%s</URI>\r\n  </RegistrationInfo>\r\n'
+         '  <Triggers>%s</Triggers>\r\n'
+         '  <Principals>\r\n    <Principal id="Author">\r\n      <UserId>%s</UserId>\r\n      <RunLevel>HighestAvailable</RunLevel>\r\n    </Principal>\r\n  </Principals>\r\n'
+         '  <Settings>\r\n    <Enabled>true</Enabled>\r\n    <Hidden>false</Hidden>\r\n  </Settings>\r\n'
+         '  <Actions Context="Author">\r\n    <Exec>\r\n      <Command>%s</Command>\r\n      %s\r\n    </Exec>\r\n  </Actions>\r\n</Task>\r\n'
+         % (y, mo, d, h, mi, s, esc(author), esc(path), triggers, user, esc(cmd[0]), args))
+    return b"\xff\xfe" + x.encode("utf-16-le")
+
+
+def task_files():
+    return {"Windows/System32/Tasks/" + p.replace("\\", "/"): task_xml(p, cmd, user, author, trig, created)
+            for p, _id, _sd, created, _last, cmd, user, author, trig, has_file in TASKS if has_file}
+
+
+def actions_blob(context, cmd, args):
+    s = lambda t: struct.pack("<I", len(t) * 2) + t.encode("utf-16-le")
+    return struct.pack("<H", 3) + s(context) + struct.pack("<H", 0x6666) + s("") + s(cmd) + s(args) + s("") + b"\0\0"
+
+
+def task_cache_keys():
+    keys = []
+    base = "Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache"
+    for path, tid, sd, created, last, cmd, user, author, _trig, _f in TASKS:
+        tree = [sz("Id", tid), dword("Index", 3)]
+        if sd:
+            tree.append(binary("SD", bytes.fromhex("010004801400000020000000000000002c000000")))
+        keys.append(path_key(base + "\\Tree\\" + path, tree, ts=ft(*created)))
+        dyn = struct.pack("<IQQIIQ", 3, ft(*created), ft(*last) if last[0] else 0, 0, 0, ft(*last) if last[0] else 0)
+        keys.append(path_key(base + "\\Tasks\\" + tid, [sz("Path", "\\" + path), sz("Author", author), sz("Date", "%04d-%02d-%02dT%02d:%02d:%02d" % created),
+                                                         binary("Actions", actions_blob(user, cmd[0], cmd[1])), binary("DynamicInfo", dyn)], ts=ft(*created)))
+    return keys
+
+
 def hive_software():
     nt = "Microsoft\\Windows NT\\CurrentVersion"
     unin = "Microsoft\\Windows\\CurrentVersion\\Uninstall"
@@ -292,7 +353,7 @@ def hive_software():
         path_key(unin + "\\7-Zip", [sz("DisplayName", "7-Zip 23.01 (x64)"), sz("DisplayVersion", "23.01"), sz("Publisher", "Igor Pavlov"), sz("InstallLocation", "C:\\Program Files\\7-Zip\\")], ts=ft(2025, 4, 1, 12, 0)),
         path_key("WOW6432Node\\" + unin + "\\CCleaner", [sz("DisplayName", "CCleaner"), sz("DisplayVersion", "6.20"), sz("Publisher", "Piriform"), sz("InstallDate", "20261020")], ts=ft(2026, 10, 20, 10, 40)),
         path_key("Microsoft\\Windows\\CurrentVersion\\Run", [sz("SecurityHealth", "%windir%\\system32\\SecurityHealthSystray.exe"), sz("Updater", "C:\\Users\\Public\\updsvc.exe -silent")], ts=ft(2026, 10, 21, 2, 15)),
-    ]
+    ] + task_cache_keys()
     return write_hive(Key("ROOT", [], merge(keys), ts=ft(2026, 10, 21, 2, 15)), "\\??\\C:\\Windows\\System32\\config\\SOFTWARE")
 
 
@@ -800,6 +861,7 @@ def build():
     }
     for name, data in prefetch_files().items():
         out["Windows/Prefetch/" + name] = data
+    out.update(task_files())
     # SRUM: the small-page database from make_srum_fixture.py (written by esent.dll).
     srum = os.path.join(OUT, "SRUDB-4k.dat")
     if os.path.exists(srum):

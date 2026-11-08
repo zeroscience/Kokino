@@ -14,5 +14,6 @@ pub mod prefetch;
 pub mod registry;
 pub mod shellbags;
 pub mod sqlite;
+pub mod task;
 pub mod usn;
 pub mod xpress;

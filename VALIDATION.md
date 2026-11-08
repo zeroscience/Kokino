@@ -12,6 +12,10 @@ Thanks to the people behind these collections:
 - **Digital Corpora** (digitalcorpora.org), created by Simson Garfinkel and
   colleagues at the Naval Postgraduate School: test disk images with
   documentation, freely available for research and tool testing.
+- **Digital Detective** (digital-detective.net), makers of NetAnalysis and
+  HstEx: the practice files of their 2011 training case (a Windows 7
+  laptop: an E01 of its formatted volume, and its Internet Explorer files
+  and registry hives).
 - **NIST CFReDS** (cfreds.nist.gov), the Computer Forensic Reference Data
   Sets of the U.S. National Institute of Standards and Technology, Computer
   Forensics Tool Testing (CFTT) program: here the Deleted File Recovery
@@ -29,6 +33,7 @@ without an MFT record and the SRUM database. Run on Windows 10.
 | Digital Corpora `nps-2009-ntfs1` (NTFS, E01) | File list against the DFXML; compressed and EFS-encrypted copies against the plain originals | All files with correct names and sizes; all 9 compressed copies identical to the originals (after adding NTFS decompression, see below); encrypted copies read as ciphertext and now flagged |
 | NIST CFReDS DFR, 22 ext images (ext2, ext3, ext4) | Every deleted file with content, block by block; deleted names against NIST's layout | 962 of 965 tagged files complete, 99.9996% of blocks right; 302 files recovered through the ext3/ext4 journal; 2,782 deleted names listed; wrong content without a warning in 1 file |
 | A real Windows 10 22H2 SRUM database (SRUDB.dat, 70 MB, 1.2.8) | Every row and value of every table against Windows' own esent.dll | All 310,255 rows and 2,800,979 values the same, after two fixes (below) |
+| Digital Detective practice files: SOFTWARE hive of a Windows 7 laptop (unreleased) | Scheduled tasks in TaskCache | 83 tasks read, none falsely flagged as hidden, after one fix (below) |
 | NIST CFReDS DFR, 61 images (FAT12/16/32, exFAT, NTFS) | Every deleted file Kokino lists, block by block, against the files' own tags; counts against NIST's layout | 3,048 of 3,323 deleted test files complete, 1,367,020 of 1,370,338 blocks right (99.8%); exFAT 100%, NTFS 100% of blocks; wrong content without a warning in 4 files |
 
 The validation found real problems in Kokino, all fixed before these
@@ -272,6 +277,20 @@ its values compressed (7-bit or XPRESS), so the 7-bit path is covered only
 by the esent.dll-written fixtures and XPRESS only by a test vector. A
 dirty database (whose newest records are only in the transaction logs) was
 not checked either.
+
+## Scheduled tasks: a real Windows 7 hive (unreleased)
+
+The SOFTWARE hive in Digital Detective's practice files (`2011-10-19-Data.zip`,
+a Windows 7 laptop) was read by Kokino's TaskCache reader. It lists 83 tasks
+in TaskCache\Tree, all Windows' own; 77 have an entry under TaskCache\Tasks
+with a creation time (all in 2011, when the laptop was set up). Windows 7
+keeps no binary copy of the actions there, so a task's command comes only
+from its task file (the practice files include none).
+
+The first run flagged all 83 tasks as hidden: Windows 7 writes no SD value
+in TaskCache\Tree at all; Windows 10 added it. Kokino now treats a missing
+SD value as hiding a task only when the hive's other tasks have one. After
+the fix: 83 tasks, none hidden, none flagged.
 
 ## NIST CFReDS: deleted file recovery on ext2, ext3 and ext4
 

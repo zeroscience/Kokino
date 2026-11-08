@@ -2067,6 +2067,23 @@ fn report_windows(h: &mut String, w: &kokino_analysis::windows::WindowsArtifacts
         }
         h.push_str("</table>");
     }
+    let tasks: Vec<&kokino_analysis::windows::ScheduledTask> = w.tasks.iter().filter(|k| !k.microsoft || k.unusual || k.sd_removed).collect();
+    if !tasks.is_empty() {
+        h.push_str(&format!("<h4>Scheduled tasks ({} of {}; Windows' own left out)</h4><table><tr><th>Task</th><th>Runs</th><th>Triggers</th><th>Account</th><th>Created (UTC)</th><th>Last run (UTC)</th><th>Notes</th></tr>", tasks.len(), w.tasks.len()));
+        for k in tasks {
+            h.push_str(&format!(
+                "<tr><td>{}</td><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                esc(&k.path),
+                esc(&k.command()),
+                esc(&k.triggers.join("; ")),
+                esc(&k.user),
+                t(k.created),
+                t(k.last_run),
+                esc(&k.notes.join("; "))
+            ));
+        }
+        h.push_str("</table>");
+    }
     h.push_str(&format!(
         "<p class=muted>{} artifact files read: {}. {} notable events of {} records.</p>",
         w.sources.len(),

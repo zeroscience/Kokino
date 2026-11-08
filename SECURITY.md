@@ -111,7 +111,13 @@ Deeper NTFS and Windows (1.2.8):
 | `registry` | again, as BAM and DAM are read from the SYSTEM hive | 5 min | 26,319,961 | none |
 | `ese` | again, after the check against a real SRUM database: every branch level of deeper B+ trees, with a three-level tree as an extra seed | 10 min | 291,544 | none |
 
-In all: 319,500,138 inputs over 25 targets, and 28 distinct problems
+Scheduled tasks (unreleased):
+
+| Target | What it covers | Rounds | Inputs in all | Distinct problems found |
+|---|---|---|--:|---|
+| `task` | task XML (elements, entities, triggers, actions), the TaskCache Actions and DynamicInfo blobs, and TaskCache read from a SOFTWARE hive | 10 min | 19,733,957 | none |
+
+In all: 339,234,095 inputs over 26 targets, and 28 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed

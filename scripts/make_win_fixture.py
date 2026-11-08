@@ -70,7 +70,9 @@ def main():
         return dirs[d]
 
     files = fixture_windows.build()
-    for path in sorted(files, key=lambda p: -len(files[p])):  # big files first: contiguous runs
+    # Task files go in last, around the carving samples (see below).
+    late = {p: files[p] for p in files if p.startswith("Windows/System32/Tasks/")}
+    for path in sorted((p for p in files if p not in late), key=lambda p: -len(files[p])):  # big files first: contiguous runs
         plant_file(vol, alloc, next(spare), path.rsplit("/", 1)[1], parent(path), files[path], rec_of)
 
     # Carving ground truth (see CARVE_TRUTH): files in free clusters that no
@@ -82,10 +84,22 @@ def main():
     # The change journal takes its clusters before free ones are picked.
     plant_journal(vol, alloc, rec_of(next(spare)), ref_of("$Extend"), parent("Users/alice/x"), parent("Users/alice/Pictures/x"), pic)
     reserved = set()
-    for name in ("security.evtx-chunk", "memo.doc", "chat.sqlite", "photo.jpg", "draft.docx"):
+    # memo.doc goes to the unpartitioned tail with the rest: the volume is full.
+    for name in ("security.evtx-chunk", "chat.sqlite", "photo.jpg", "draft.docx"):
         data = samples.pop(name)
         lcn = find_free(alloc, (len(data) + vol.cluster - 1) // vol.cluster, reserved)
         vol.d[lcn * vol.cluster:lcn * vol.cluster + len(data)] = data
+    # Small files in whatever space the samples left.
+    for path, data in sorted(late.items()):
+        n, r = rec_of(next(spare))
+        clusters = (len(data) + vol.cluster - 1) // vol.cluster
+        lcn = find_free(alloc, clusters, reserved)
+        for c in range(lcn, lcn + clusters):
+            alloc._bit(c, True)
+        vol.d[lcn * vol.cluster:lcn * vol.cluster + len(data)] = data
+        r = set_flags(set_fn(r, name=path.rsplit("/", 1)[1], parent=parent(path)), in_use=True, is_dir=False)
+        r = add_nonresident_data(drop_attrs(r, {0x80, 0x90, 0xA0, 0xB0}), lcn, clusters, len(data), vol.cluster)
+        vol.write(n, r)
     n = pic & 0xFFFFFFFFFFFF
     for lcn, count in vol.runs_of(vol.read(n), 0x80):
         for c in range(lcn, lcn + count):

@@ -14,7 +14,7 @@
 
 use crate::FileRow;
 use kokino_artifacts::registry::{Hive, Key};
-use kokino_artifacts::{ese, evtx, jumplist, lnk, prefetch, registry, shellbags, usn};
+use kokino_artifacts::{ese, evtx, jumplist, lnk, prefetch, registry, shellbags, task, usn};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -23,6 +23,10 @@ use std::io::{Read, Seek};
 /// Files larger than this are listed with an error instead of parsed.
 const MAX_HIVE: u64 = 1 << 30;
 const MAX_LOG: u64 = 2 << 30;
+/// Task files are a few KB; anything this large is not one.
+const MAX_TASK: u64 = 4 << 20;
+/// Most TaskCache entries read.
+const MAX_TASKS: usize = 20_000;
 /// Notable events kept per log (counts are always complete).
 const MAX_EVENTS_PER_LOG: usize = 50_000;
 
@@ -53,6 +57,9 @@ pub struct WindowsArtifacts {
     /// System Resource Usage Monitor (SRUDB.dat).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub srum: Option<Srum>,
+    /// Scheduled tasks: task files and the registry's TaskCache.
+    #[serde(default)]
+    pub tasks: Vec<ScheduledTask>,
 }
 
 /// What SRUM holds: per program and user, hour by hour, how much it sent
@@ -200,6 +207,7 @@ impl WindowsArtifacts {
             journal: None,
             // Hourly rows are served page by page too.
             srum: self.srum.as_ref().map(|s| Srum { network: vec![], usage: vec![], ..s.clone() }),
+            tasks: self.tasks.clone(),
         }
     }
 }
@@ -296,6 +304,53 @@ pub struct Autorun {
     pub start: String,
     /// Runs from a user-writable or otherwise unusual location.
     pub unusual: bool,
+}
+
+/// A scheduled task, from its task file (Windows\System32\Tasks) and the
+/// registry's TaskCache (SOFTWARE), joined on the task's path.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ScheduledTask {
+    /// For example \Microsoft\Windows\Defrag\ScheduledDefrag
+    pub path: String,
+    /// The task file (index into the volume's files), when there is one.
+    pub file: Option<u32>,
+    pub file_deleted: bool,
+    pub author: String,
+    pub description: String,
+    /// When it was registered, as the task file writes it (local time).
+    pub date: String,
+    /// The account it runs as (a name or a SID).
+    pub user: String,
+    pub run_level: String,
+    /// Marked hidden in its definition.
+    pub hidden: bool,
+    pub enabled: bool,
+    pub triggers: Vec<String>,
+    pub actions: Vec<task::Action>,
+    /// TaskCache DynamicInfo (UTC): created, last run, last successful run.
+    pub created: u64,
+    pub last_run: u64,
+    pub last_success: u64,
+    /// Result of the last run (0 = success).
+    pub last_result: u32,
+    /// Listed in TaskCache.
+    pub registered: bool,
+    /// Its TaskCache\Tree key lost the SD value: schtasks and the Task
+    /// Scheduler do not show it, but it still runs (the Tarrask technique).
+    pub sd_removed: bool,
+    pub tree_written: u64,
+    /// One of Windows' own tasks (under \Microsoft\).
+    pub microsoft: bool,
+    /// Runs a program from a user-writable or otherwise unusual location.
+    pub unusual: bool,
+    pub notes: Vec<String>,
+}
+
+impl ScheduledTask {
+    /// The actions in one line.
+    pub fn command(&self) -> String {
+        self.actions.iter().map(|a| a.summary()).collect::<Vec<_>>().join(" ; ")
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -396,6 +451,7 @@ enum Kind {
     Amcache,
     Srum,
     WlanProfile,
+    Task,
     Evtx,
     Prefetch,
     Lnk,
@@ -423,6 +479,9 @@ fn classify(path: &str) -> Option<Kind> {
     }
     if p.starts_with("/programdata/microsoft/wlansvc/profiles/interfaces/") && p.ends_with(".xml") {
         return Some(Kind::WlanProfile);
+    }
+    if p.starts_with("/windows/system32/tasks/") {
+        return Some(Kind::Task);
     }
     if p.starts_with("/windows/system32/winevt/logs/") && p.ends_with(".evtx") {
         return Some(Kind::Evtx);
@@ -457,12 +516,17 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
     let mut srum_db: Option<(usize, Vec<u8>)> = None;
     // Wi-Fi profile GUID (as in the file name) -> network name.
     let mut wlan: HashMap<String, String> = HashMap::new();
+    let mut task_files: Vec<(usize, task::Task)> = vec![];
     for (n, (i, kind)) in found.into_iter().enumerate() {
         if !progress("Windows artifacts", n as u64, total) {
             break;
         }
         let f = &files[i];
-        let limit = if kind == Kind::Evtx { MAX_LOG } else { MAX_HIVE };
+        let limit = match kind {
+            Kind::Evtx => MAX_LOG,
+            Kind::Task => MAX_TASK,
+            _ => MAX_HIVE,
+        };
         let mut src = Source { file: i as u32, path: f.e.path.clone(), deleted: f.e.deleted, kind: kind_name(kind).into(), ..Default::default() };
         let data = if f.e.size > limit {
             Err(anyhow::anyhow!("{} bytes; larger than the {} byte limit", f.e.size, limit))
@@ -517,6 +581,10 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
                 wlan.insert(f.e.name.trim_end_matches(".xml").trim_end_matches(".XML").to_ascii_uppercase(), name);
                 Ok(())
             }
+            Kind::Task => {
+                task_files.push((i, task::parse_xml(&d)?));
+                Ok(())
+            }
         });
         if let Err(e) = res {
             src.error = Some(format!("{:#}", e));
@@ -551,6 +619,10 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
         }
     }
     link_bags(&mut w, files);
+    let software = hives.iter().find(|(k, _, _)| *k == Kind::Software).map(|(_, _, h)| h);
+    if software.is_some() || !task_files.is_empty() {
+        scheduled_tasks(&mut w, software, task_files, files);
+    }
     if let Some((i, d)) = srum_db {
         let mut profiles: HashMap<u32, String> = HashMap::new();
         for (_, _, h) in hives.iter().filter(|(k, _, _)| *k == Kind::Software) {
@@ -729,6 +801,14 @@ fn srum(w: &mut WindowsArtifacts, d: &[u8], file: usize, deleted: bool, profiles
     w.srum = Some(s);
 }
 
+/// The TaskCache reader on a raw hive, for the fuzzer.
+pub fn fuzz_tasks(d: &[u8]) {
+    if let Ok(h) = Hive::parse(d.to_vec()) {
+        let mut w = WindowsArtifacts::default();
+        scheduled_tasks(&mut w, Some(&h), vec![], &[]);
+    }
+}
+
 /// The SRUM reader on raw bytes, for the fuzzer.
 pub fn fuzz_srum(d: &[u8]) {
     let mut w = WindowsArtifacts::default();
@@ -894,6 +974,7 @@ fn kind_name(k: Kind) -> &'static str {
         Kind::UsrClass => "UsrClass.dat",
         Kind::Srum => "SRUM database",
         Kind::WlanProfile => "Wi-Fi profile",
+        Kind::Task => "Scheduled task",
         Kind::Amcache => "Amcache.hve",
         Kind::Evtx => "Event log",
         Kind::Prefetch => "Prefetch",
@@ -1203,6 +1284,169 @@ fn software_hive(w: &mut WindowsArtifacts, h: &Hive) {
     }
     for path in ["Microsoft\\Windows\\CurrentVersion\\Run", "Microsoft\\Windows\\CurrentVersion\\RunOnce", "WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run", "WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\RunOnce"] {
         run_key(w, h.open(path), &format!("SOFTWARE\\{}", path), "");
+    }
+}
+
+const TASK_CACHE: &str = "Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache";
+
+/// Joins task files with TaskCache. A task the Task Scheduler knows has a
+/// key under TaskCache\Tree (folders as subkeys) with its id, and the
+/// same id under TaskCache\Tasks holds its path, a binary copy of its
+/// actions and DynamicInfo (created, last run).
+fn scheduled_tasks(w: &mut WindowsArtifacts, sw: Option<&Hive>, defs: Vec<(usize, task::Task)>, files: &[FileRow]) {
+    // Task files by path; live copies came first.
+    let mut by_path: Vec<(String, usize, task::Task)> = vec![];
+    for (i, t) in defs {
+        let p = &files[i].e.path;
+        let rel = p.get("/Windows/System32/Tasks".len()..).unwrap_or("").replace('/', "\\");
+        if rel.is_empty() || by_path.iter().any(|(q, _, _)| q.eq_ignore_ascii_case(&rel)) {
+            continue;
+        }
+        by_path.push((rel, i, t));
+    }
+    let mut out: Vec<ScheduledTask> = vec![];
+    if let Some(cache) = sw.and_then(|h| h.open(TASK_CACHE)) {
+        let tasks = cache.subkey("Tasks");
+        // (path, id, SD present, Tree key last written)
+        let mut tree: Vec<(String, String, bool, u64)> = vec![];
+        if let Some(t) = cache.subkey("Tree") {
+            tree_walk(&t, "", 0, &mut tree);
+        }
+        // Windows 7 writes no SD values at all; only where the others have
+        // one does a missing SD mean a hidden task.
+        let uses_sd = tree.iter().any(|t| t.2);
+        for t in &mut tree {
+            t.2 = t.2 || !uses_sd;
+        }
+        let mut seen: Vec<String> = vec![];
+        let add = |path: String, id: &str, sd: Option<bool>, written: u64, out: &mut Vec<ScheduledTask>| {
+            let k = tasks.as_ref().and_then(|t| t.subkey(id));
+            let mut x = ScheduledTask { path, registered: true, sd_removed: sd == Some(false), tree_written: written, enabled: true, ..Default::default() };
+            if let Some(k) = &k {
+                x.author = k.string("Author").unwrap_or_default();
+                x.description = k.string("Description").unwrap_or_default();
+                x.date = k.string("Date").unwrap_or_default();
+                if let Some(d) = k.value("DynamicInfo").and_then(|v| task::dynamic_info(&v.data)) {
+                    x.created = d.created;
+                    x.last_run = d.last_run;
+                    x.last_success = d.last_success;
+                    x.last_result = d.last_error;
+                }
+                if let Some(v) = k.value("Actions") {
+                    let (ctx, acts) = task::actions_blob(&v.data);
+                    x.actions = acts;
+                    if ctx.starts_with("S-1-") || ctx.contains('\\') {
+                        x.user = ctx;
+                    }
+                }
+            }
+            if sd.is_none() {
+                x.notes.push("in TaskCache\\Tasks but not in the task tree".into());
+            }
+            out.push(x);
+        };
+        for (path, id, sd, written) in tree {
+            seen.push(id.to_ascii_lowercase());
+            add(path, &id, Some(sd), written, &mut out);
+        }
+        if let Some(t) = &tasks {
+            for k in t.subkeys().into_iter().take(MAX_TASKS) {
+                if seen.contains(&k.name().to_ascii_lowercase()) {
+                    continue;
+                }
+                let Some(path) = k.string("Path") else { continue };
+                add(path, &k.name(), None, 0, &mut out);
+            }
+        }
+    }
+    let have_cache = !out.is_empty();
+    for x in &mut out {
+        let Some(at) = by_path.iter().position(|(p, _, _)| p.eq_ignore_ascii_case(&x.path)) else {
+            x.notes.push("no task file: it is registered, but Windows\\System32\\Tasks has no file for it".into());
+            continue;
+        };
+        let (_, i, t) = by_path.swap_remove(at);
+        merge_task(x, i, t, files);
+    }
+    for (path, i, t) in by_path {
+        let mut x = ScheduledTask { path, ..Default::default() };
+        merge_task(&mut x, i, t, files);
+        if have_cache {
+            x.notes.push(if x.file_deleted { "deleted task file; the task is not registered any more" } else { "not registered in TaskCache: the file may have been copied in, or the SOFTWARE hive is older than the file" }.into());
+        }
+        out.push(x);
+    }
+    for x in &mut out {
+        x.microsoft = x.path.to_ascii_lowercase().starts_with("\\microsoft\\");
+        x.unusual = x.actions.iter().any(|a| a.kind == "Exec" && unusual_path(&a.command) || unusual_path(&a.arguments) && a.arguments.contains('\\'));
+        if x.sd_removed {
+            x.notes.insert(0, "hidden: its TaskCache\\Tree key has no SD value, so schtasks and the Task Scheduler do not list it, yet it still runs (the Tarrask technique)".into());
+        }
+        if x.file_deleted {
+            x.notes.push("task file deleted".into());
+        }
+        if !x.microsoft || x.unusual || x.sd_removed {
+            w.autoruns.push(Autorun {
+                kind: "Scheduled task".into(),
+                location: format!("Task {}", x.path),
+                name: x.path.rsplit('\\').next().unwrap_or("").to_string(),
+                command: x.command(),
+                user: x.user.clone(),
+                written: if x.created > 0 { x.created } else { x.tree_written },
+                start: if x.triggers.is_empty() { "on demand or as registered".into() } else { x.triggers.join("; ") },
+                unusual: x.unusual || x.sd_removed,
+            });
+        }
+    }
+    // Hidden first, then unusual ones, then the rest; Windows' own last.
+    out.sort_by(|a, b| b.sd_removed.cmp(&a.sd_removed).then(b.unusual.cmp(&a.unusual)).then(a.microsoft.cmp(&b.microsoft)).then(b.created.cmp(&a.created)).then(a.path.cmp(&b.path)));
+    w.tasks = out;
+}
+
+fn merge_task(x: &mut ScheduledTask, i: usize, t: task::Task, files: &[FileRow]) {
+    x.file = Some(i as u32);
+    x.file_deleted = files[i].e.deleted;
+    let or = |a: &mut String, b: String| {
+        if !b.is_empty() {
+            *a = b;
+        }
+    };
+    or(&mut x.author, t.author);
+    or(&mut x.description, t.description);
+    or(&mut x.date, t.date);
+    or(&mut x.user, t.user);
+    x.run_level = t.run_level;
+    x.hidden = t.hidden;
+    x.enabled = t.enabled;
+    x.triggers = t.triggers;
+    if !t.actions.is_empty() {
+        x.actions = t.actions;
+    }
+}
+
+fn tree_walk(k: &Key<'_>, prefix: &str, depth: usize, out: &mut Vec<(String, String, bool, u64)>) {
+    if depth > 16 || out.len() >= MAX_TASKS {
+        return;
+    }
+    for s in k.subkeys() {
+        let path = format!("{}\\{}", prefix, s.name());
+        if let Some(id) = s.string("Id") {
+            out.push((path.clone(), id, s.value("SD").is_some(), s.last_written()));
+        }
+        tree_walk(&s, &path, depth + 1, out);
+    }
+}
+
+/// Names of the service accounts tasks usually run as.
+fn well_known_sid(sid: &str) -> Option<&'static str> {
+    match sid {
+        "S-1-5-18" => Some("SYSTEM"),
+        "S-1-5-19" => Some("LOCAL SERVICE"),
+        "S-1-5-20" => Some("NETWORK SERVICE"),
+        "S-1-5-32-544" => Some("Administrators"),
+        "S-1-5-32-545" => Some("Users"),
+        "S-1-5-4" => Some("INTERACTIVE"),
+        _ => None,
     }
 }
 
@@ -1687,6 +1931,20 @@ fn finish(w: &mut WindowsArtifacts) {
             x.user = n.clone();
         }
     }
+    for x in w.tasks.iter_mut().filter(|x| x.user.starts_with("S-1-")) {
+        x.user = match (names.iter().find(|(s, _)| *s == x.user), well_known_sid(&x.user)) {
+            (Some((_, n)), _) => n.clone(),
+            (None, Some(n)) => n.to_string(),
+            _ => continue,
+        };
+    }
+    for a in w.autoruns.iter_mut().filter(|a| a.user.starts_with("S-1-")) {
+        a.user = match (names.iter().find(|(s, _)| *s == a.user), well_known_sid(&a.user)) {
+            (Some((_, n)), _) => n.clone(),
+            (None, Some(n)) => n.to_string(),
+            _ => continue,
+        };
+    }
     for e in &mut w.events {
         for (sid, name) in &names {
             if e.summary.contains(sid.as_str()) {
@@ -1757,6 +2015,15 @@ fn finish(w: &mut WindowsArtifacts) {
             t.push(WinTime { t: c.start, kind: "NET".into(), what: if c.profile.is_empty() { c.interface.clone() } else { c.profile.clone() }, detail: format!("connected for {} min ({}, SRUM)", c.seconds / 60, c.interface) });
         }
     }
+    for k in &w.tasks {
+        // Windows' own tasks run all the time; only the others' runs are events.
+        if k.created > 0 {
+            t.push(WinTime { t: k.created, kind: "INST".into(), what: k.path.clone(), detail: format!("scheduled task registered: {}", k.command()) });
+        }
+        if k.last_run > 0 && !k.microsoft {
+            t.push(WinTime { t: k.last_run, kind: "EXEC".into(), what: k.path.clone(), detail: format!("scheduled task last ran: {}", k.command()) });
+        }
+    }
     if let Some(j) = &w.journal {
         // Created, deleted and renamed files; plain writes stay in the
         // journal table.
@@ -1794,6 +2061,14 @@ pub fn impact(w: &WindowsArtifacts) -> Vec<String> {
     if !rdp.is_empty() {
         let ips: std::collections::BTreeSet<&str> = rdp.iter().map(|e| e.ip.as_str()).filter(|i| !i.is_empty()).collect();
         out.push(format!("{} remote desktop event(s){}.", rdp.len(), if ips.is_empty() { String::new() } else { format!(" from {}", ips.into_iter().collect::<Vec<_>>().join(", ")) }));
+    }
+    let hidden: Vec<&ScheduledTask> = w.tasks.iter().filter(|k| k.sd_removed).collect();
+    if !hidden.is_empty() {
+        out.push(format!("{} scheduled task(s) hidden by removing their security descriptor (Tarrask technique): {}.", hidden.len(), hidden.iter().map(|k| format!("{} ({})", k.path, k.command())).collect::<Vec<_>>().join(", ")));
+    }
+    let odd: Vec<&ScheduledTask> = w.tasks.iter().filter(|k| k.unusual && !k.sd_removed).collect();
+    if !odd.is_empty() {
+        out.push(format!("{} scheduled task(s) run programs from unusual places: {}.", odd.len(), odd.iter().take(5).map(|k| format!("{} ({})", k.path, k.command())).collect::<Vec<_>>().join(", ")));
     }
     let failed = w.events.iter().filter(|e| e.event_id == 4625).count();
     if failed > 0 {

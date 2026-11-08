@@ -61,7 +61,8 @@ checked against public test images with known answers where they exist
 - [x] SRUM (network and resource use per program, connections) with an ESE database reader (1.2.8)
 - [x] BAM/DAM (1.2.8)
 - [ ] SRUM energy, push notification and app timeline tables; other ESE databases (Windows Search, WebCache)
-- [ ] Scheduled tasks, deleted registry keys and transaction logs
+- [x] Scheduled tasks (task files and TaskCache, hidden tasks flagged) (unreleased)
+- [ ] Deleted registry keys and transaction logs
 - [ ] Legacy .evt event logs
 
 ### Content

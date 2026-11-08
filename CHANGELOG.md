@@ -5,6 +5,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Scheduled tasks (new module `kokino_artifacts::task`): every task file under `Windows\System32\Tasks` (author, registration date, account and privilege level, triggers in plain words, what it runs, hidden and disabled flags) joined with the registry's TaskCache (SOFTWARE), which adds when each task was created and last ran, the result of its last run, and a binary copy of its actions for tasks whose file is gone. Shown in a new "Scheduled tasks" card in the System summary (Windows' own tasks behind a toggle), with tasks that are not Windows' own, or run from unusual places, in the autostart list; task registrations and last runs on the Timeline; a table in the case report and lines in the impact summary. Tasks registered without a task file, and task files no longer registered, are marked. Checked on a real Windows 7 SOFTWARE hive (83 tasks, VALIDATION.md).
+- Anti-forensics indicator `task_hidden_sd` (25 in total): a task whose TaskCache\Tree key lost its SD value, which hides it from schtasks and the Task Scheduler while it keeps running (the Tarrask technique). Only where the hive's other tasks have an SD value: Windows 7 writes none.
+- Fuzz target `task` (task XML, the Actions and DynamicInfo blobs, TaskCache in a hive): 19,733,957 inputs, no problems found. Totals: 339,234,095 inputs over 26 targets (SECURITY.md).
+- Test image `disk-win.img` now holds four scheduled tasks: one of Windows' own, one running from C:\Users\Public, one hidden Tarrask-style and one registered without a task file.
+
+### Changed
+- Analysis schema 7. NTFS evidence analyzed by an earlier version is offered a re-analysis in the System summary, which names what is missing.
+- The carving sample `memo.doc` moved from the test volume's free clusters to the unpartitioned space after it, to make room for the task files and the larger SOFTWARE hive.
+
 ## [1.2.8] - 2026-11-05
 
 Deeper NTFS and Windows: the change journal, names of deleted files from folder index slack and $LogFile, ShellBags, BAM/DAM and SRUM with Kokino's own ESE database reader.

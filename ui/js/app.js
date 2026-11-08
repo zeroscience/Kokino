@@ -1685,6 +1685,7 @@ async function systemTab(ctx) {
       ];
     },
     software: () => [
+      tasksCard(),
       card("Autostart entries", table(["Name", "Command", "Kind", "Where", "Changed"],
         w.autoruns.map((a) => h("tr", { class: a.unusual ? "flagged" : null }, h("td", h("b", a.name), a.unusual ? h("span.pill.warn", { style: { marginLeft: "6px" }, title: "Runs from a user-writable or unusual location" }, "unusual location") : null),
           h("td.nm.mono", a.command), h("td", a.kind, a.user ? h("div.muted", a.user) : null), h("td.muted", a.location), h("td.mono", t16(a.written)))))),
@@ -1704,6 +1705,30 @@ async function systemTab(ctx) {
       ["Journal created", t16(j.created)], ["Size", `${bytes(j.size)} (${bytes(j.stored)} stored; older records aged out)`], ["Maximum size", j.max ? bytes(j.max.max_size) : ""], ["File", j.path]]),
       j.error ? h("p.bad-text", j.error) : null);
   }
+  function tasksCard() {
+    const all = w.tasks || [];
+    if (!all.length) return card("Scheduled tasks", h("div.card.empty", "No scheduled tasks found (task files in Windows\\System32\\Tasks or TaskCache in the SOFTWARE hive)."));
+    const box = h("div");
+    const ms = all.filter((k) => k.microsoft && !k.unusual && !k.sd_removed).length;
+    let showMs = false;
+    const pill = (cls, text, title) => h(cls ? `span.pill.${cls}` : "span.pill", { style: { marginLeft: "6px" }, title }, text);
+    const fill = () => box.replaceChildren(table(["Task", "Runs", "Triggers", "Account", "Created", "Last run"],
+      all.filter((k) => showMs || !k.microsoft || k.unusual || k.sd_removed).map((k) => h("tr", { class: k.sd_removed || k.unusual ? "flagged" : k.file_deleted || k.file == null ? "deleted" : null, onclick: () => open(k.file) },
+        h("td.nm", h("b", k.path),
+          k.sd_removed ? pill("bad", "hidden (no SD)", "Its TaskCache\\Tree key lost the SD value: the Task Scheduler does not list it, but it still runs") : null,
+          k.unusual ? pill("warn", "unusual location", "Runs a program from a user-writable or unusual location") : null,
+          k.hidden ? pill("", "marked hidden") : null, !k.enabled ? pill("", "disabled") : null,
+          k.file_deleted ? pill("bad", "file deleted") : k.file == null ? pill("bad", "no task file") : null,
+          k.author ? h("div.muted", `by ${k.author}${k.date ? `, ${k.date}` : ""}`) : null,
+          k.notes.map((n) => h("div.muted", { style: { fontSize: "12px" } }, n))),
+        h("td.mono", k.actions.map((a) => h("div", a.kind === "Exec" ? `${a.command}${a.arguments ? " " + a.arguments : ""}` : a.kind === "COM handler" ? `COM handler ${a.clsid}` : a.kind))),
+        h("td", k.triggers.map((t) => h("div", t))), h("td", k.user, k.run_level === "HighestAvailable" ? h("div.muted", "highest privileges") : null),
+        h("td.mono", t16(k.created)), h("td.mono", t16(k.last_run), k.last_run && k.last_result ? h("div.bad-text", `result 0x${(k.last_result >>> 0).toString(16).toUpperCase()}`) : null)))));
+    fill();
+    const toggle = h("label", { style: { display: "flex", gap: "6px", alignItems: "center", fontSize: "12.5px" } },
+      h("input", { type: "checkbox", onchange: (e) => { showMs = e.target.checked; fill(); } }), `Show Windows' own tasks (${num(ms)})`);
+    return card("Scheduled tasks", h("p.muted", { style: { fontSize: "12.5px", margin: 0 } }, "From the task files (Windows\\System32\\Tasks) and the registry's TaskCache, which also records when each task was created and last ran (UTC). Attackers hide tasks by removing the SD value of their TaskCache\\Tree key (Tarrask), or delete the task file and leave the registration."), toggle, box);
+  }
   function usersTable() {
     return table(["Account", "RID", "Created", "Last logon", "Logons", "Password set", "Profile"],
       w.users.map((u) => h("tr", h("td", h("b", u.name), u.disabled ? h("span.pill", { style: { marginLeft: "6px" } }, "disabled") : null, h("div.muted.mono", u.sid)), h("td.num", u.rid ?? ""),
@@ -1713,8 +1738,10 @@ async function systemTab(ctx) {
   drawSeg();
   draw();
   // Analyzed before 1.2.8: the newer Windows artifacts are missing, not absent.
-  const stale = isNtfs(r.fs) && r.schema < 6
-    ? h("div.card.flat.stack", h("p", { style: { margin: 0, color: "var(--warn)" } }, "This evidence was analyzed by an earlier Kokino version, before the change journal, ShellBags, BAM/DAM, SRUM and the names of deleted files from folder indexes and $LogFile were read. Those parts are empty until it is analyzed again."),
+  const stale = isNtfs(r.fs) && r.schema < 7
+    ? h("div.card.flat.stack", h("p", { style: { margin: 0, color: "var(--warn)" } }, r.schema < 6
+      ? "This evidence was analyzed by an earlier Kokino version, before scheduled tasks, the change journal, ShellBags, BAM/DAM, SRUM and the names of deleted files from folder indexes and $LogFile were read. Those parts are empty until it is analyzed again."
+      : "This evidence was analyzed by an earlier Kokino version, before scheduled tasks were read. They are missing until it is analyzed again."),
       canWrite() ? h("div", h("button.primary", { onclick: () => reingest(ctx.cid, ctx.eid, false) }, "Re-analyze now")) : h("p.muted", { style: { margin: 0 } }, "Ask an examiner on this case to re-analyze it."))
     : null;
   render(h("div.stack", intro, stale, seg, body));

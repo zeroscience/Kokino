@@ -35,7 +35,8 @@ use stats::Stats;
 /// 5: ext2/3/4 volumes, `FsEntry::unix` and `FsAnalysis::linux`.
 /// 6: NTFS names without an MFT record (`FsEntry::name_only`), the change
 ///    journal, ShellBags, BAM/DAM and SRUM.
-pub const SCHEMA_VERSION: u32 = 6;
+/// 7: scheduled tasks (`WindowsArtifacts::tasks`).
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// Bytes read from the start of every file for signature and entropy.
 const HEAD: usize = 8 * 1024;
@@ -447,6 +448,36 @@ mod tests {
         assert_eq!(w.timeline.iter().filter(|t| t.kind == "NET" && t.detail.contains("(SRUM)") && t.what.ends_with("rclone.exe")).count(), 2);
         assert!(fs.stats.impact.iter().any(|l| l.starts_with("SRUM covers") && l.contains("rclone.exe (2048 MiB)")), "{:?}", fs.stats.impact);
         assert!(w.sources.iter().any(|x| x.kind == "Wi-Fi profile" && x.error.is_none()));
+
+        // Scheduled tasks (fixture_windows.py TASKS).
+        assert_eq!(w.tasks.len(), 4, "{:?}", w.tasks.iter().map(|k| &k.path).collect::<Vec<_>>());
+        let task = |p: &str| w.tasks.iter().find(|k| k.path == p).unwrap_or_else(|| panic!("task {} missing", p));
+        let up = task(r"\Updater Check");
+        assert_eq!(up.command(), r"C:\Users\Public\updsvc.exe -silent");
+        assert_eq!((up.user.as_str(), up.author.as_str(), up.run_level.as_str()), ("alice", r"LAB-PC\alice", "HighestAvailable"));
+        assert_eq!(up.triggers, vec![r"at logon of LAB-PC\alice".to_string(), "once at 2026-10-21T04:20:00, repeated every 5 min".into()]);
+        assert_eq!(kokino_core::time::filetime_to_iso(up.created), "2026-10-21T02:16:40.0000000Z");
+        assert_eq!(kokino_core::time::filetime_to_iso(up.last_run), "2026-10-21T09:00:05.0000000Z");
+        assert!(up.registered && up.unusual && !up.sd_removed && !up.microsoft && up.file.is_some() && up.notes.is_empty(), "{:?}", up);
+        let sync = task(r"\Microsoft\Windows\WinUpdate\Sync");
+        assert_eq!(w.tasks[0].path, sync.path, "hidden tasks come first");
+        assert!(sync.sd_removed && sync.microsoft && sync.unusual && sync.notes[0].contains("Tarrask"), "{:?}", sync);
+        assert_eq!((sync.user.as_str(), sync.command().as_str()), ("SYSTEM", r"C:\ProgramData\winupd\svch.exe"));
+        assert_eq!(sync.triggers, vec!["at startup".to_string(), "daily from 2026-10-21T04:00:00".into()]);
+        let gone = task(r"\OneDrive Cleanup");
+        assert!(gone.file.is_none() && gone.registered && gone.notes.iter().any(|n| n.starts_with("no task file")), "{:?}", gone);
+        assert_eq!(gone.command(), r"C:\Users\alice\AppData\Local\Temp\clean.cmd");
+        assert_eq!(gone.user, "alice"); // the Actions blob's context, a SID
+        let defrag = task(r"\Microsoft\Windows\Defrag\ScheduledDefrag");
+        assert!(defrag.microsoft && !defrag.unusual && !defrag.sd_removed && defrag.notes.is_empty(), "{:?}", defrag);
+        assert_eq!(defrag.triggers, vec!["weekly from 2025-01-01T01:00:00".to_string()]);
+        // Windows' own task stays out of the autoruns; the other three are in.
+        let tasks_in_autoruns: Vec<&str> = w.autoruns.iter().filter(|a| a.kind == "Scheduled task").map(|a| a.location.as_str()).collect();
+        assert_eq!(tasks_in_autoruns.len(), 3, "{:?}", tasks_in_autoruns);
+        assert!(!tasks_in_autoruns.iter().any(|l| l.contains("Defrag")));
+        assert!(w.timeline.iter().any(|t| t.kind == "EXEC" && t.what == r"\Updater Check" && t.detail.starts_with("scheduled task last ran")));
+        assert!(!w.timeline.iter().any(|t| t.kind == "EXEC" && t.what.contains("Defrag")));
+        assert!(fs.stats.impact.iter().any(|l| l.contains("Tarrask") && l.contains("WinUpdate")), "{:?}", fs.stats.impact);
 
         // Change journal planted by make_win_fixture.py (journal()).
         let j = w.journal.as_ref().expect("change journal");

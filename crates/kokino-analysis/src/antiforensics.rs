@@ -79,6 +79,15 @@ const RULES: &[Rule] = &[
         caveat: "Log rotation leaves a fresh, empty file until the next entry is written; check the file's modification time against the last rotation.",
     },
     Rule {
+        id: "task_hidden_sd",
+        title: "Scheduled task hidden from the Task Scheduler",
+        category: "Persistence",
+        weight: 0.7,
+        k: 1.0,
+        explanation: "The task's key under TaskCache\\Tree has no SD (security descriptor) value. Windows still runs the task, but schtasks, PowerShell and the Task Scheduler window no longer list it. Removing the value takes SYSTEM rights and has no legitimate use; the Tarrask malware (HAFNIUM, 2022) hid its persistence this way.",
+        caveat: "A damaged or partly restored SOFTWARE hive can also lose values. Check the task's command, its task file and when the Tree key was last written.",
+    },
+    Rule {
         id: "ld_preload",
         title: "/etc/ld.so.preload loads a library into every program",
         category: "Persistence",
@@ -401,6 +410,13 @@ pub fn evaluate(files: &mut [FileRow], now: u64, web: &WebActivity, win: &Window
             }
         }
     }
+    for t in win.tasks.iter().filter(|t| t.sd_removed) {
+        // The task file when there is one, else the SOFTWARE hive.
+        let at = t.file.map(|f| f as usize).or_else(|| by_path.get("/windows/system32/config/software").copied());
+        if let Some(i) = at {
+            hits.entry("task_hidden_sd").or_default().push(i);
+        }
+    }
     if let Some(j) = &win.journal {
         let mut wiped: Vec<u64> = j.changes.iter().filter(|c| c.c.reasons & kokino_artifacts::usn::RENAME_NEW_NAME != 0 && sdelete_like(&c.c.name)).map(|c| c.c.record).collect();
         wiped.sort();
@@ -586,5 +602,18 @@ mod tests {
         let ids: Vec<(&str, u64)> = hit.iter().map(|i| (i.id.as_str(), i.count)).collect();
         assert!(ids.contains(&("usn_journal_recreated", 1)) && ids.contains(&("usn_wipe_rename", 1)), "{:?}", ids);
         assert!(files[2].flags.iter().any(|f| f == "usn_journal_recreated"));
+    }
+
+    #[test]
+    fn hidden_task_rule() {
+        let mut files = vec![row(0, "/$MFT", false, 0, None), row(40, "/Windows/System32/config/SOFTWARE", false, 0, None)];
+        let mut win = WindowsArtifacts::default();
+        win.tasks.push(crate::windows::ScheduledTask { path: "\\Sync".into(), sd_removed: false, ..Default::default() });
+        let none = evaluate(&mut files, 0, &WebActivity::default(), &win, &LinuxArtifacts::default(), false);
+        assert!(!none.iter().any(|i| i.id == "task_hidden_sd"));
+        win.tasks[0].sd_removed = true;
+        let hit = evaluate(&mut files, 0, &WebActivity::default(), &win, &LinuxArtifacts::default(), false);
+        assert!(hit.iter().any(|i| i.id == "task_hidden_sd" && i.count == 1), "{:?}", hit.iter().map(|i| &i.id).collect::<Vec<_>>());
+        assert!(files[1].flags.iter().any(|f| f == "task_hidden_sd"));
     }
 }

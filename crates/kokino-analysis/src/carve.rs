@@ -951,7 +951,6 @@ pub(crate) mod tests {
         let got: Vec<(&str, u64, bool)> = r.files.iter().map(|f| (f.kind.as_str(), f.len, f.complete)).collect();
         let want = [
             ("png", 720, true),
-            ("doc", 8192, true),
             ("sqlite", 2048, true),
             ("jpeg", 237, true),
             ("docx", 346, true),
@@ -959,6 +958,7 @@ pub(crate) mod tests {
             ("gif", 43, true),
             ("bmp", 198, true),
             ("pdf", 460, true),
+            ("doc", 8192, true),
             ("exe", 2048, true),
             ("gzip", 76, true),
             ("7z", 117, true),
@@ -972,7 +972,7 @@ pub(crate) mod tests {
         let evtx = r.files.iter().find(|f| f.kind == "evtx-chunk").unwrap();
         assert!(evtx.detail.starts_with("14 records") && evtx.detail.ends_with("Security"));
         assert!(r.files.iter().all(|f| f.offset % 512 == 0 && f.md5.len() == 32 && f.sha256.len() == 64 && !f.beyond_region));
-        assert_eq!(r.files.iter().filter(|f| f.region == "Outside partitions").count(), 9);
+        assert_eq!(r.files.iter().filter(|f| f.region == "Outside partitions").count(), 10);
         // The hash is of exactly the carved bytes.
         let mut b = vec![0u8; png.len as usize];
         read_at(&mut ev.reader().unwrap(), png.offset, &mut b).unwrap();

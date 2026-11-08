@@ -39,6 +39,7 @@ Every indicator is a fixed, documented rule in
 | `shell_history_cleared` | Log tampering | 0.45 | 1 | a user's .bash_history is empty or a symbolic link to /dev/null |
 | `linux_log_emptied` | Log tampering | 0.50 | 1 | wtmp empty, or auth.log / secure empty while older rotations hold entries |
 | `ld_preload` | Persistence | 0.60 | 1 | /etc/ld.so.preload lists a library (user-mode rootkit technique) |
+| `task_hidden_sd` | Persistence | 0.70 | 1 | a scheduled task's TaskCache\Tree key has no SD value while the hive's other tasks have one (hidden from schtasks and the Task Scheduler; the Tarrask technique) |
 | `tool_execution_record` | Tool presence | 0.50 | 1 | UserAssist, Amcache or a 4688 process-creation event shows a known wiping / cleaning tool started (independent of Prefetch) |
 
 ## Combination
@@ -62,8 +63,9 @@ NTFS volume and wraps it in an MBR disk. The test
 `finds_planted_antiforensics` asserts that each rule fires on exactly the
 planted file. New rules must add a planted case there. The Windows artifact
 rules are planted in `scripts/make_win_fixture.py` (an SDelete rename chain
-in the change journal, tested by `finds_windows_artifacts`), and the
-journal rules are also tested on built-up data (`journal_rules`).
+in the change journal and a hidden scheduled task, tested by
+`finds_windows_artifacts`), and the journal and task rules are also tested
+on built-up data (`journal_rules`, `hidden_task_rule`).
 
 ## Known limits
 

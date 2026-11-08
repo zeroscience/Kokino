@@ -298,10 +298,10 @@ const WIKI = [
         h("span", h("b", "USB and networks:"), " USB storage devices with serial number, drive letter and first, last and removal times; wireless and wired networks with first and last connection and gateway MAC; network interfaces."),
         h("span", h("b", "Accounts and logons:"), " local accounts (SAM) with last logon and logon count, and logons per account from the event logs, with failed attempts, remote desktop sessions and source IP addresses."),
         h("span", h("b", "Events:"), " notable events in plain language: log clearing (1102, 104), logons, account and group changes, services and scheduled tasks, remote desktop, PowerShell script blocks, Defender detections, boots and shutdowns. Click one for every field."),
-        h("span", h("b", "Software and autostart:"), " installed programs, Run keys and services, with entries running from user-writable locations marked."),
+        h("span", h("b", "Software and autostart:"), " installed programs, Run keys and services, with entries running from user-writable locations marked; and scheduled tasks, from the task files in Windows\\System32\\Tasks and the registry's TaskCache, which also records when each task was created and last ran. Windows' own tasks are behind a toggle. A task whose TaskCache\\Tree key lost its SD value is flagged: it still runs, but schtasks and the Task Scheduler do not list it (the Tarrask technique). A task registered without a task file, or a task file no longer registered, is marked too."),
       ),
-      p("The same records join the Timeline (filter Windows) and feed anti-forensics indicators: an event log cleared, an anti-forensic tool in execution records, files renamed AAAA.AAA through ZZZZ.ZZZ in the change journal (SDelete's pattern; the journal keeps their original names), and a change journal created long after Windows was installed (deleted and recreated)."),
-      p("Not yet read: registry transaction logs (.LOG1/.LOG2; a hive that was not cleanly saved is marked), deleted registry keys, SRUM's energy and app timeline tables, scheduled task files and Windows 7 ShimCache."),
+      p("The same records join the Timeline (filter Windows) and feed anti-forensics indicators: an event log cleared, an anti-forensic tool in execution records, files renamed AAAA.AAA through ZZZZ.ZZZ in the change journal (SDelete's pattern; the journal keeps their original names), a change journal created long after Windows was installed (deleted and recreated), and a scheduled task hidden from the Task Scheduler."),
+      p("Not yet read: registry transaction logs (.LOG1/.LOG2; a hive that was not cleanly saved is marked), deleted registry keys, SRUM's energy and app timeline tables, legacy .job task files (Windows XP) and Windows 7 ShimCache."),
     ],
   },
   {
@@ -523,7 +523,7 @@ const WIKI = [
     body: [
       p("Evidence can be made to attack the tool that reads it: a disk image, registry hive or picture crafted to crash Kokino, hang an ingest, or use up the examiner's memory. Kokino is written in Rust with ", code("unsafe"), " code forbidden in every crate, and every parser that reads evidence has been fuzzed."),
       h("h3", "Fuzzing"),
-      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks, optical media, Mac disks, NTFS folder indexes and $LogFile, the change journal, ShellBags and ESE databases (SRUM) ran ", h("b", "319,500,138 inputs"), " and found ", h("b", "28 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
+      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks, optical media, Mac disks, NTFS folder indexes and $LogFile, the change journal, ShellBags, ESE databases (SRUM) and scheduled tasks ran ", h("b", "339,234,095 inputs"), " and found ", h("b", "28 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
       h("div.scroll", h("table.tbl",
         h("thead", h("tr", h("th", "Target"), h("th", "Covers"), h("th", "Inputs"), h("th", "Found"))),
         h("tbody", [
@@ -539,6 +539,7 @@ const WIKI = [
         ["usn", "NTFS change journal records (versions 2 to 4), grouping into changes, $Max", "8,954,455", "none"],
         ["shellbags", "BagMRU trees and every shell item kind", "15,785,595", "none"],
         ["ese", "ESE databases (pages, B+ trees, catalog, records, long values, 7-bit and XPRESS compression) and SRUM, two rounds", "824,539", "none"],
+        ["task", "Scheduled task XML, the TaskCache Actions and DynamicInfo blobs, TaskCache in a hive", "19,733,957", "none"],
         ["ewf", "E01 (EWF) images: sections, chunk tables, zlib chunks, stored hashes", "42,686", "1 (overflow)"],
         ["registry", "Registry hives (SYSTEM, SOFTWARE, SAM, NTUSER.DAT, Amcache): cells, key and value lists, the whole key tree", "23,242,474", "1 (hang)"],
         ["evtx", "Windows event logs: chunks, binary XML templates and substitutions", "3,188,571", "none"],
