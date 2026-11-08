@@ -36,7 +36,8 @@ use stats::Stats;
 /// 6: NTFS names without an MFT record (`FsEntry::name_only`), the change
 ///    journal, ShellBags, BAM/DAM and SRUM.
 /// 7: scheduled tasks (`WindowsArtifacts::tasks`).
-pub const SCHEMA_VERSION: u32 = 7;
+/// 8: Internet Explorer index.dat history, cache and downloads (`WebActivity::cache`).
+pub const SCHEMA_VERSION: u32 = 8;
 
 /// Bytes read from the start of every file for signature and entropy.
 const HEAD: usize = 8 * 1024;
@@ -478,6 +479,46 @@ mod tests {
         assert!(w.timeline.iter().any(|t| t.kind == "EXEC" && t.what == r"\Updater Check" && t.detail.starts_with("scheduled task last ran")));
         assert!(!w.timeline.iter().any(|t| t.kind == "EXEC" && t.what.contains("Defrag")));
         assert!(fs.stats.impact.iter().any(|l| l.contains("Tarrask") && l.contains("WinUpdate")), "{:?}", fs.stats.impact);
+
+        // Internet Explorer index.dat files (fixture_windows.py, ie_files()).
+        let web = &fs.web;
+        let ie: Vec<_> = web.sources.iter().enumerate().filter(|(_, s)| s.engine == Some(kokino_artifacts::browser::Engine::Ie)).collect();
+        let profiles: Vec<&str> = ie.iter().map(|(_, s)| s.profile.as_str()).collect();
+        assert_eq!(profiles, ["History, day 2025-03-10", "History", "Cache", "Downloads"], "{:?}", ie);
+        assert!(ie.iter().all(|(_, s)| s.error.is_none() && s.user == "alice"));
+        let (day, daysrc) = (ie[0].0 as u32, ie[0].1);
+        // The search, the bank page and the deleted upload page; the :Host: entry is not a visit.
+        assert_eq!((daysrc.visits, daysrc.searches, daysrc.recovered), (3, 1, 1));
+        assert!(daysrc.note.contains("UTC+01:00"), "{}", daysrc.note);
+        let iso = |t: u64| kokino_core::time::filetime_to_iso(t);
+        let dv: Vec<_> = web.visits.iter().filter(|v| v.src == day).collect();
+        assert_eq!(iso(dv[0].t), "2025-03-10T09:15:00.0000000Z");
+        assert!(dv.iter().any(|v| v.url == "http://drop.test/upload.html" && v.recovered));
+        assert!(web.searches.iter().any(|s| s.src == day && s.term == "clear ie history" && s.engine == "Bing"));
+        // Main history: the bank page repeats the daily file's visit and is shown once.
+        let (main, mainsrc) = (ie[1].0 as u32, ie[1].1);
+        assert_eq!(mainsrc.visits, 2);
+        assert!(mainsrc.note.contains("1 last visit that is also in a daily"), "{}", mainsrc.note);
+        assert!(web.visits.iter().any(|v| v.src == main && v.url == "file:///C:/Users/alice/Documents/plan.docx"));
+        assert_eq!(web.visits.iter().filter(|v| v.url == "http://bank.test/transfer.html").count(), 1);
+        // Cache: one entry, one LEAK.
+        let cache = ie[2].0 as u32;
+        let ce: Vec<_> = web.cache.iter().filter(|c| c.src == cache).collect();
+        assert_eq!(ce.len(), 2);
+        assert_eq!((ce[0].file.as_str(), ce[0].content_type.as_str(), ce[0].hits), ("QW12ER34\\logo[1].png", "image/png", 3));
+        assert!(ce[1].leak && !ce[1].recovered && ce[1].url == "http://drop.test/upload.js");
+        // Downloads.
+        let dl = web.downloads.iter().find(|d| d.src == ie[3].0 as u32).unwrap();
+        assert_eq!((dl.url.as_str(), dl.target.as_str(), dl.referrer.as_str(), dl.state.as_str(), dl.received), ("http://tools.test/sdelete.zip", "C:\\Users\\alice\\Downloads\\sdelete.zip", "http://www.bing.com/search?q=sdelete", "complete", 4096));
+        let tl = timeline::build(&fs.files, web, w, &[]);
+        assert!(tl.iter().any(|e| e.src == "VISIT" && web.visits[e.idx as usize].url == "http://drop.test/upload.html"));
+        // Cache, downloads and daily files never count as a cleared history; the
+        // search and the SDelete download count as anti-forensic research.
+        let ie_recs: Vec<u64> = ie.iter().map(|(_, s)| s.record).collect();
+        assert!(fs.indicators.iter().filter(|i| i.id == "browser_history_cleared").all(|i| i.records.iter().all(|r| !ie_recs.contains(r))));
+        let afw = fs.indicators.iter().find(|i| i.id == "antiforensic_web").expect("antiforensic_web");
+        assert!(afw.records.contains(&ie[0].1.record) && afw.records.contains(&ie[3].1.record), "{:?}", afw);
+        assert!(fs.stats.impact.iter().any(|l| l.starts_with("Internet Explorer history, day 2025-03-10 of user alice: 3 visits, 1 search") && l.contains("1 deleted entry recovered")), "{:?}", fs.stats.impact);
 
         // Change journal planted by make_win_fixture.py (journal()).
         let j = w.journal.as_ref().expect("change journal");

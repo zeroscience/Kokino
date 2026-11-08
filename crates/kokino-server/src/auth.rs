@@ -562,7 +562,12 @@ mod tests {
         s.end_user("alice", Some(&b));
         assert!(s.touch(&a).is_none());
         assert!(s.touch(&b).is_some());
-        s.map.lock().unwrap().get_mut(&b).unwrap().last -= IDLE_TIMEOUT;
-        assert!(s.touch(&b).is_none());
+        // Instant cannot go back past the system's start: on a machine up for
+        // less than the timeout the expiry cannot be simulated.
+        let back = s.map.lock().unwrap().get(&b).unwrap().last.checked_sub(IDLE_TIMEOUT);
+        if let Some(t) = back {
+            s.map.lock().unwrap().get_mut(&b).unwrap().last = t;
+            assert!(s.touch(&b).is_none());
+        }
     }
 }

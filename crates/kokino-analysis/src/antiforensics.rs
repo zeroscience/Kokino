@@ -429,7 +429,12 @@ pub fn evaluate(files: &mut [FileRow], now: u64, web: &WebActivity, win: &Window
     let by_record: HashMap<u64, usize> = files.iter().enumerate().map(|(i, f)| (f.e.record, i)).collect();
     for (si, s) in web.sources.iter().enumerate() {
         let Some(&i) = by_record.get(&s.record) else { continue };
-        if s.deleted || (s.error.is_none() && s.visits == 0 && s.urls == 0) {
+        // Internet Explorer: only the main history file counts. Cache and
+        // download lists hold no visits, and Windows deletes daily and weekly
+        // files itself as they age.
+        let ie = s.engine == Some(kokino_artifacts::browser::Engine::Ie);
+        let history = !ie || s.profile == "History" || s.profile == "History (protected mode)";
+        if history && (s.deleted || (s.error.is_none() && s.visits == 0 && s.urls == 0)) {
             hits.entry("browser_history_cleared").or_default().push(i);
         }
         let si = si as u32;
@@ -497,7 +502,7 @@ pub fn antiforensic_query(term: &str) -> bool {
         "wipe", "shred", "secure erase", "secure delete", "permanently delete", "delete permanently", "erase hard drive", "erase disk",
         "anti forensic", "anti-forensic", "antiforensic", "timestomp", "clear event log", "delete event log", "clear browser history",
         "delete browser history", "remove traces", "cover tracks", "hidden volume", "sdelete", "bleachbit", "ccleaner", "eraser",
-        "how to delete history", "recover deleted", "undeletable",
+        "how to delete history", "clear ie history", "clear internet history", "delete internet history", "recover deleted", "undeletable",
     ];
     PHRASES.iter().any(|p| t.contains(p))
 }

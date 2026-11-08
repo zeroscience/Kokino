@@ -1075,7 +1075,7 @@ fn web_text(f: &FsAnalysis, src: &str, i: usize) -> (String, String, u64) {
     let w = &f.web;
     let who = |s: u32| w.sources.get(s as usize).map(|x| format!("{} / {} / {}", x.browser, x.user, x.profile)).unwrap_or_default();
     match src {
-        "VISIT" => w.visits.get(i).map(|v| (v.url.clone(), format!("{}: {}{}", who(v.src), v.how, if v.title.is_empty() { String::new() } else { format!(", {}", v.title) }), 0)).unwrap_or_default(),
+        "VISIT" => w.visits.get(i).map(|v| (v.url.clone(), format!("{}: {}{}{}", who(v.src), v.how, if v.recovered { " (deleted entry, recovered)" } else { "" }, if v.title.is_empty() { String::new() } else { format!(", {}", v.title) }), 0)).unwrap_or_default(),
         "DL" => w.downloads.get(i).map(|d| (format!("{} -> {}", d.url, d.target), format!("{}: download {}", who(d.src), d.state), d.received.max(0) as u64)).unwrap_or_default(),
         "SEARCH" => w.searches.get(i).map(|s| (format!("\"{}\"", s.term), format!("{}: {} search ({})", who(s.src), s.engine, s.how), 0)).unwrap_or_default(),
         _ => Default::default(),
@@ -1230,6 +1230,10 @@ async fn web(State(st): St, Path((cid, eid, fi)): Path<(String, String, usize)>,
             let hits: Vec<_> = w.downloads.iter().filter(|d| src_ok(d.src) && (needle.is_empty() || format!("{} {} {}", d.url, d.target, d.referrer).to_lowercase().contains(&needle))).collect();
             (hits.len(), hits.into_iter().skip(off).take(lim).map(|d| { let mut v = json!(d); v["start_iso"] = json!(iso(d.start)); v["end_iso"] = json!(iso(d.end)); v }).collect())
         }
+        "cache" => {
+            let hits: Vec<_> = w.cache.iter().filter(|c| src_ok(c.src) && (needle.is_empty() || format!("{} {} {}", c.url, c.file, c.content_type).to_lowercase().contains(&needle))).collect();
+            (hits.len(), hits.into_iter().skip(off).take(lim).map(|c| { let mut v = json!(c); v["t_iso"] = json!(iso(c.t)); v["modified_iso"] = json!(iso(c.modified)); v }).collect())
+        }
         "searches" => {
             let hits: Vec<_> = w.searches.iter().filter(|s| src_ok(s.src) && (needle.is_empty() || format!("{} {}", s.term, s.url).to_lowercase().contains(&needle))).collect();
             (hits.len(), hits.into_iter().skip(off).take(lim).map(|s| { let mut v = json!(s); v["t_iso"] = json!(iso(s.t)); v }).collect())
@@ -1241,7 +1245,7 @@ async fn web(State(st): St, Path((cid, eid, fi)): Path<(String, String, usize)>,
     };
     let sources: Vec<Value> = w.sources.iter().map(|s| { let mut v = json!(s); v["oldest_iso"] = json!(iso(s.oldest)); v["newest_iso"] = json!(iso(s.newest)); v }).collect();
     Ok(Json(json!({"schema": l.analysis.schema, "sources": sources, "total": total, "offset": off, "items": items,
-        "counts": {"visits": w.visits.len(), "downloads": w.downloads.len(), "searches": w.searches.len()}})))
+        "counts": {"visits": w.visits.len(), "downloads": w.downloads.len(), "searches": w.searches.len(), "cache": w.cache.len()}})))
 }
 
 async fn indicator_files(State(st): St, Path((cid, eid, fi, id)): Path<(String, String, usize, String)>) -> R {
@@ -1714,7 +1718,14 @@ async fn carved_photo(State(st): St, Path((cid, eid, id)): Path<(String, String,
 async fn carved_list(State(st): St, Path((cid, eid)): Path<(String, String)>) -> R {
     let case = st.case(&cid)?;
     case.evidence_by_id(&eid)?;
-    Ok(Json(json!({"result": jobs::load_carved(&case, &eid)})))
+    let mut v = json!(jobs::load_carved(&case, &eid));
+    if let Some(recs) = v.get_mut("records").and_then(|r| r.as_array_mut()) {
+        for r in recs {
+            let t = r["t"].as_u64().unwrap_or(0);
+            r["t_iso"] = json!(if t == 0 { String::new() } else { filetime_to_iso(t) });
+        }
+    }
+    Ok(Json(json!({"result": v})))
 }
 
 async fn carve_start(State(st): St, Extension(me): Me, Path((cid, eid)): Path<(String, String)>) -> R {
@@ -2099,14 +2110,20 @@ fn report_web(h: &mut String, w: &kokino_artifacts::browser::WebActivity) {
     }
     let t = |ft: u64| if ft == 0 { String::new() } else { filetime_to_iso(ft) };
     let who = |s: u32| w.sources.get(s as usize).map(|x| format!("{} ({}/{})", x.browser, x.user, x.profile)).unwrap_or_default();
-    h.push_str("<h3>Web activity</h3><table><tr><th>Browser</th><th>User / profile</th><th>Database</th><th>Visits</th><th>Downloads</th><th>Searches</th><th>Period (UTC)</th><th>Notes</th></tr>");
+    h.push_str("<h3>Web activity</h3><table><tr><th>Browser</th><th>User / profile</th><th>Database</th><th>Visits</th><th>Downloads</th><th>Searches</th><th>Cached files</th><th>Period (UTC)</th><th>Notes</th></tr>");
     for s in &w.sources {
         let mut notes = vec![];
         if s.deleted {
             notes.push("<span class=bad>database file deleted</span>".to_string());
         }
-        if s.error.is_none() && s.visits == 0 && s.urls == 0 {
+        if s.error.is_none() && s.visits == 0 && s.urls == 0 && s.engine != Some(kokino_artifacts::browser::Engine::Ie) {
             notes.push("<span class=bad>history empty</span>".to_string());
+        }
+        if s.recovered > 0 {
+            notes.push(format!("{} deleted entries recovered from inside the file", s.recovered));
+        }
+        if !s.note.is_empty() {
+            notes.push(esc(&s.note));
         }
         if s.wal {
             notes.push("includes uncheckpointed -wal changes".to_string());
@@ -2115,8 +2132,8 @@ fn report_web(h: &mut String, w: &kokino_artifacts::browser::WebActivity) {
             notes.push(format!("<span class=bad>unreadable: {}</span>", esc(e)));
         }
         h.push_str(&format!(
-            "<tr><td>{}</td><td>{} / {}</td><td><code>{}</code> (MFT {})</td><td>{}</td><td>{}</td><td>{}</td><td>{}<br>{}</td><td>{}</td></tr>",
-            esc(&s.browser), esc(&s.user), esc(&s.profile), esc(&s.path), s.record, s.visits, s.downloads, s.searches, t(s.oldest), t(s.newest), notes.join("<br>")
+            "<tr><td>{}</td><td>{} / {}</td><td><code>{}</code> (MFT {})</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}<br>{}</td><td>{}</td></tr>",
+            esc(&s.browser), esc(&s.user), esc(&s.profile), esc(&s.path), s.record, s.visits, s.downloads, s.searches, s.cached, t(s.oldest), t(s.newest), notes.join("<br>")
         ));
     }
     h.push_str("</table>");

@@ -274,12 +274,14 @@ const WIKI = [
   {
     id: "web", title: "Browser history", icon: "globe",
     body: [
-      p("Kokino reads Chrome, Edge, Brave, Opera, Vivaldi and Firefox profiles it finds on any parsed volume, including history still waiting in the -wal file that the browser had not merged yet."),
+      p("Kokino reads Chrome, Edge, Brave, Opera, Vivaldi and Firefox profiles it finds on any parsed volume, including history still waiting in the -wal file that the browser had not merged yet, and Internet Explorer's index.dat files (Internet Explorer 4 to 9: history, cache and downloads)."),
       ul(
         h("span", h("b", "Visits:"), " time, page, how it was reached (typed, link, reload, form...), time on page and visit count."),
         h("span", h("b", "URL table only:"), " pages whose visit rows are gone (expired or deleted selectively); the time shown is the last recorded visit."),
         h("span", h("b", "Downloads:"), " source URL, where it was saved, size, state and the browser's danger warning."),
         h("span", h("b", "Searches:"), " from the browser's own keyword table and from visited search-engine pages."),
+        h("span", h("b", "Internet Explorer:"), " one card per index.dat: the main history (last visit of each page), daily and weekly files (one entry per page per day or week), protected-mode history, the cache (IE cache list: URL, cached file, content type) and the download list. A page in both the main and a daily file is shown once. ", h("i", "Deleted entry"), " marks an entry recovered from free blocks inside index.dat; ", h("i", "LEAK"), " a cache entry that was deleted while its file was in use. Daily files keep each visit also in local time, so the card says what the computer's clock was set to."),
+        h("span", h("b", "Deleted index.dat files:"), " Carve on the Carved files page: whole index.dat files and single history, cache and download records are recovered from free space (list ie-records)."),
       ),
       p("A history with no visits at all, or a deleted history database, raises the ", h("i", "Browser history cleared"), " indicator."),
     ],
@@ -523,7 +525,7 @@ const WIKI = [
     body: [
       p("Evidence can be made to attack the tool that reads it: a disk image, registry hive or picture crafted to crash Kokino, hang an ingest, or use up the examiner's memory. Kokino is written in Rust with ", code("unsafe"), " code forbidden in every crate, and every parser that reads evidence has been fuzzed."),
       h("h3", "Fuzzing"),
-      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks, optical media, Mac disks, NTFS folder indexes and $LogFile, the change journal, ShellBags, ESE databases (SRUM) and scheduled tasks ran ", h("b", "339,234,095 inputs"), " and found ", h("b", "28 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
+      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks, optical media, Mac disks, NTFS folder indexes and $LogFile, the change journal, ShellBags, ESE databases (SRUM), scheduled tasks and Internet Explorer index.dat ran ", h("b", "360,887,710 inputs"), " and found ", h("b", "29 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
       h("div.scroll", h("table.tbl",
         h("thead", h("tr", h("th", "Target"), h("th", "Covers"), h("th", "Inputs"), h("th", "Found"))),
         h("tbody", [
@@ -540,6 +542,7 @@ const WIKI = [
         ["shellbags", "BagMRU trees and every shell item kind", "15,785,595", "none"],
         ["ese", "ESE databases (pages, B+ trees, catalog, records, long values, 7-bit and XPRESS compression) and SRUM, two rounds", "824,539", "none"],
         ["task", "Scheduled task XML, the TaskCache Actions and DynamicInfo blobs, TaskCache in a hive", "19,733,957", "none"],
+        ["iecache", "Internet Explorer index.dat: records, history, cache, downloads, records in free space", "21,653,615", "1 (out-of-range slice, fixed)"],
         ["ewf", "E01 (EWF) images: sections, chunk tables, zlib chunks, stored hashes", "42,686", "1 (overflow)"],
         ["registry", "Registry hives (SYSTEM, SOFTWARE, SAM, NTUSER.DAT, Amcache): cells, key and value lists, the whole key tree", "23,242,474", "1 (hang)"],
         ["evtx", "Windows event logs: chunks, binary XML templates and substitutions", "3,188,571", "none"],

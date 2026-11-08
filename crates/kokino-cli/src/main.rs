@@ -134,7 +134,7 @@ enum Cmd {
         utc: bool,
     },
     /// Parse one exported artifact file (registry hive, EVTX, Prefetch, LNK,
-    /// Jump List) and print what it holds as JSON
+    /// Jump List, Internet Explorer index.dat) and print what it holds as JSON
     Artifact {
         file: PathBuf,
         /// Every record instead of a summary
@@ -512,7 +512,23 @@ async fn main() -> anyhow::Result<()> {
                     println!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}", f.id, f.offset, f.len, f.kind, f.complete, h.md5, h.sha1, h.sha256, f.detail);
                 }
             }
+            if !c.records.is_empty() {
+                if !json {
+                    println!("\noffset\trecord\twhat\ttime_utc\tuser\turl\tfile\tin_carved_file");
+                }
+                let iso = |t: u64| if t == 0 { String::new() } else { kokino_core::time::filetime_to_iso(t) };
+                for x in &c.records {
+                    if json {
+                        println!("{}", serde_json::json!({"ie_record": x.tag, "offset": x.offset, "len": x.len, "what": x.what, "t": iso(x.t), "user": x.user, "url": x.url, "title": x.title, "file": x.file, "hits": x.hits, "region": x.region, "in_file": x.in_file}));
+                    } else {
+                        println!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}", x.offset, x.tag, x.what, iso(x.t), x.user, x.url, x.file, x.in_file.map(|i| i.to_string()).unwrap_or_default());
+                    }
+                }
+            }
             eprintln!("{} files carved from {} bytes in {} regions{}", c.files.len(), c.scanned_bytes, c.regions, if c.truncated { " (stopped at the limit)" } else { "" });
+            if !c.records.is_empty() {
+                eprintln!("{} Internet Explorer records recovered{}", c.records.len(), if c.records_truncated { " (stopped at the limit)" } else { "" });
+            }
         }
         Cmd::Files { image, json, extract } => {
             let ev = kokino_image::Evidence::open(&image)?;

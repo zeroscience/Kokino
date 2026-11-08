@@ -34,6 +34,7 @@ without an MFT record and the SRUM database. Run on Windows 10.
 | NIST CFReDS DFR, 22 ext images (ext2, ext3, ext4) | Every deleted file with content, block by block; deleted names against NIST's layout | 962 of 965 tagged files complete, 99.9996% of blocks right; 302 files recovered through the ext3/ext4 journal; 2,782 deleted names listed; wrong content without a warning in 1 file |
 | A real Windows 10 22H2 SRUM database (SRUDB.dat, 70 MB, 1.2.8) | Every row and value of every table against Windows' own esent.dll | All 310,255 rows and 2,800,979 values the same, after two fixes (below) |
 | Digital Detective practice files: SOFTWARE hive of a Windows 7 laptop (unreleased) | Scheduled tasks in TaskCache | 83 tasks read, none falsely flagged as hidden, after one fix (below) |
+| Digital Detective practice files: Internet Explorer 9 index.dat files and the formatted E01 (unreleased) | History, cache and downloads read live; records carved from free space against the live counts | All 16 files read; all 15 index.dat files and all 5,920 records recovered from the formatted volume, the same counts as live, after two fixes (below) |
 | NIST CFReDS DFR, 61 images (FAT12/16/32, exFAT, NTFS) | Every deleted file Kokino lists, block by block, against the files' own tags; counts against NIST's layout | 3,048 of 3,323 deleted test files complete, 1,367,020 of 1,370,338 blocks right (99.8%); exFAT 100%, NTFS 100% of blocks; wrong content without a warning in 4 files |
 
 The validation found real problems in Kokino, all fixed before these
@@ -291,6 +292,45 @@ The first run flagged all 83 tasks as hidden: Windows 7 writes no SD value
 in TaskCache\Tree at all; Windows 10 added it. Kokino now treats a missing
 SD value as hiding a task only when the hive's other tasks have one. After
 the fix: 83 tasks, none hidden, none flagged.
+
+## Internet Explorer: the Digital Detective practice case (unreleased)
+
+Digital Detective's practice files (`2011-10-19-Data.zip` and
+`2011-10-19-Image.zip`, a Windows 7 laptop with Internet Explorer 9) hold the
+user's 16 index.dat files as exported files, and an E01 of the laptop's
+volume after it was formatted.
+
+Exported files, read the way the analysis reads them:
+
+| File | Records | Shown |
+|---|--:|---|
+| History (main) | 100 (21 deleted) | 69 visits; 31 last visits are also in a daily file and are shown once |
+| History, day 2011-10-18 | 49 | 34 visits; 15 `:Host:` summaries are not visits |
+| History, day 2011-10-19 | 46 (1 deleted) | 31 visits |
+| History (protected mode) | 199 (5 deleted) | 199 visits |
+| Cache and cache (protected mode) | 18 and 5,437 | 5,419 cached files (5 LEAK); 35 redirects not listed |
+| Downloads (IE 9) | 5 (2 deleted) | 5 downloads, with referring page and saved path |
+
+Visits run from 2011-10-18 to 2011-10-19, the same two days as the
+cache's last-access times; 42 searches are found in visited Bing and Google pages, and 5
+local files opened through Explorer appear as `file:` visits. The daily
+files give the computer's clock as UTC+03:00, which matches the time zone
+in the case's SYSTEM hive (Turkey Standard Time, daylight saving time in
+October 2011). The download list keeps the bytes received as last written
+by IE; for two of the downloads that is a little less than the total, and
+the files themselves are not in the export, so whether they finished
+cannot be checked. Cookies, DOM storage, the compatibility, TLD and
+privacy caches use the same format and are not read as history.
+
+Formatted E01, carved (`kokino carve`): all 15 index.dat files that were
+with records come back whole (the 16th, an empty 16 KiB compatibility
+cache, is not found), with the same record
+counts as the exported files, and record by record recovery finds 5,920
+records in free space: 299 history and 65 daily-history visits, 5,422
+cache entries (5 LEAK), 89 cookies, 5 downloads and 35 redirects, all inside
+the carved files. Before the fix, records inside a carved file longer than
+the 1 MiB read window were skipped (only 1,539 of the cache's records were
+listed), and the clock offset was truncated to UTC+02:45 instead of rounded.
 
 ## NIST CFReDS: deleted file recovery on ext2, ext3 and ext4
 

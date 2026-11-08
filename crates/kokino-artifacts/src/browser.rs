@@ -1,5 +1,6 @@
 //! Browser history: Chromium family (Chrome, Edge, Brave, Opera, Vivaldi)
-//! `History` and Firefox `places.sqlite`.
+//! `History` and Firefox `places.sqlite`. Internet Explorer's `index.dat`
+//! files are read by [`crate::iecache`] into the same structures.
 //!
 //! Databases are given as bytes (read from the evidence by the caller),
 //! written to a private temporary directory together with their `-wal` and
@@ -27,6 +28,8 @@ const MAX_ROWS: usize = 2_000_000;
 pub enum Engine {
     Chromium,
     Firefox,
+    /// Internet Explorer 4 to 9 (index.dat).
+    Ie,
 }
 
 /// Where a history database came from.
@@ -50,6 +53,15 @@ pub struct WebSource {
     pub oldest: u64,
     pub newest: u64,
     pub error: Option<String>,
+    /// Internet Explorer cache entries in this file.
+    #[serde(default)]
+    pub cached: u64,
+    /// Deleted entries recovered from inside the file.
+    #[serde(default)]
+    pub recovered: u64,
+    /// Anything the examiner should know about how this source was read.
+    #[serde(default)]
+    pub note: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +78,28 @@ pub struct Visit {
     /// True when only the URL table remembers this page (its visit rows are
     /// gone: expired, or deleted selectively).
     pub url_only: bool,
+    /// A deleted entry recovered from free blocks inside the history file.
+    #[serde(default)]
+    pub recovered: bool,
+}
+
+/// A page part kept in Internet Explorer's cache (Content.IE5).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheEntry {
+    /// Last access.
+    pub t: u64,
+    /// Last-modified date sent by the server.
+    pub modified: u64,
+    pub src: u32,
+    pub url: String,
+    /// Cache folder and file name, as `ABCD1234\name[1].png`.
+    pub file: String,
+    pub content_type: String,
+    pub hits: u32,
+    /// A deleted entry recovered from free blocks inside index.dat.
+    pub recovered: bool,
+    /// A LEAK entry: deleted, but its cached file could not be removed.
+    pub leak: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +135,8 @@ pub struct WebActivity {
     pub visits: Vec<Visit>,
     pub downloads: Vec<Download>,
     pub searches: Vec<Search>,
+    #[serde(default)]
+    pub cache: Vec<CacheEntry>,
 }
 
 impl WebActivity {
@@ -147,6 +183,7 @@ pub fn classify(path: &str, name: &str) -> Option<WebSource> {
             let p = if p.is_empty() || p.eq_ignore_ascii_case(name) { parts.iter().rev().nth(1).map(|s| s.to_string()).unwrap_or_default() } else { p };
             (b, p)
         }
+        Engine::Ie => return None,
         Engine::Firefox => {
             let b = if lower.contains("tor browser") { "Tor Browser" } else if lower.contains("waterfox") { "Waterfox" } else { "Firefox" };
             (b.to_string(), after("Profiles"))
@@ -185,7 +222,7 @@ pub fn parse(src: &mut WebSource, db: &[u8], wal: Option<&[u8]>, journal: Option
     match src.engine {
         Some(Engine::Chromium) => chromium(&conn, idx, src, out).map_err(crate::sqlite::explain)?,
         Some(Engine::Firefox) => firefox(&conn, idx, src, out).map_err(crate::sqlite::explain)?,
-        None => anyhow::bail!("unknown browser engine"),
+        Some(Engine::Ie) | None => anyhow::bail!("not a SQLite history engine"),
     }
     src.visits = out.visits[v0..].iter().filter(|v| !v.url_only).count() as u64;
     src.downloads = (out.downloads.len() - d0) as u64;
@@ -259,7 +296,7 @@ fn chromium(c: &Connection, src: u32, s: &mut WebSource, out: &mut WebActivity) 
             let (t, url, title, tr, vc, dur) = row?;
             let (how, typed) = chromium_transition(tr);
             seen_urls.insert(url.clone());
-            out.visits.push(Visit { t: webkit_to_ft(t), src, url, title, how: how.into(), typed, visit_count: vc, duration_ms: dur / 1000, url_only: false });
+            out.visits.push(Visit { t: webkit_to_ft(t), src, url, title, how: how.into(), typed, visit_count: vc, duration_ms: dur / 1000, url_only: false, recovered: false });
         }
     }
     // URLs whose visit rows are gone: Chrome expires visits after 90 days but
@@ -277,7 +314,7 @@ fn chromium(c: &Connection, src: u32, s: &mut WebSource, out: &mut WebActivity) 
         if seen_urls.contains(&url) {
             continue;
         }
-        out.visits.push(Visit { t: webkit_to_ft(t), src, url, title, how: "last visit (URL table only)".into(), typed: typed > 0, visit_count: vc, duration_ms: 0, url_only: true });
+        out.visits.push(Visit { t: webkit_to_ft(t), src, url, title, how: "last visit (URL table only)".into(), typed: typed > 0, visit_count: vc, duration_ms: 0, url_only: true, recovered: false });
     }
 
     let dcols = columns(c, "downloads");
@@ -396,7 +433,7 @@ fn firefox(c: &Connection, src: u32, s: &mut WebSource, out: &mut WebActivity) -
             let (id, t, url, title, vt, vc) = row?;
             visited.insert(id);
             let (how, typed) = firefox_visit_type(vt);
-            out.visits.push(Visit { t: prtime_to_ft(t), src, url, title, how: how.into(), typed, visit_count: vc, duration_ms: 0, url_only: false });
+            out.visits.push(Visit { t: prtime_to_ft(t), src, url, title, how: how.into(), typed, visit_count: vc, duration_ms: 0, url_only: false, recovered: false });
         }
     }
     if pcols.contains("last_visit_date") {
@@ -412,7 +449,7 @@ fn firefox(c: &Connection, src: u32, s: &mut WebSource, out: &mut WebActivity) -
             if visited.contains(&id) {
                 continue;
             }
-            out.visits.push(Visit { t: prtime_to_ft(t), src, url, title, how: "last visit (URL table only)".into(), typed: typed > 0, visit_count: vc, duration_ms: 0, url_only: true });
+            out.visits.push(Visit { t: prtime_to_ft(t), src, url, title, how: "last visit (URL table only)".into(), typed: typed > 0, visit_count: vc, duration_ms: 0, url_only: true, recovered: false });
         }
     }
 

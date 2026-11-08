@@ -15,6 +15,12 @@
 //!
 //! Nothing is copied: results are offsets and lengths in the image, with
 //! MD5 and SHA-256 of the carved bytes. Exports read from the image.
+//!
+//! Internet Explorer history and cache records (index.dat `URL `, `LEAK`,
+//! `REDR`) are also recovered one by one: they keep their 128-byte
+//! alignment when the file is deleted, and a single record is enough to
+//! show a visit, so every 128-byte boundary is checked for one (as HstEx
+//! does). Whole index.dat files are carved as files as well.
 
 use crate::{volume_reader, Analysis, Progress};
 use kokino_image::{read_at, BlockCache, Evidence, SubReader, VolumeKind};
@@ -22,7 +28,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Seek};
 
-pub const CARVE_SCHEMA: u32 = 1;
+/// 2: Internet Explorer records.
+pub const CARVE_SCHEMA: u32 = 2;
+const IE_STEP: usize = 128;
+const MAX_RECORDS: usize = 200_000;
 const SECTOR: u64 = 512;
 const WINDOW: usize = 1 << 20;
 const MAX_FILES: usize = 100_000;
@@ -60,6 +69,105 @@ pub struct CarveResult {
     pub files: Vec<Carved>,
     /// Stopped at MAX_FILES.
     pub truncated: bool,
+    /// Internet Explorer records found in free space.
+    #[serde(default)]
+    pub records: Vec<CarvedRecord>,
+    /// Stopped at MAX_RECORDS.
+    #[serde(default)]
+    pub records_truncated: bool,
+}
+
+/// One Internet Explorer index.dat record recovered from free space.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct CarvedRecord {
+    /// Absolute offset in the image.
+    pub offset: u64,
+    pub len: u64,
+    /// URL, LEAK or REDR.
+    pub tag: String,
+    /// "history", "daily history", "cache", "cookie", "download", "redirect"
+    pub what: String,
+    /// Last visit or last access (UTC).
+    pub t: u64,
+    pub secondary: u64,
+    pub user: String,
+    pub url: String,
+    pub title: String,
+    /// Cached file name, or the saved-as path of a download.
+    pub file: String,
+    pub hits: u32,
+    pub region: String,
+    pub fi: Option<usize>,
+    /// Inside the carved index.dat with this id.
+    pub in_file: Option<u32>,
+}
+
+/// Internet Explorer records at every 128-byte boundary of `win`, which
+/// starts at image offset `p`.
+fn scan_records(src: &mut dyn Bytes, p: u64, win: &[u8], label: &str, fi: Option<usize>, res: &mut CarveResult) {
+    if res.records_truncated {
+        return;
+    }
+    let mut k = (p.div_ceil(IE_STEP as u64) * IE_STEP as u64 - p) as usize;
+    while k + 8 <= win.len() {
+        let s = &win[k..k + 4];
+        if s == b"URL " || s == b"LEAK" || s == b"REDR" {
+            if let Some(mut rec) = ie_record(src, p + k as u64) {
+                rec.region = label.to_string();
+                rec.fi = fi;
+                res.records.push(rec);
+                if res.records.len() >= MAX_RECORDS {
+                    res.records_truncated = true;
+                    return;
+                }
+            }
+        }
+        k += IE_STEP;
+    }
+}
+
+/// The record at `at` in `src`, described for the examiner. Host summaries
+/// and Windows' own caches that share the format are left out.
+pub fn ie_record(src: &mut dyn Bytes, at: u64) -> Option<CarvedRecord> {
+    use kokino_artifacts::iecache::{self, Location};
+    let head = src.read(at, 8);
+    if !matches!(head.get(..4), Some(b"URL ") | Some(b"LEAK") | Some(b"REDR")) {
+        return None;
+    }
+    let blocks = le32(&head, 4)?.min(0x200);
+    let b = src.read(at, blocks as usize * IE_STEP);
+    let r = iecache::record(&b, 0)?;
+    let mut c = CarvedRecord { offset: at, len: r.blocks as u64 * IE_STEP as u64, tag: r.kind.tag().into(), t: r.primary, secondary: r.secondary, hits: r.hits, title: r.title.clone(), ..Default::default() };
+    match iecache::location(&r.location) {
+        Location::History { user, url, period } => {
+            c.what = if period.is_some() { "daily history" } else { "history" }.into();
+            c.user = user;
+            c.url = url;
+        }
+        Location::Cookie { user, url } => {
+            c.what = "cookie".into();
+            c.user = user;
+            c.url = url;
+        }
+        Location::Download => {
+            let d = r.download?;
+            c.what = "download".into();
+            c.url = d.url;
+            c.file = d.target;
+        }
+        Location::Url(url) if r.kind == iecache::Kind::Redirect => {
+            c.what = "redirect".into();
+            c.url = url;
+        }
+        Location::Url(url) => {
+            c.what = "cache".into();
+            c.url = url;
+            c.file = r.file;
+            c.user = r.header_user;
+        }
+        Location::Host | Location::Other => return None,
+    }
+    Some(c)
 }
 
 /// Random access to the image for the format parsers.
@@ -160,11 +268,12 @@ const CARVERS: &[(&[u8], Carver)] = &[
     (b"7z\xBC\xAF\x27\x1C", sevenzip),
     (b"RIFF", riff),
     (b"ElfChnk\0", evtx_chunk),
+    (b"Client UrlCache MMF Ver ", index_dat),
 ];
 
 /// Tries every carver whose magic matches at `at`.
 pub fn identify(src: &mut dyn Bytes, at: u64) -> Option<Hit> {
-    let head = src.read(at, 16);
+    let head = src.read(at, 32);
     for (magic, f) in CARVERS {
         if head.starts_with(magic) {
             if let Some(h) = f(src, at) {
@@ -640,6 +749,20 @@ fn mp4(src: &mut dyn Bytes, at: u64) -> Option<Hit> {
     Some(Hit { len: p - at, complete: moov && mdat, kind: if mov { "mov" } else { "mp4" }, ext: if mov { "mov" } else { "mp4" }, label: if mov { "QuickTime video" } else { "MP4 video" }, detail: format!("brand {}", brand) })
 }
 
+/// A whole Internet Explorer index.dat: its size is in the header.
+fn index_dat(src: &mut dyn Bytes, at: u64) -> Option<Hit> {
+    let h = src.read(at, 0x30);
+    let size = le32(&h, 0x1c)?;
+    if !(0x4000..=256 << 20).contains(&size) || size % 0x1000 != 0 || le32(&h, 0x24)? == 0 {
+        return None;
+    }
+    let d = src.read(at, size as usize);
+    let complete = d.len() as u64 == size;
+    let ix = kokino_artifacts::iecache::parse(&d).ok()?;
+    let urls = ix.records.iter().filter(|r| r.kind != kokino_artifacts::iecache::Kind::Redirect).count();
+    Some(Hit { len: d.len() as u64, complete, kind: "index-dat", ext: "dat", label: "Internet Explorer index.dat", detail: format!("{} records{}", urls, if ix.unlisted > 0 { format!(", {} of them deleted", ix.unlisted) } else { String::new() }) })
+}
+
 /// A 64 KiB event log chunk: often all that survives of a cleared or
 /// deleted log. Its records are counted with the EVTX reader.
 fn evtx_chunk(src: &mut dyn Bytes, at: u64) -> Option<Hit> {
@@ -720,6 +843,7 @@ pub fn carve(ev: &Evidence, analysis: &Analysis, progress: Progress) -> anyhow::
                 break;
             }
             let mut next = p + win.len() as u64;
+            scan_records(&mut src, p, &win, label, *fi, &mut res);
             let mut i = 0usize;
             while i < win.len() {
                 let b = &win[i..];
@@ -770,6 +894,17 @@ pub fn carve(ev: &Evidence, analysis: &Analysis, progress: Progress) -> anyhow::
             if res.truncated {
                 break;
             }
+            // A carved file that runs past this window is skipped by the file
+            // scan, but may hold records (a carved index.dat does).
+            let mut q = p + win.len() as u64;
+            while q < next.min(end) && !res.records_truncated {
+                let b = src.read(q, ((next.min(end) - q) as usize).min(WINDOW));
+                if b.is_empty() {
+                    break;
+                }
+                scan_records(&mut src, q, &b, label, *fi, &mut res);
+                q += b.len() as u64;
+            }
             done += next.min(end) - p;
             if !progress("Carving unallocated space", done.min(total), total) {
                 anyhow::bail!("carving cancelled");
@@ -779,6 +914,11 @@ pub fn carve(ev: &Evidence, analysis: &Analysis, progress: Progress) -> anyhow::
         if res.truncated {
             break;
         }
+    }
+    // Records that lie inside a carved index.dat.
+    let dats: Vec<(u64, u64, u32)> = res.files.iter().filter(|f| f.kind == "index-dat").map(|f| (f.offset, f.offset + f.len, f.id)).collect();
+    for rec in &mut res.records {
+        rec.in_file = dats.iter().find(|(a, b, _)| (*a..*b).contains(&rec.offset)).map(|d| d.2);
     }
     // Hashes of the carved bytes.
     let n = res.files.len() as u64;
@@ -954,7 +1094,6 @@ pub(crate) mod tests {
             ("sqlite", 2048, true),
             ("jpeg", 237, true),
             ("docx", 346, true),
-            ("evtx-chunk", 65_536, true),
             ("gif", 43, true),
             ("bmp", 198, true),
             ("pdf", 460, true),
@@ -964,6 +1103,8 @@ pub(crate) mod tests {
             ("7z", 117, true),
             ("wav", 844, true),
             ("mp4", 452, true),
+            ("evtx-chunk", 65_536, true),
+            ("index-dat", 20_480, true),
             ("jpeg", 512, false), // cut off by the end of the disk
         ];
         assert_eq!(got, want);
@@ -972,7 +1113,15 @@ pub(crate) mod tests {
         let evtx = r.files.iter().find(|f| f.kind == "evtx-chunk").unwrap();
         assert!(evtx.detail.starts_with("14 records") && evtx.detail.ends_with("Security"));
         assert!(r.files.iter().all(|f| f.offset % 512 == 0 && f.md5.len() == 32 && f.sha256.len() == 64 && !f.beyond_region));
-        assert_eq!(r.files.iter().filter(|f| f.region == "Outside partitions").count(), 10);
+        assert_eq!(r.files.iter().filter(|f| f.region == "Outside partitions").count(), 12);
+        // Internet Explorer records: one inside the deleted index.dat, two loose.
+        let dat = r.files.iter().find(|f| f.kind == "index-dat").unwrap();
+        assert_eq!(dat.detail, "1 records");
+        let recs: Vec<(&str, &str, &str, Option<u32>)> = r.records.iter().map(|x| (x.what.as_str(), x.user.as_str(), x.url.as_str(), x.in_file)).collect();
+        assert_eq!(recs, [("history", "bob", "http://gone.test/page.html", Some(dat.id)), ("daily history", "bob", "http://forum.test/thread", None), ("cache", "", "http://forum.test/avatar.gif", None)]);
+        assert_eq!(r.records[0].title, "Gone");
+        assert_eq!(r.records[2].file, "avatar[1].gif");
+        assert!(r.records.iter().all(|x| x.offset % 128 == 0 && x.region == "Outside partitions"));
         // The hash is of exactly the carved bytes.
         let mut b = vec![0u8; png.len as usize];
         read_at(&mut ev.reader().unwrap(), png.offset, &mut b).unwrap();

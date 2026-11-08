@@ -151,7 +151,7 @@ fn run_photos(st: &AppState, job: &Job, user: &str, cid: &str, eid: &str) -> any
 
 pub fn load_carved(case: &kokino_core::case::Case, eid: &str) -> Option<kokino_analysis::carve::CarveResult> {
     let p = case.carved_path(eid).ok()?;
-    kokino_core::case::read_json::<kokino_analysis::carve::CarveResult>(&p).ok().filter(|c| c.schema == kokino_analysis::carve::CARVE_SCHEMA)
+    kokino_core::case::read_json::<kokino_analysis::carve::CarveResult>(&p).ok().filter(|c| (1..=kokino_analysis::carve::CARVE_SCHEMA).contains(&c.schema))
 }
 
 fn run_carve(st: &AppState, job: &Job, user: &str, cid: &str, eid: &str) -> anyhow::Result<()> {

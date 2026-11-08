@@ -47,3 +47,6 @@ optical 1 1698992 panic
 mac 1 64424 overflow
 mac 1 73700 panic
 mac 2 35549 overflow
+iecache 1 183 panic
+iecache 1 205 panic
+iecache 1 247 panic

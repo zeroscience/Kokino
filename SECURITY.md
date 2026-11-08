@@ -117,7 +117,13 @@ Scheduled tasks (unreleased):
 |---|---|---|--:|---|
 | `task` | task XML (elements, entities, triggers, actions), the TaskCache Actions and DynamicInfo blobs, and TaskCache read from a SOFTWARE hive | 10 min | 19,733,957 | none |
 
-In all: 339,234,095 inputs over 26 targets, and 28 distinct problems
+Internet Explorer index.dat (unreleased):
+
+| Target | What it covers | Rounds | Inputs in all | Distinct problems found |
+|---|---|---|--:|---|
+| `iecache` | index.dat (header, hash tables, allocation bitmap, URL, LEAK and REDR records, history titles, cache headers, IE 9 download entries), the conversion of each kind of file into web activity, and records read from free space at every 128-byte boundary | 10 + 10 min | 21,653,615 | 1: a record cut off by the end of the file, with its data offset past the bytes that exist, was sliced out of range (panic); fixed |
+
+In all: 360,887,710 inputs over 27 targets, and 29 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed

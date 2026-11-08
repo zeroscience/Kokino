@@ -2136,6 +2136,28 @@ fn or<'a>(s: &'a str, d: &'a str) -> &'a str {
 /// What a single artifact file holds, for `kokino artifact`: detected by
 /// content, summarized (or dumped in full with `full`).
 pub fn inspect(name: &str, data: &[u8], full: bool) -> anyhow::Result<Value> {
+    if data.starts_with(kokino_artifacts::iecache::SIGNATURE) {
+        use kokino_artifacts::iecache::{self, Location};
+        let ix = iecache::parse(data)?;
+        let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+        for r in &ix.records {
+            let what = match iecache::location(&r.location) {
+                Location::History { period: None, .. } => "history",
+                Location::History { .. } => "daily or weekly history",
+                Location::Host => "host summary",
+                Location::Cookie { .. } => "cookie",
+                Location::Download => "download",
+                Location::Url(_) => "url",
+                Location::Other => "other",
+            };
+            *counts.entry(format!("{} {}{}", r.kind.tag(), what, if r.listed { "" } else { " (not listed)" })).or_default() += 1;
+        }
+        let mut v = json!({"kind": "index.dat", "file": name, "version": ix.version, "cache_dirs": ix.dirs, "records": ix.records.len(), "deleted_records": ix.unlisted, "by_type": counts, "truncated": ix.truncated});
+        if full {
+            v["entries"] = json!(ix.records);
+        }
+        return Ok(v);
+    }
     if data.starts_with(b"ElfFile\0") {
         let mut counts: BTreeMap<String, u64> = BTreeMap::new();
         let mut events = vec![];

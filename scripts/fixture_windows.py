@@ -845,6 +845,129 @@ def recent_files():
 RECENT = "Users/alice/AppData/Roaming/Microsoft/Windows/Recent/"
 
 
+# ---------------------------------------------------------------- Internet Explorer index.dat
+# MSIE Cache File 5.2: header, allocation bitmap at 0x250, 128-byte blocks
+# from 0x4000, a HASH table listing the live records. Deleted records stay
+# in free blocks (not in the hash table, bitmap bit clear).
+
+IE_BLOCK = 0x80
+IE_HIST = "Users/alice/AppData/Local/Microsoft/Windows/History/History.IE5/"
+IE_DAY = IE_HIST + "MSHist012025031020250311/"
+IE_CACHE = "Users/alice/AppData/Local/Microsoft/Windows/Temporary Internet Files/Content.IE5/"
+IE_DL = "Users/alice/AppData/Roaming/Microsoft/Windows/IEDownloadHistory/"
+IE_LOCAL = 3600 * 10_000_000  # the clock was at UTC+01:00
+
+
+def ie_title(t):
+    s = u16s(t)
+    return bytes([0x10, 0, 2, 0, 0, 0, 0, 0x10, 0, 0, 0, 0, 2, 0, 0, 0]) + struct.pack("<HH", 4 + len(s), 0x1F10) + s + b"\0" * 4
+
+
+def ie_record(loc, primary, secondary=0, hits=1, data=b"", file="", tag=b"URL "):
+    body = 0x68 + len(loc) + 1 + (len(file) + 1 if file else 0) + len(data)
+    blocks = (body + IE_BLOCK - 1) // IE_BLOCK
+    r = bytearray(blocks * IE_BLOCK)
+    r[0:4] = tag
+    struct.pack_into("<IQQ", r, 4, blocks, secondary, primary)
+    struct.pack_into("<I", r, 0x34, 0x68)
+    r[0x38] = 0 if file else 0xFE
+    r[0x68:0x68 + len(loc)] = loc.encode()
+    p = 0x68 + len(loc) + 1
+    if file:
+        struct.pack_into("<I", r, 0x3C, p)
+        r[p:p + len(file)] = file.encode()
+        p += len(file) + 1
+    if data:
+        struct.pack_into("<II", r, 0x44, p, len(data))
+        r[p:p + len(data)] = data
+    struct.pack_into("<I", r, 0x54, hits)
+    return bytes(r)
+
+
+def ie_index(recs, dirs=(), pad=False):
+    """recs: [(record bytes, listed)]; pad: to a 4 KiB multiple, as IE grows its files"""
+    d = bytearray(0x4000)
+    d[0:28] = b"Client UrlCache MMF Ver 5.2\0"
+    struct.pack_into("<I", d, 0x20, 0x4000)
+    struct.pack_into("<I", d, 0x48, len(dirs))
+    for i, n in enumerate(dirs):
+        d[0x4C + 12 * i + 4:0x4C + 12 * i + 12] = n.encode()
+    h = bytearray(2 * IE_BLOCK)
+    h[0:4] = b"HASH"
+    struct.pack_into("<I", h, 4, 2)
+    body = bytearray()
+    used = [(0, 2)]
+    n = 0
+    for r, listed in recs:
+        off = 0x4000 + len(h) + len(body)
+        if listed:
+            struct.pack_into("<II", h, 16 + 8 * n, 0x12345600 + n * 0x100, off)
+            n += 1
+            used.append(((off - 0x4000) // IE_BLOCK, len(r) // IE_BLOCK))
+        body += r
+    d += h + body
+    for b0, c in used:
+        for b in range(b0, b0 + c):
+            d[0x250 + b // 8] |= 1 << (b % 8)
+    if pad:
+        d += b"\0" * (-len(d) % 0x1000)
+    struct.pack_into("<I", d, 0x1C, len(d))
+    struct.pack_into("<I", d, 0x24, (len(d) - 0x4000) // IE_BLOCK)
+    return bytes(d)
+
+
+def ie_download(referrer, url, target, total, received, started):
+    d = bytearray(0x58)
+    struct.pack_into("<II", d, 0, 0x85, 11)
+    struct.pack_into("<Q", d, 0x24, started)
+    struct.pack_into("<QQ", d, 0x48, total, received)
+    for s in (referrer, url, target):
+        d += u16s(s)
+    return bytes(d)
+
+
+# Ground truth for the IE tests (crates/kokino-analysis/src/lib.rs, carve.rs).
+IE_T = ft(2025, 3, 10, 9, 15, 0)
+
+
+def ie_files():
+    t = IE_T
+    day = ie_index([
+        (ie_record(":2025031020250311: alice@http://www.bing.com/search?q=clear+ie+history&form=QBLH", t, t + IE_LOCAL), True),
+        (ie_record(":2025031020250311: alice@http://bank.test/transfer.html", t + 600_000_000, t + 600_000_000 + IE_LOCAL), True),
+        (ie_record(":2025031020250311: alice@:Host: bank.test", t + 600_000_000, t + 600_000_000 + IE_LOCAL), True),
+        (ie_record(":2025031020250311: alice@http://drop.test/upload.html", t + 1_200_000_000, t + 1_200_000_000 + IE_LOCAL), False),
+    ])
+    main = ie_index([
+        # Same as the daily file: shown once.
+        (ie_record("Visited: alice@http://bank.test/transfer.html", t + 600_000_000, t + 600_000_000, 4, ie_title("Transfer")), True),
+        (ie_record("Visited: alice@file:///C:/Users/alice/Documents/plan.docx", t + 900_000_000, t + 900_000_000, 1), True),
+        (ie_record("Visited: alice@http://old.test/", ft(2025, 2, 20, 18, 0, 0), ft(2025, 2, 20, 18, 0, 0), 2, ie_title("Old")), True),
+    ])
+    cache = ie_index([
+        (ie_record("http://bank.test/logo.png", t + 600_000_000, ft(2024, 11, 1), 3, b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n\r\n~U:alice\r\n\0", "logo[1].png"), True),
+        (ie_record("http://drop.test/upload.js", t + 1_200_000_000, 0, 1, b"HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\n\r\n~U:alice\r\n\0", "upload[1].js", b"LEAK"), False),
+    ], dirs=("QW12ER34",))
+    dl = ie_index([
+        (ie_record("iedownload:{6B2D3F00-1A2B-11E0-AB15-0011223344AA}", t + 1_500_000_000, 0, 1,
+                   ie_download("http://www.bing.com/search?q=sdelete", "http://tools.test/sdelete.zip", "C:\\Users\\alice\\Downloads\\sdelete.zip", 4096, 4096, t + 1_490_000_000)), True),
+    ])
+    return {IE_DAY + "index.dat": day, IE_HIST + "index.dat": main, IE_CACHE + "index.dat": cache, IE_DL + "index.dat": dl}
+
+
+def ie_free_space():
+    """For the unpartitioned tail: a deleted history index.dat, then two
+    loose records (a daily-history visit and a cache entry)."""
+    whole = ie_index([
+        (ie_record("Visited: bob@http://gone.test/page.html", ft(2025, 1, 5, 12, 0, 0), ft(2025, 1, 5, 12, 0, 0), 1, ie_title("Gone")), True),
+    ], pad=True)
+    loose = [
+        ie_record(":2025010520250106: bob@http://forum.test/thread", ft(2025, 1, 5, 12, 30, 0), ft(2025, 1, 5, 13, 30, 0)),
+        ie_record("http://forum.test/avatar.gif", ft(2025, 1, 5, 12, 31, 0), 0, 1, b"HTTP/1.1 200 OK\r\nContent-Type: image/gif\r\n\r\n\0", "avatar[1].gif"),
+    ]
+    return whole, loose
+
+
 def build():
     out = {
         "Windows/System32/config/SYSTEM": hive_system(),
@@ -862,6 +985,7 @@ def build():
     for name, data in prefetch_files().items():
         out["Windows/Prefetch/" + name] = data
     out.update(task_files())
+    out.update(ie_files())
     # SRUM: the small-page database from make_srum_fixture.py (written by esent.dll).
     srum = os.path.join(OUT, "SRUDB-4k.dat")
     if os.path.exists(srum):

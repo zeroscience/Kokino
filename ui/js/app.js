@@ -1758,18 +1758,20 @@ async function carvedTab(ctx) {
   const start = () => api(base, { method: "POST" }).then((j) => { toast("Carving unallocated space"); kickJobs(j); route(); }).catch((e) => toast(e.message, true));
   const intro = h("div.hd", h("div", h("h1", "Carved files"),
     h("div.muted", r
-      ? `${num(r.files.length)} file${r.files.length === 1 ? "" : "s"} recovered by content from ${bytes(r.scanned_bytes)} of unallocated space. Carved ${ts(r.carved_at, 16)}.`
+      ? `${num(r.files.length)} file${r.files.length === 1 ? "" : "s"}${(r.records || []).length ? ` and ${num(r.records.length)} Internet Explorer record${r.records.length === 1 ? "" : "s"}` : ""} recovered by content from ${bytes(r.scanned_bytes)} of unallocated space. Carved ${ts(r.carved_at, 16)}.`
       : "Files recovered from unallocated space by their content.")),
     h("span.sp"),
     r && canWrite() && !job ? h("button.sm", { onclick: start, title: "Carve again and update the text index" }, "Carve again") : null);
   if (!r) {
     return render(h("div.stack", intro, h("div.card.empty.stack",
       job ? [h("div.spin"), h("p", "Carving..."), h("span", { "data-job-ev": eid }, jobPill(job))]
-        : [h("p", "Carving looks at every free cluster, the space outside partitions and unparsed volumes for files by their content: JPEG, PNG, GIF, BMP, PDF, Word/Excel/PowerPoint (both formats), ZIP, SQLite, executables, GZIP, 7-Zip, WAV, AVI, WebP, MP4 and event log chunks."),
+        : [h("p", "Carving looks at every free cluster, the space outside partitions and unparsed volumes for files by their content: JPEG, PNG, GIF, BMP, PDF, Word/Excel/PowerPoint (both formats), ZIP, SQLite, executables, GZIP, 7-Zip, WAV, AVI, WebP, MP4, event log chunks and Internet Explorer index.dat files. Internet Explorer history, cache and download records are also recovered one by one."),
           canWrite() ? h("button.primary", { onclick: start }, "Carve unallocated space") : h("p.muted", "Ask an examiner on this case to run it.")])));
   }
   const kinds = {};
   for (const f of r.files) kinds[f.kind] = (kinds[f.kind] || 0) + 1;
+  const recs = r.records || [];
+  if (recs.length) kinds["ie-records"] = recs.length;
   let kind = ctx.q.kind && kinds[ctx.q.kind] ? ctx.q.kind : "";
   let view = ctx.q.view === "table" ? "table" : r.files.some((f) => PICTURES.includes(f.kind)) ? "gallery" : "table";
   const seg = h("div.seg.wrap");
@@ -1796,6 +1798,21 @@ async function carvedTab(ctx) {
       h("button", { class: kind === k ? "on" : null, onclick: () => { kind = k; draw(); } }, l)));
     viewSeg.replaceChildren(...[["gallery", "Gallery"], ["table", "Table"]].map(([k, l]) => h("button", { class: view === k ? "on" : null, onclick: () => { view = k; draw(); } }, l)));
     history.replaceState(null, "", `#/c/${cid}/e/${eid}/carved?view=${view}${kind ? `&kind=${kind}` : ""}`);
+    if (kind === "ie-records") {
+      const recDetail = (x) => webDetail(`Internet Explorer record (${x.what})`, [
+        [`Time (${zoneName()})`, ts(x.t_iso)], ["Record", `${x.tag}, ${num(x.len)} bytes`], ["What", x.what], ["User", x.user], ["URL", x.url], ["Title", x.title],
+        [x.what === "download" ? "Saved to" : "Cached as", x.file], ["Hits", String(x.hits)], ["Found in", x.region + (x.in_file != null ? `, inside carved index.dat #${x.in_file}` : "")],
+        ["Offset in image", h("a", { href: `#/c/${cid}/e/${eid}/hex?off=${x.offset}`, onclick: closeModal }, num(x.offset))],
+        ["Note", x.what === "daily history" ? "Daily history keeps the visit time twice, in UTC and in the computer's local time; the UTC one is shown." : ""],
+      ], { cid, eid, kind: "offset", key: `ierec:${eid}:${x.offset}`, offset: x.offset, len: x.len, title: `IE ${x.what}: ${x.url.slice(0, 120)}`, path: `${x.region} at offset ${x.offset}`, time: x.t_iso || "" });
+      out.replaceChildren(...[h("div.scroll", { style: { maxHeight: "calc(100vh - 290px)" } }, h("table.tbl.sys", h("thead", h("tr", [`Time (${zoneName()})`, "What", "User", "URL", "Hits", "Offset"].map((c) => h("th", c)))),
+        h("tbody", recs.slice(0, 5000).map((x) => h("tr", { onclick: () => recDetail(x) },
+          h("td.mono", ts(x.t_iso, 19)), h("td", h("span.pill" + (x.what.includes("history") ? ".info" : ""), x.what), x.tag === "LEAK" ? h("span.pill.warn", "LEAK") : null),
+          h("td", x.user), h("td.nm", { title: x.url }, x.title ? h("b", x.title) : null, h("div.muted.ell", x.url), x.file ? h("div.muted.ell", x.file) : null), h("td.num", x.hits),
+          h("td.mono", h("a", { href: `#/c/${cid}/e/${eid}/hex?off=${x.offset}`, onclick: (e) => e.stopPropagation() }, num(x.offset)))))))),
+        recs.length > 5000 ? h("p.muted", `Showing the first 5,000 of ${num(recs.length)}; use kokino carve for the full list.`) : null].filter(Boolean));
+      return;
+    }
     const list = r.files.filter((f) => !kind || f.kind === kind);
     if (view === "gallery") {
       out.replaceChildren(list.length ? h("div.carved-grid", list.map((f) => h("div.card.flat.carved-tile", { onclick: () => detail(f), title: `${f.label} at offset ${f.offset}` },
@@ -1810,6 +1827,7 @@ async function carvedTab(ctx) {
   };
   draw();
   render(h("div.stack", intro,
+    r.schema < 2 ? h("p", { style: { margin: 0, color: "var(--warn)" } }, "Carved by an earlier Kokino version, before Internet Explorer history records were recovered from free space. Carve again to look for them.") : null,
     h("div.row.wrap", seg, h("span.sp"), viewSeg),
     h("p.muted", { style: { fontSize: "12.5px" } }, "Each file is found by its header and ends where its own structure says, so only whole files are listed; broken or cut-off ones are marked incomplete. Nothing is copied until you export, and every export is hashed and written to the audit log."),
     out));
@@ -1824,32 +1842,39 @@ async function webTab(ctx) {
     return render(h("div.stack", intro, h("div.card.empty", h("p", "This evidence was analyzed by an earlier Kokino version, before browser history extraction existed."),
       canWrite() ? h("button.primary", { onclick: () => reingest(ctx.cid, ctx.eid, false) }, "Re-analyze now") : h("p.muted", "Ask an examiner on this case to re-analyze it."))));
   }
+  const ieStale = head.schema < 8
+    ? h("div.card.flat.row.wrap", h("p", { style: { margin: 0, color: "var(--warn)", flex: 1 } }, "This evidence was analyzed by an earlier Kokino version, before Internet Explorer history (index.dat) was read. It is missing until the evidence is analyzed again."),
+      canWrite() ? h("button.primary", { onclick: () => reingest(ctx.cid, ctx.eid, false) }, "Re-analyze now") : null)
+    : null;
   if (!head.sources.length) {
-    return render(h("div.stack", intro, h("div.card.empty", "No Chrome, Edge, Brave, Opera, Vivaldi or Firefox history databases on this volume.")));
+    return render(h("div.stack", intro, ieStale, h("div.card.empty", "No Chrome, Edge, Brave, Opera, Vivaldi or Firefox history databases, and no Internet Explorer index.dat files, on this volume.")));
   }
   const sources = head.sources;
   const webTarget = (what, title, where, t) => ({ cid: ctx.cid, eid: ctx.eid, kind: "web", fi: ctx.fi, key: `web:${ctx.eid}:${ctx.fi}:${what}:${t}:${String(where).slice(0, 200)}`, title: `${what}: ${title}`, path: where, time: t || "" });
-  let kind = ["visits", "downloads", "searches"].includes(ctx.q.kind) ? ctx.q.kind : "visits";
+  let kind = ["visits", "downloads", "searches", "cache"].includes(ctx.q.kind) ? ctx.q.kind : "visits";
   let src = ctx.q.src != null && ctx.q.src !== "" ? Number(ctx.q.src) : null;
   let offset = 0;
 
   const cards = h("div.grid.g3.stagger");
   const drawCards = () => cards.replaceChildren(...sources.map((s, i) => {
-    const empty = !s.error && s.visits === 0 && s.urls === 0;
+    const ie = s.engine === "ie";
+    const empty = !s.error && s.visits === 0 && s.urls === 0 && !(ie && (s.cached || s.downloads));
+    const stats = ie ? [["visits", s.visits], ["downloads", s.downloads], ["searches", s.searches], ["cached", s.cached]] : [["visits", s.visits], ["downloads", s.downloads], ["searches", s.searches], ["URLs", s.urls]];
     return h("div.card.web-src", { class: src === i ? "on" : null, style: { "--i": i }, title: s.path, onclick: () => { src = src === i ? null : i; drawCards(); reload(); } },
       h("div.row", h("span.bbadge", s.browser.slice(0, 2)), h("div", { style: { minWidth: 0 } }, h("b", s.browser), h("div.muted.ell", `${s.user || "unknown user"} / ${s.profile || "?"}`)), h("span.sp"),
-        s.deleted ? h("span.pill.bad", "deleted DB") : null, empty ? h("span.pill.warn", "empty") : null, s.wal ? h("span.pill.info", { title: "Changes still in the -wal file were applied" }, "WAL") : null),
+        s.deleted ? h("span.pill.bad", ie ? "deleted file" : "deleted DB") : null, s.recovered ? h("span.pill.warn", { title: "Deleted entries recovered from free blocks inside index.dat" }, `${num(s.recovered)} recovered`) : null, empty ? h("span.pill.warn", "empty") : null, s.wal ? h("span.pill.info", { title: "Changes still in the -wal file were applied" }, "WAL") : null),
       s.error
         ? h("p.bad-text", s.error)
-        : h("div.web-stats", [["visits", s.visits], ["downloads", s.downloads], ["searches", s.searches], ["URLs", s.urls]].map(([l, n]) => h("div", h("b", num(n)), h("small", l)))),
+        : h("div.web-stats", stats.map(([l, n]) => h("div", h("b", num(n)), h("small", l)))),
       !s.error && s.oldest_iso ? h("div.muted", { style: { fontSize: "12px" } }, `${ts(s.oldest_iso, 16)}  to  ${ts(s.newest_iso, 16)}`) : null,
       empty ? h("div.cav", "History is empty: cleared, or the profile was never used. Compare with the profile's other files.") : null,
+      s.note ? h("div.muted", { style: { fontSize: "12px" } }, s.note.charAt(0).toUpperCase() + s.note.slice(1) + ".") : null,
     );
   }));
   drawCards();
 
   const seg = h("div.seg");
-  const drawSeg = () => seg.replaceChildren(...[["visits", "Visits"], ["downloads", "Downloads"], ["searches", "Searches"]].map(([k, l]) => h("button", { class: kind === k ? "on" : null, onclick: () => { kind = k; drawSeg(); reload(); } }, `${l} (${num(head.counts[k])})`)));
+  const drawSeg = () => seg.replaceChildren(...[["visits", "Visits"], ["downloads", "Downloads"], ["searches", "Searches"], ["cache", "IE cache"]].filter(([k]) => k !== "cache" || head.counts.cache || kind === "cache").map(([k, l]) => h("button", { class: kind === k ? "on" : null, onclick: () => { kind = k; drawSeg(); reload(); } }, `${l} (${num(head.counts[k])})`)));
   drawSeg();
   const q = h("input", { placeholder: "Filter by URL, title, file or search term...", value: ctx.q.q || "", style: { flex: 1 } });
   const thead = h("thead");
@@ -1857,7 +1882,7 @@ async function webTab(ctx) {
   const count = h("span.muted");
   const more = h("button", "Load more");
   const who = (i) => h("span.muted", { title: srcName(sources[i]) }, sources[i] ? sources[i].browser : "");
-  const COLS = { visits: [`Time (${zoneName()})`, "Browser", "Page", "How", "Visits"], downloads: [`Started (${zoneName()})`, "Browser", "File", "From", "Size", "State"], searches: [`Time (${zoneName()})`, "Browser", "Engine", "Search term", "Source"] };
+  const COLS = { visits: [`Time (${zoneName()})`, "Browser", "Page", "How", "Visits"], downloads: [`Started (${zoneName()})`, "Browser", "File", "From", "Size", "State"], searches: [`Time (${zoneName()})`, "Browser", "Engine", "Search term", "Source"], cache: [`Last access (${zoneName()})`, "Browser", "URL", "Cached as", "Hits"] };
   const row = (x) => {
     if (kind === "downloads") {
       const file = (x.target || "").split(/[\\/]/).pop() || "(no target path)";
@@ -1865,20 +1890,26 @@ async function webTab(ctx) {
         h("td.mono", ts(x.start_iso, 19)), h("td", who(x.src)), h("td.nm", { title: x.target }, h("b", file), h("div.muted.ell", x.target)), h("td.nm.muted", { title: x.url }, x.url),
         h("td.num", x.received >= 0 ? bytes(x.received) : ""), h("td", h("span.pill" + (x.state === "complete" ? ".ok" : x.state.startsWith("interrupted") || x.state === "cancelled" ? ".warn" : ""), x.state), x.danger ? h("span.pill.bad", { style: { marginLeft: "6px" } }, x.danger) : null));
     }
+    if (kind === "cache") {
+      const note = x.recovered ? "A deleted entry, recovered from free blocks inside index.dat." : x.leak ? "LEAK entry: deleted from the cache, but its file could not be removed at the time (it was in use)." : "";
+      return h("tr", { class: x.recovered || x.leak ? "faint" : null, onclick: () => webDetail("Cached file", [[`Last access (${zoneName()})`, ts(x.t_iso)], ["Last modified (server)", ts(x.modified_iso)], ["Browser", srcName(sources[x.src])], ["URL", x.url], ["Cached as", x.file ? `Content.IE5\\${x.file}` : ""], ["Content type", x.content_type], ["Hits", String(x.hits)], ["Note", note]], webTarget("Cached file", x.url, x.url, x.t_iso)) },
+        h("td.mono", ts(x.t_iso, 19)), h("td", who(x.src)), h("td.nm.muted", { title: x.url }, x.url),
+        h("td.nm", x.file ? h("span.mono", x.file) : null, x.content_type ? h("div.muted", x.content_type) : null, x.recovered ? h("span.pill.warn", "deleted entry") : x.leak ? h("span.pill.warn", "LEAK") : null), h("td.num", x.hits));
+    }
     if (kind === "searches") {
       return h("tr", { onclick: () => webDetail("Search", [[`Time (${zoneName()})`, ts(x.t_iso)], ["Browser", srcName(sources[x.src])], ["Engine", x.engine], ["Term", x.term], ["Recorded in", x.how === "url" ? "a visited search URL" : "the browser's keyword table"], ["URL", x.url]], webTarget("Search", `"${x.term}"`, `${x.engine}: ${x.url || ""}`, x.t_iso)) },
         h("td.mono", ts(x.t_iso, 19)), h("td", who(x.src)), h("td", x.engine), h("td", h("b", x.term)), h("td.muted", x.how === "url" ? "visited URL" : "keyword table"));
     }
-    return h("tr", { class: x.url_only ? "faint" : null, onclick: () => webDetail("Page visit", [[`Time (${zoneName()})`, ts(x.t_iso)], ["Browser", srcName(sources[x.src])], ["URL", x.url], ["Title", x.title], ["How", x.how], ["Typed", x.typed ? "yes, the user typed or pasted it" : ""], ["Times visited", String(x.visit_count)], ["Time on page", x.duration_ms ? `${(x.duration_ms / 1000).toFixed(1)} s` : ""], ["Note", x.url_only ? "Only the URL table remembers this page: its visit rows were expired or deleted, so the time is the last recorded visit." : ""]], webTarget("Page visit", x.title || x.url, x.url, x.t_iso)) },
+    return h("tr", { class: x.url_only ? "faint" : null, onclick: () => webDetail("Page visit", [[`Time (${zoneName()})`, ts(x.t_iso)], ["Browser", srcName(sources[x.src])], ["URL", x.url], ["Title", x.title], ["How", x.how], ["Typed", x.typed ? "yes, the user typed or pasted it" : ""], ["Times visited", String(x.visit_count)], ["Time on page", x.duration_ms ? `${(x.duration_ms / 1000).toFixed(1)} s` : ""], ["Note", x.url_only ? "Only the URL table remembers this page: its visit rows were expired or deleted, so the time is the last recorded visit." : x.recovered ? "A deleted history entry, recovered from free blocks inside index.dat." : ""]], webTarget("Page visit", x.title || x.url, x.url, x.t_iso)) },
       h("td.mono", ts(x.t_iso, 19)), h("td", who(x.src)),
       h("td.nm", { title: x.url }, x.title ? h("b", x.title) : null, h("div.muted.ell", x.url)),
-      h("td", x.typed ? h("span.pill.info", x.how) : x.url_only ? h("span.pill.warn", "URL table only") : h("span.muted", x.how)), h("td.num", x.visit_count));
+      h("td", x.typed ? h("span.pill.info", x.how) : x.url_only ? h("span.pill.warn", "URL table only") : x.recovered ? h("span.pill.warn", { title: "Deleted entry recovered from inside index.dat" }, "deleted entry") : h("span.muted", x.how)), h("td.num", x.visit_count));
   };
   const load = async (append) => {
     const params = new URLSearchParams({ kind, q: q.value, offset, limit: 300 });
     if (src != null) params.set("src", src);
     const r = await api(`${base}?${params}`);
-    thead.replaceChildren(h("tr", COLS[kind].map((c, i) => h("th", { style: (kind === "downloads" && i === 4) || (kind === "visits" && i === 4) ? { textAlign: "right" } : null }, c))));
+    thead.replaceChildren(h("tr", COLS[kind].map((c, i) => h("th", { style: (kind === "downloads" && i === 4) || (kind === "visits" && i === 4) || (kind === "cache" && i === 4) ? { textAlign: "right" } : null }, c))));
     const rows = r.items.map(row);
     if (append) tbody.append(...rows); else tbody.replaceChildren(...rows);
     offset += r.items.length;
@@ -1891,7 +1922,8 @@ async function webTab(ctx) {
   more.onclick = () => load(true);
   render(h("div.stack",
     intro,
-    h("p.muted", "History read from each browser profile's database, including changes still in its -wal file. Click a profile to filter by it. " + zoneSentence() + " Pages marked \"URL table only\" lost their visit rows: expired by the browser or deleted selectively."),
+    ieStale,
+    h("p.muted", "History read from each browser profile's database, including changes still in its -wal file, and from Internet Explorer's index.dat files. Click a profile to filter by it. " + zoneSentence() + " Pages marked \"URL table only\" lost their visit rows: expired by the browser or deleted selectively. \"Deleted entry\" marks Internet Explorer entries recovered from free blocks inside index.dat."),
     cards,
     h("div.row.wrap", seg, q, count),
     h("div.scroll", { style: { maxHeight: "calc(100vh - 260px)" } }, h("table.tbl.web", thead, tbody)),

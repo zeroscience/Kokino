@@ -70,8 +70,9 @@ def main():
         return dirs[d]
 
     files = fixture_windows.build()
-    # Task files go in last, around the carving samples (see below).
-    late = {p: files[p] for p in files if p.startswith("Windows/System32/Tasks/")}
+    # Task files and index.dat files go in last, around the carving samples
+    # (see below).
+    late = {p: files[p] for p in files if p.startswith("Windows/System32/Tasks/") or p.endswith("/index.dat")}
     for path in sorted((p for p in files if p not in late), key=lambda p: -len(files[p])):  # big files first: contiguous runs
         plant_file(vol, alloc, next(spare), path.rsplit("/", 1)[1], parent(path), files[path], rec_of)
 
@@ -84,8 +85,9 @@ def main():
     # The change journal takes its clusters before free ones are picked.
     plant_journal(vol, alloc, rec_of(next(spare)), ref_of("$Extend"), parent("Users/alice/x"), parent("Users/alice/Pictures/x"), pic)
     reserved = set()
-    # memo.doc goes to the unpartitioned tail with the rest: the volume is full.
-    for name in ("security.evtx-chunk", "chat.sqlite", "photo.jpg", "draft.docx"):
+    # memo.doc and the event log chunk go to the unpartitioned tail with the
+    # rest: the volume is full.
+    for name in ("chat.sqlite", "photo.jpg", "draft.docx"):
         data = samples.pop(name)
         lcn = find_free(alloc, (len(data) + vol.cluster - 1) // vol.cluster, reserved)
         vol.d[lcn * vol.cluster:lcn * vol.cluster + len(data)] = data
@@ -120,6 +122,14 @@ def main():
         lk = fixture_carve.LOOKALIKES[i % len(fixture_carve.LOOKALIKES)]
         tail[p:p + len(lk)] = lk
         p += 4096
+    # Internet Explorer: a deleted index.dat, then loose records at 128-byte
+    # boundaries (they keep that alignment on disk).
+    whole, loose = fixture_windows.ie_free_space()
+    tail[p:p + len(whole)] = whole
+    p += len(whole) + 4096
+    for r in loose:
+        tail[p:p + len(r)] = r
+        p += 4096 + 128
     cut = fixture_carve.jpeg()[:-30]  # starts in the last sector, runs into the end of the disk: incomplete
     tail[len(tail) - 512:len(tail) - 512 + len(cut)] = cut
     open(os.path.join(FIX, "disk-win.img"), "wb").write(bytes(mbr) + b"\0" * (gap - 512) + out + bytes(tail))

@@ -28,6 +28,7 @@ pub const TARGETS: &[Target] = &[
     Target { name: "usn", run: usn, seeds: &["crates/kokino-fuzz/seeds/usn"] },
     Target { name: "shellbags", run: shellbags, seeds: &["crates/kokino-fuzz/seeds/shellbags"] },
     Target { name: "task", run: task, seeds: &["tests/fixtures/win/Windows_System32_Tasks_Updater Check", "tests/fixtures/win/Windows_System32_Tasks_Microsoft_Windows_WinUpdate_Sync", "tests/fixtures/win/Windows_System32_Tasks_Microsoft_Windows_Defrag_ScheduledDefrag", "tests/fixtures/win/Windows_System32_config_SOFTWARE"] },
+    Target { name: "iecache", run: iecache, seeds: &["tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_History_History.IE5_MSHist012025031020250311_index.dat", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_History_History.IE5_index.dat", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_Temporary Internet Files_Content.IE5_index.dat", "tests/fixtures/win/Users_alice_AppData_Roaming_Microsoft_Windows_IEDownloadHistory_index.dat"] },
     Target { name: "ese", run: ese, seeds: &["tests/fixtures/win/SRUDB-4k.dat", "tests/fixtures/win/SRUDB.dat", "tests/fixtures/win/ese-deep.dat"] },
     Target { name: "registry", run: registry, seeds: &["tests/fixtures/win/Users_alice_NTUSER.DAT", "tests/fixtures/win/Windows_System32_config_SAM", "tests/fixtures/win/Windows_System32_config_SOFTWARE", "tests/fixtures/win/Windows_System32_config_SYSTEM", "tests/fixtures/win/Windows_AppCompat_Programs_Amcache.hve"] },
     Target { name: "evtx", run: evtx, seeds: &["tests/fixtures/win/Windows_System32_winevt_Logs_Security.evtx", "tests/fixtures/win/Windows_System32_winevt_Logs_System.evtx", "tests/fixtures/win/Windows_System32_winevt_Logs_Microsoft-Windows-PowerShell_4Operational.evtx"] },
@@ -272,6 +273,21 @@ fn task(d: &[u8]) {
     let _ = kokino_artifacts::task::dynamic_info(d);
     // A SOFTWARE hive: TaskCache joined with no task files.
     kokino_analysis::windows::fuzz_tasks(d);
+}
+
+fn iecache(d: &[u8]) {
+    use kokino_artifacts::{browser::WebActivity, iecache};
+    let _ = iecache::parse(d);
+    // As each kind of history file, so every conversion path runs.
+    for p in ["/Users/a/History.IE5/MSHist012025031020250311/index.dat", "/Users/a/History.IE5/index.dat", "/Users/a/Content.IE5/index.dat", "/Users/a/IEDownloadHistory/index.dat"] {
+        let mut src = iecache::classify(p, "index.dat").unwrap();
+        let _ = iecache::to_web(&mut src, d, &mut WebActivity::default());
+    }
+    // As free space: a record at every 128-byte boundary.
+    let mut s: &[u8] = d;
+    for at in (0..d.len() as u64).step_by(128) {
+        let _ = kokino_analysis::carve::ie_record(&mut s, at);
+    }
 }
 
 fn ese(d: &[u8]) {
