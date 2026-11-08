@@ -64,7 +64,8 @@ checked against public test images with known answers where they exist
 - [x] Internet Explorer 4 to 9 history, cache and downloads (index.dat), with deleted entries and records carved from free space (unreleased)
 - [ ] Internet Explorer cookies (index.dat and the cookie text files)
 - [x] Scheduled tasks (task files and TaskCache, hidden tasks flagged) (unreleased)
-- [ ] Deleted registry keys and transaction logs
+- [x] Deleted registry keys and values from free cells in the hives (unreleased)
+- [ ] Registry transaction logs (.LOG1/.LOG2) applied to hives that were not cleanly saved
 - [ ] Legacy .evt event logs
 
 ### Content

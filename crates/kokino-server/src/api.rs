@@ -2095,6 +2095,28 @@ fn report_windows(h: &mut String, w: &kokino_analysis::windows::WindowsArtifacts
         }
         h.push_str("</table>");
     }
+    if !w.reg_deleted_keys.is_empty() || !w.reg_deleted_values.is_empty() {
+        // Keys that recorded user activity first, then the rest; at most 300.
+        let mut keys: Vec<&kokino_analysis::windows::RegDeletedKey> = w.reg_deleted_keys.iter().collect();
+        keys.sort_by_key(|k| (k.notable.is_empty(), std::cmp::Reverse(k.last_written)));
+        h.push_str(&format!("<h4>Deleted registry keys ({}; {} deleted values; recovered from free space in the hives)</h4><table><tr><th>Hive</th><th>Key</th><th>Last changed (UTC)</th><th>Values</th><th>Records</th></tr>", w.reg_deleted_keys.len(), w.reg_deleted_values.len()));
+        for k in keys.iter().take(300) {
+            let vals: Vec<String> = k.values.iter().take(8).map(|v| format!("{} = {}", esc(&v.name), esc(&v.text.chars().take(120).collect::<String>()))).collect();
+            h.push_str(&format!(
+                "<tr><td>{}</td><td><code>{}</code>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                esc(&k.hive),
+                esc(&k.path),
+                if k.complete_path { "" } else { " <span class=muted>(parent not found)</span>" },
+                t(k.last_written),
+                vals.join("<br>"),
+                esc(&k.notable)
+            ));
+        }
+        h.push_str("</table>");
+        if keys.len() > 300 {
+            h.push_str(&format!("<p class=muted>{} more deleted keys are listed in Kokino.</p>", keys.len() - 300));
+        }
+    }
     h.push_str(&format!(
         "<p class=muted>{} artifact files read: {}. {} notable events of {} records.</p>",
         w.sources.len(),

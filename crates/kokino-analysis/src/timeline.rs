@@ -21,7 +21,7 @@ pub struct TimelineEvent {
     pub t: u64,
     pub macb: String,
     /// "SI" or "FN" (file times), "VISIT", "DL" or "SEARCH" (browser),
-    /// "EXEC", "OPEN", "USB", "INST", "NET", "EVT" or "USN" (Windows artifacts).
+    /// "EXEC", "OPEN", "USB", "INST", "NET", "EVT", "USN" or "REG" (Windows artifacts).
     pub src: &'static str,
     /// Index into `FsAnalysis::files`, the matching `web` list, or
     /// `windows.timeline`.
@@ -33,7 +33,7 @@ pub fn is_web(src: &str) -> bool {
 }
 
 pub fn is_windows(src: &str) -> bool {
-    matches!(src, "EXEC" | "OPEN" | "USB" | "INST" | "NET" | "EVT" | "USN")
+    matches!(src, "EXEC" | "OPEN" | "USB" | "INST" | "NET" | "EVT" | "USN" | "REG")
 }
 
 /// Events that do not point at a file row.
@@ -95,6 +95,7 @@ pub fn build(files: &[FileRow], web: &WebActivity, windows: &WindowsArtifacts, l
             "INST" => "INST",
             "NET" => "NET",
             "FILE" => "USN",
+            "REG" => "REG",
             _ => "EVT",
         };
         out.push(TimelineEvent { t: w.t, macb: String::new(), src, idx: i as u32 });

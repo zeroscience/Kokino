@@ -32,13 +32,14 @@ Every indicator is a fixed, documented rule in
 | `usn_wipe_rename` | Secure deletion | 0.85 | 2 | the change journal shows a file renamed to one repeated letter (AAAA.AAA); counted once per file |
 | `evtx_cleared` | Log tampering | 0.55 | 1 | Security.evtx missing or <= 68 KiB |
 | `prefetch_empty` | Log tampering | 0.30 | 1 | Windows\Prefetch exists with no live .pf files |
-| `browser_history_cleared` | Log tampering | 0.45 | 1 | a browser history database with no visits and no URLs, or a deleted history database |
+| `browser_history_cleared` | Log tampering | 0.45 | 1 | a browser history database with no visits and no URLs, or a deleted history database (for Internet Explorer, only the main history index.dat counts: cache and download lists hold no visits, and Windows deletes daily and weekly files itself) |
 | `antiforensic_web` | Tool presence | 0.40 | 2 | a download of a known wiping/cleaning tool, or a search about wiping, shredding, permanent deletion, clearing traces or hidden volumes |
 | `log_cleared_event` | Log tampering | 0.60 | 1 | event 1102 (Security log cleared) or 104 (another log cleared), which names the account and time |
 | `linux_antiforensic_command` | Tool presence | 0.60 | 2 | shell, apt or sudo history shows shred / wipe / srm, history -c or HISTFILE disabled, log or history files removed, journal vacuumed, touch -d, clock changes, reverse shells or kernel modules loaded |
 | `shell_history_cleared` | Log tampering | 0.45 | 1 | a user's .bash_history is empty or a symbolic link to /dev/null |
 | `linux_log_emptied` | Log tampering | 0.50 | 1 | wtmp empty, or auth.log / secure empty while older rotations hold entries |
 | `ld_preload` | Persistence | 0.60 | 1 | /etc/ld.so.preload lists a library (user-mode rootkit technique) |
+| `registry_traces_deleted` | Trace removal | 0.50 | 2 | a whole registry key that records user activity (recent documents, Run box, typed paths and addresses, dialog history, Explorer searches, UserAssist, ShellBags, mounted drives, Office recent files) found deleted in a hive's free space; one count per key |
 | `task_hidden_sd` | Persistence | 0.70 | 1 | a scheduled task's TaskCache\Tree key has no SD value while the hive's other tasks have one (hidden from schtasks and the Task Scheduler; the Tarrask technique) |
 | `tool_execution_record` | Tool presence | 0.50 | 1 | UserAssist, Amcache or a 4688 process-creation event shows a known wiping / cleaning tool started (independent of Prefetch) |
 
@@ -63,9 +64,10 @@ NTFS volume and wraps it in an MBR disk. The test
 `finds_planted_antiforensics` asserts that each rule fires on exactly the
 planted file. New rules must add a planted case there. The Windows artifact
 rules are planted in `scripts/make_win_fixture.py` (an SDelete rename chain
-in the change journal and a hidden scheduled task, tested by
-`finds_windows_artifacts`), and the journal and task rules are also tested
-on built-up data (`journal_rules`, `hidden_task_rule`).
+in the change journal, a hidden scheduled task and a deleted TypedURLs key in
+alice's NTUSER.DAT, tested by `finds_windows_artifacts`), and the journal,
+task and registry rules are also tested on built-up data (`journal_rules`,
+`hidden_task_rule`, `deleted_trace_keys_rule`).
 
 ## Known limits
 

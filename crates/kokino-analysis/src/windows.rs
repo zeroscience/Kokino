@@ -60,6 +60,46 @@ pub struct WindowsArtifacts {
     /// Scheduled tasks: task files and the registry's TaskCache.
     #[serde(default)]
     pub tasks: Vec<ScheduledTask>,
+    /// Registry keys recovered from free space in the hives.
+    #[serde(default)]
+    pub reg_deleted_keys: Vec<RegDeletedKey>,
+    /// Deleted values: of live keys (from older copies of the key) and
+    /// values whose key is not known.
+    #[serde(default)]
+    pub reg_deleted_values: Vec<RegDeletedValue>,
+}
+
+/// A deleted registry key, recovered from a free cell of a hive.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RegDeletedKey {
+    /// The hive file (index into the file list).
+    pub file: u32,
+    /// HKLM\SOFTWARE, HKU\alice (NTUSER.DAT), ...
+    pub hive: String,
+    pub path: String,
+    /// When the key last changed before it was deleted.
+    pub last_written: u64,
+    /// False: a parent key is gone too and was not found.
+    pub complete_path: bool,
+    pub subkeys: u32,
+    pub values: Vec<RegDeletedValue>,
+    /// What the key records, when it is a known trace of user activity.
+    pub notable: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RegDeletedValue {
+    pub file: u32,
+    pub hive: String,
+    /// Empty when the value was found on its own.
+    pub key: String,
+    pub name: String,
+    pub kind: String,
+    pub text: String,
+    pub size: u64,
+    /// The data's cell is in use again; the data may be newer than the value.
+    pub data_reused: bool,
+    pub notable: String,
 }
 
 /// What SRUM holds: per program and user, hour by hour, how much it sent
@@ -208,6 +248,8 @@ impl WindowsArtifacts {
             // Hourly rows are served page by page too.
             srum: self.srum.as_ref().map(|s| Srum { network: vec![], usage: vec![], ..s.clone() }),
             tasks: self.tasks.clone(),
+            reg_deleted_keys: self.reg_deleted_keys.clone(),
+            reg_deleted_values: self.reg_deleted_values.clone(),
         }
     }
 }
@@ -619,6 +661,9 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
         }
     }
     link_bags(&mut w, files);
+    for (kind, i, h) in &hives {
+        deleted_registry(&mut w, h, *kind, *i, &files[*i]);
+    }
     let software = hives.iter().find(|(k, _, _)| *k == Kind::Software).map(|(_, _, h)| h);
     if software.is_some() || !task_files.is_empty() {
         scheduled_tasks(&mut w, software, task_files, files);
@@ -635,6 +680,108 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
     }
     finish(&mut w);
     w
+}
+
+const MAX_REG_DELETED: usize = 20_000;
+
+/// Keys that record what a user did; a cleaner deletes these.
+const REG_TRACES: &[(&str, &str)] = &[
+    ("\\explorer\\recentdocs", "recent documents"),
+    ("\\explorer\\typedpaths", "paths typed in Explorer"),
+    ("\\explorer\\runmru", "Run box history"),
+    ("\\explorer\\userassist", "programs run (UserAssist)"),
+    ("\\explorer\\comdlg32", "files opened and saved in dialogs"),
+    ("\\explorer\\wordwheelquery", "Explorer searches"),
+    ("\\explorer\\mountpoints2", "drives and shares mounted"),
+    ("\\shell\\bagmru", "folders opened (ShellBags)"),
+    ("\\shell\\bags", "folders opened (ShellBags)"),
+    ("\\internet explorer\\typedurls", "addresses typed in Internet Explorer"),
+    ("\\file mru", "Office recent files"),
+    ("\\place mru", "Office recent folders"),
+    ("\\recent file list", "recent files of a program"),
+    ("\\currentversion\\run", "autostart (Run)"),
+    ("\\enum\\usbstor", "USB storage devices"),
+    ("\\enum\\usb\\", "USB devices"),
+    ("\\windows portable devices\\devices", "portable devices"),
+    ("\\networklist\\profiles", "networks connected to"),
+    ("\\terminal server client", "remote desktop connections made"),
+    ("\\bam\\state\\usersettings", "programs run (BAM)"),
+    ("\\appcompatflags\\compatibility assistant", "programs run (Compatibility Assistant)"),
+];
+
+/// Traces a user's own activity leaves (not autostart or device keys,
+/// which installers and Windows remove themselves).
+pub fn user_activity_trace(notable: &str) -> bool {
+    !notable.is_empty() && !matches!(notable, "autostart (Run)" | "USB storage devices" | "USB devices" | "portable devices" | "networks connected to")
+}
+
+fn reg_trace(path: &str) -> String {
+    let p = format!("\\{}\\", path.to_lowercase());
+    REG_TRACES.iter().find(|(k, _)| p.contains(k)).map(|(_, v)| v.to_string()).unwrap_or_default()
+}
+
+fn reg_kind(k: u32) -> String {
+    match k {
+        0 => "REG_NONE".into(),
+        1 => "REG_SZ".into(),
+        2 => "REG_EXPAND_SZ".into(),
+        3 => "REG_BINARY".into(),
+        4 => "REG_DWORD".into(),
+        5 => "REG_DWORD_BIG_ENDIAN".into(),
+        6 => "REG_LINK".into(),
+        7 => "REG_MULTI_SZ".into(),
+        11 => "REG_QWORD".into(),
+        k => format!("type {}", k),
+    }
+}
+
+fn reg_value(d: &registry::DeletedValue, file: u32, hive: &str) -> RegDeletedValue {
+    let v = &d.value;
+    let key = d.key.clone().unwrap_or_default();
+    let text = match v.kind {
+        registry::REG_SZ | registry::REG_EXPAND_SZ | registry::REG_DWORD | registry::REG_QWORD | registry::REG_MULTI_SZ => v.string(),
+        _ => {
+            // Binary: a UTF-16 file name when it starts like one (MRU lists), else hex.
+            let s = kokino_artifacts::bin::utf16(&v.data);
+            if s.chars().count() >= 3 && s.chars().all(|c| !c.is_control()) {
+                s
+            } else {
+                v.data.iter().take(48).map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ") + if v.data.len() > 48 { " ..." } else { "" }
+            }
+        }
+    };
+    // UserAssist names are ROT13.
+    let name = if key.to_lowercase().contains("\\userassist\\") { rot13(&v.name) } else { v.name.clone() };
+    RegDeletedValue { file, hive: hive.to_string(), notable: if key.is_empty() { String::new() } else { reg_trace(&key) }, key, name, kind: reg_kind(v.kind), text, size: v.data.len() as u64, data_reused: d.data_reused }
+}
+
+/// Deleted keys and values in one hive.
+fn deleted_registry(w: &mut WindowsArtifacts, h: &Hive, kind: Kind, i: usize, f: &FileRow) {
+    let hive = match kind {
+        Kind::System => "HKLM\\SYSTEM".to_string(),
+        Kind::Software => "HKLM\\SOFTWARE".to_string(),
+        Kind::Sam => "HKLM\\SAM".to_string(),
+        Kind::NtUser => format!("HKU\\{} (NTUSER.DAT)", user_of(&f.e.path)),
+        Kind::UsrClass => format!("HKU\\{} (UsrClass.dat)", user_of(&f.e.path)),
+        Kind::Amcache => "Amcache.hve".to_string(),
+        _ => return,
+    };
+    let d = h.deleted();
+    let file = i as u32;
+    for k in d.keys {
+        if w.reg_deleted_keys.len() >= MAX_REG_DELETED {
+            break;
+        }
+        let values = k.values.iter().map(|v| reg_value(v, file, &hive)).collect();
+        let notable = reg_trace(&k.path);
+        w.reg_deleted_keys.push(RegDeletedKey { file, hive: hive.clone(), notable, path: k.path, last_written: k.last_written, complete_path: k.complete_path, subkeys: k.subkey_count, values });
+    }
+    for v in d.values.iter().chain(&d.orphans) {
+        if w.reg_deleted_values.len() >= MAX_REG_DELETED {
+            break;
+        }
+        w.reg_deleted_values.push(reg_value(v, file, &hive));
+    }
 }
 
 /// Text of the first <tag> element in an XML file (UTF-8 or UTF-16).
@@ -2033,6 +2180,14 @@ fn finish(w: &mut WindowsArtifacts) {
             t.push(WinTime { t: c.c.t, kind: "FILE".into(), what: c.path.clone(), detail });
         }
     }
+    for k in w.reg_deleted_keys.iter().filter(|k| k.complete_path) {
+        t.push(WinTime {
+            t: k.last_written,
+            kind: "REG".into(),
+            what: format!("{}\\{}", k.hive, k.path),
+            detail: format!("deleted registry key, last changed{}", if k.notable.is_empty() { String::new() } else { format!("; it recorded {}", k.notable) }),
+        });
+    }
     t.retain(|x| x.t > 0);
     t.sort_by(|a, b| a.t.cmp(&b.t));
     w.timeline = t;
@@ -2041,6 +2196,7 @@ fn finish(w: &mut WindowsArtifacts) {
 /// Lines for the impact summary.
 pub fn impact(w: &WindowsArtifacts) -> Vec<String> {
     let mut out = vec![];
+    let traces: Vec<&RegDeletedKey> = w.reg_deleted_keys.iter().filter(|k| user_activity_trace(&k.notable)).collect();
     let c = &w.computer;
     if !c.name.is_empty() || !c.os.is_empty() {
         out.push(format!("Computer {} running {} {} (build {}), installed {}.", or(&c.name, "unnamed"), c.os, c.version, or(&c.build, "unknown"), iso(c.install_time)));
@@ -2124,6 +2280,18 @@ pub fn impact(w: &WindowsArtifacts) -> Vec<String> {
         let away = w.shellbags.iter().filter(|b| matches!(b.bag.kind.as_str(), "drive" | "network") || b.bag.path.starts_with("\\\\")).count();
         out.push(format!("ShellBags record {} folder(s) users opened in Explorer{}.", w.shellbags.len(), if away > 0 { format!(", including {} drive or network location(s)", away) } else { String::new() }));
     }
+    if !w.reg_deleted_keys.is_empty() || !w.reg_deleted_values.is_empty() {
+        let mut line = format!("{} deleted registry key(s) and {} deleted value(s) recovered from free space in the hives", w.reg_deleted_keys.len(), w.reg_deleted_values.len());
+        if !traces.is_empty() {
+            let mut what: Vec<String> = traces.iter().map(|k| format!("{} ({})", k.path, k.notable)).collect();
+            what.sort();
+            what.dedup();
+            let n = what.len();
+            what.truncate(5);
+            line.push_str(&format!("; {} of the keys recorded user activity: {}{}", traces.len(), what.join(", "), if n > 5 { ", ..." } else { "" }));
+        }
+        out.push(line + ".");
+    }
     out
 }
 
@@ -2189,6 +2357,14 @@ pub fn inspect(name: &str, data: &[u8], full: bool) -> anyhow::Result<Value> {
             }
         });
         let mut v = json!({"kind": "registry", "file": name, "root": h.root().name(), "dirty": h.dirty, "version": [h.version.0, h.version.1], "embedded_name": h.embedded_name, "keys": keys, "values": values, "max_depth": max_depth});
+        let del = h.deleted();
+        let text = |d: &registry::DeletedValue| json!({"key": d.key, "name": d.value.name, "type": d.value.kind, "text": d.value.string(), "size": d.value.data.len(), "data_reused": d.data_reused});
+        v["deleted"] = json!({"keys": del.keys.len(), "values_of_live_keys": del.values.len(), "values_without_key": del.orphans.len(), "old_copies_of_live_keys": del.old_copies});
+        if full {
+            v["deleted_keys"] = json!(del.keys.iter().map(|k| json!({"path": k.path, "complete_path": k.complete_path, "last_written": kokino_core::time::filetime_to_iso(k.last_written), "subkeys": k.subkey_count, "values": k.values.iter().map(text).collect::<Vec<_>>()})).collect::<Vec<_>>());
+            v["deleted_values"] = json!(del.values.iter().map(text).collect::<Vec<_>>());
+            v["values_without_key"] = json!(del.orphans.iter().map(text).collect::<Vec<_>>());
+        }
         if full {
             v["tree"] = json!(dump);
         }

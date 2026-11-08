@@ -88,6 +88,15 @@ const RULES: &[Rule] = &[
         caveat: "A damaged or partly restored SOFTWARE hive can also lose values. Check the task's command, its task file and when the Tree key was last written.",
     },
     Rule {
+        id: "registry_traces_deleted",
+        title: "Registry keys that record user activity were deleted",
+        category: "Trace removal",
+        weight: 0.5,
+        k: 2.0,
+        explanation: "Whole keys that Windows uses to record what a user did (recent documents, the Run box, typed paths and addresses, files opened in dialogs, Explorer searches, UserAssist, ShellBags, mounted drives, Office recent files) were found deleted in a hive's free space. Windows trims these lists itself by dropping single entries; removing the key is what cleaners such as CCleaner and privacy tools do.",
+        caveat: "Uninstalling a program removes its own keys, and Windows can rebuild some lists (ShellBags) after a profile repair. Check what the deleted key held, when it last changed, and whether a cleaner ran around that time.",
+    },
+    Rule {
         id: "ld_preload",
         title: "/etc/ld.so.preload loads a library into every program",
         category: "Persistence",
@@ -417,6 +426,10 @@ pub fn evaluate(files: &mut [FileRow], now: u64, web: &WebActivity, win: &Window
             hits.entry("task_hidden_sd").or_default().push(i);
         }
     }
+    // Whole user-activity keys deleted; one hit per key, on its hive file.
+    for k in win.reg_deleted_keys.iter().filter(|k| crate::windows::user_activity_trace(&k.notable)) {
+        hits.entry("registry_traces_deleted").or_default().push(k.file as usize);
+    }
     if let Some(j) = &win.journal {
         let mut wiped: Vec<u64> = j.changes.iter().filter(|c| c.c.reasons & kokino_artifacts::usn::RENAME_NEW_NAME != 0 && sdelete_like(&c.c.name)).map(|c| c.c.record).collect();
         wiped.sort();
@@ -620,5 +633,19 @@ mod tests {
         let hit = evaluate(&mut files, 0, &WebActivity::default(), &win, &LinuxArtifacts::default(), false);
         assert!(hit.iter().any(|i| i.id == "task_hidden_sd" && i.count == 1), "{:?}", hit.iter().map(|i| &i.id).collect::<Vec<_>>());
         assert!(files[1].flags.iter().any(|f| f == "task_hidden_sd"));
+    }
+
+    #[test]
+    fn deleted_trace_keys_rule() {
+        let mut files = vec![row(0, "/$MFT", false, 0, None), row(41, "/Users/alice/NTUSER.DAT", false, 0, None)];
+        let mut win = WindowsArtifacts::default();
+        // An autostart entry removed by an uninstaller does not count.
+        win.reg_deleted_keys.push(crate::windows::RegDeletedKey { file: 1, notable: "autostart (Run)".into(), ..Default::default() });
+        let none = evaluate(&mut files, 0, &WebActivity::default(), &win, &LinuxArtifacts::default(), false);
+        assert!(!none.iter().any(|i| i.id == "registry_traces_deleted"));
+        win.reg_deleted_keys.push(crate::windows::RegDeletedKey { file: 1, notable: "Run box history".into(), ..Default::default() });
+        let hit = evaluate(&mut files, 0, &WebActivity::default(), &win, &LinuxArtifacts::default(), false);
+        assert!(hit.iter().any(|i| i.id == "registry_traces_deleted" && i.count == 1));
+        assert!(files[1].flags.iter().any(|f| f == "registry_traces_deleted"));
     }
 }

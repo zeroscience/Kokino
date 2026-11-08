@@ -123,7 +123,13 @@ Internet Explorer index.dat (unreleased):
 |---|---|---|--:|---|
 | `iecache` | index.dat (header, hash tables, allocation bitmap, URL, LEAK and REDR records, history titles, cache headers, IE 9 download entries), the conversion of each kind of file into web activity, and records read from free space at every 128-byte boundary | 10 + 10 min | 21,653,615 | 1: a record cut off by the end of the file, with its data offset past the bytes that exist, was sliced out of range (panic); fixed |
 
-In all: 360,887,710 inputs over 27 targets, and 29 distinct problems
+Deleted registry keys (unreleased):
+
+| Target | What it covers | Rounds | Inputs in all | Distinct problems found |
+|---|---|---|--:|---|
+| `registry` | again, now also searching every hive bin's free space for deleted keys and values, rebuilding their paths and reading their value lists (the seed hives hold deleted keys) | 10 min | 18,700,883 | none |
+
+In all: 379,588,593 inputs over 27 targets, and 29 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed

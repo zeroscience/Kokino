@@ -37,7 +37,8 @@ use stats::Stats;
 ///    journal, ShellBags, BAM/DAM and SRUM.
 /// 7: scheduled tasks (`WindowsArtifacts::tasks`).
 /// 8: Internet Explorer index.dat history, cache and downloads (`WebActivity::cache`).
-pub const SCHEMA_VERSION: u32 = 8;
+/// 9: deleted registry keys and values (`WindowsArtifacts::reg_deleted_keys`).
+pub const SCHEMA_VERSION: u32 = 9;
 
 /// Bytes read from the start of every file for signature and entropy.
 const HEAD: usize = 8 * 1024;
@@ -519,6 +520,32 @@ mod tests {
         let afw = fs.indicators.iter().find(|i| i.id == "antiforensic_web").expect("antiforensic_web");
         assert!(afw.records.contains(&ie[0].1.record) && afw.records.contains(&ie[3].1.record), "{:?}", afw);
         assert!(fs.stats.impact.iter().any(|l| l.starts_with("Internet Explorer history, day 2025-03-10 of user alice: 3 visits, 1 search") && l.contains("1 deleted entry recovered")), "{:?}", fs.stats.impact);
+
+        // Deleted registry keys and values (fixture_windows.py, hive_ntuser and hive_usrclass).
+        let keys: Vec<(&str, &str, bool)> = w.reg_deleted_keys.iter().map(|k| (k.hive.as_str(), k.path.as_str(), k.complete_path)).collect();
+        assert_eq!(keys, [
+            ("HKU\\alice (NTUSER.DAT)", "Software\\Microsoft\\Internet Explorer", true),
+            ("HKU\\alice (NTUSER.DAT)", "Software\\Microsoft\\Internet Explorer\\TypedURLs", true),
+            ("HKU\\alice (NTUSER.DAT)", "Software\\Sysinternals", true),
+            ("HKU\\alice (NTUSER.DAT)", "Software\\Sysinternals\\SDelete", true),
+        ], "{:?}", w.reg_deleted_keys);
+        let typed = &w.reg_deleted_keys[1];
+        assert_eq!((typed.notable.as_str(), typed.values[0].name.as_str(), typed.values[0].text.as_str()), ("addresses typed in Internet Explorer", "url1", "http://drop.test/"));
+        let eula = &w.reg_deleted_keys[3];
+        assert_eq!((eula.values[0].name.as_str(), eula.values[0].kind.as_str(), eula.values[0].text.as_str()), ("EulaAccepted", "REG_DWORD", "1"));
+        assert_eq!(iso(eula.last_written), "2026-10-20T10:19:00.0000000Z");
+        let vals: Vec<(&str, &str, &str, &str)> = w.reg_deleted_values.iter().map(|v| (v.hive.as_str(), v.key.as_str(), v.name.as_str(), v.text.as_str())).collect();
+        assert!(vals.contains(&("HKU\\alice (NTUSER.DAT)", "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU", "c", "sdelete64 plan.docx\\1")), "{:?}", vals);
+        assert!(vals.contains(&("HKU\\alice (UsrClass.dat)", "", "LastFile", "C:\\Users\\alice\\Desktop\\keys.txt")), "{:?}", vals);
+        assert_eq!(vals.len(), 2, "{:?}", vals);
+        assert!(w.reg_deleted_values.iter().find(|v| v.name == "c").unwrap().notable == "Run box history");
+        assert!(w.timeline.iter().any(|t| t.kind == "REG" && t.what == "HKU\\alice (NTUSER.DAT)\\Software\\Microsoft\\Internet Explorer\\TypedURLs" && t.detail.contains("addresses typed")));
+        let tl = timeline::build(&fs.files, &fs.web, w, &[]);
+        assert!(tl.iter().any(|e| e.src == "REG"));
+        assert!(fs.indicators.iter().any(|i| i.id == "registry_traces_deleted" && i.count == 1), "{:?}", fs.indicators.iter().map(|i| (&i.id, i.count)).collect::<Vec<_>>());
+        assert!(fs.stats.impact.iter().any(|l| l.starts_with("4 deleted registry key(s) and 2 deleted value(s)") && l.contains("TypedURLs (addresses typed in Internet Explorer)")), "{:?}", fs.stats.impact);
+        // Hives without deleted cells report nothing.
+        assert!(!w.reg_deleted_keys.iter().any(|k| k.hive == "HKLM\\SOFTWARE" || k.hive == "HKLM\\SYSTEM"));
 
         // Change journal planted by make_win_fixture.py (journal()).
         let j = w.journal.as_ref().expect("change journal");

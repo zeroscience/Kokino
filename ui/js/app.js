@@ -990,11 +990,11 @@ async function timelineTab(ctx) {
     const params = new URLSearchParams({ q: q.value, from: f && !raw ? dayStart(f) : f, to: t && !raw ? dayStart(next(t)) : t, only, offset, limit: 400 });
     const r = await api(`${base}?${params}`);
     total = r.total;
-    const WIN = { EXEC: "Program run", OPEN: "File or folder opened", USB: "USB device", INST: "Program installed", NET: "Network", EVT: "Event", USN: "File change (change journal)" };
+    const WIN = { EXEC: "Program run", OPEN: "File or folder opened", USB: "USB device", INST: "Program installed", NET: "Network", EVT: "Event", USN: "File change (change journal)", REG: "Registry key deleted" };
     const rows = r.items.map((e) => {
       const art = e.web || e.windows;
       const click = e.web ? () => webDetail(e.src === "DL" ? "Download" : e.src === "SEARCH" ? "Search" : "Page visit", [[`Time (${zoneName()})`, ts(e.t)], ["What", e.path], ["Where", e.detail]])
-        : e.windows ? () => webDetail(WIN[e.src] || e.src, [[`Time (${zoneName()})`, ts(e.t)], ["What", e.path], ["Detail", e.detail], ["More", h("a", { href: `#/c/${ctx.cid}/e/${ctx.eid}/system?fi=${ctx.fi}&sec=${{ EXEC: "exec", OPEN: "files", USB: "devices", NET: "devices", INST: "software", USN: "journal" }[e.src] || "events"}`, onclick: closeModal }, "Open in the System summary")]])
+        : e.windows ? () => webDetail(WIN[e.src] || e.src, [[`Time (${zoneName()})`, ts(e.t)], ["What", e.path], ["Detail", e.detail], ["More", h("a", { href: `#/c/${ctx.cid}/e/${ctx.eid}/system?fi=${ctx.fi}&sec=${{ EXEC: "exec", OPEN: "files", USB: "devices", NET: "devices", INST: "software", USN: "journal", REG: "registry" }[e.src] || "events"}`, onclick: closeModal }, "Open in the System summary")]])
         : () => fileDrawer(ctx, e.idx);
       return h("tr", { class: e.deleted ? "deleted" : null, onclick: click },
         h("td.mono", ts(e.t, undefined, art ? {} : fsClock(ctx))), h("td", art ? h("span.muted", e.macb) : macb(e.macb)), h("td", h("span.src." + e.src, { title: WIN[e.src] || (e.src === "DEL" ? "Inode deleted (dtime)" : null) }, !ntfs && e.src === "SI" ? "INODE" : e.src)),
@@ -1330,7 +1330,7 @@ async function searchTab(ctx) {
 }
 
 // ---------------------------------------------------------------- Windows system summary
-const SYS_SECTIONS = [["overview", "Overview"], ["exec", "Programs run"], ["files", "Files and folders"], ["folders", "Folders (ShellBags)"], ["journal", "Change journal"], ["srum", "Network use (SRUM)"], ["devices", "USB and networks"], ["logons", "Accounts and logons"], ["events", "Events"], ["software", "Software and autostart"], ["sources", "Sources"]];
+const SYS_SECTIONS = [["overview", "Overview"], ["exec", "Programs run"], ["files", "Files and folders"], ["folders", "Folders (ShellBags)"], ["journal", "Change journal"], ["srum", "Network use (SRUM)"], ["devices", "USB and networks"], ["logons", "Accounts and logons"], ["events", "Events"], ["software", "Software and autostart"], ["registry", "Deleted registry"], ["sources", "Sources"]];
 // The Windows artifacts API sends raw FILETIMEs (100 ns since 1601); minute
 // precision survives the conversion to a JavaScript number.
 const ftIso = (t) => (t ? new Date(t / 10000 - 11644473600000).toISOString().replace(/\.\d+Z$/, "Z") : "");
@@ -1516,6 +1516,39 @@ async function systemTab(ctx) {
         r.journal ? card("Change journal ($UsnJrnl)", journalSummary()) : null,
         card("Accounts", usersTable()),
       ];
+    },
+    registry: () => {
+      const keys = w.reg_deleted_keys || [], vals = w.reg_deleted_values || [];
+      if (!keys.length && !vals.length) return [h("div.card.empty", r.schema < 9 ? "Deleted registry keys were not looked for: this evidence was analyzed by an earlier Kokino version." : "No deleted registry keys or values were found in the hives' free space.")];
+      let q = "", traces = false;
+      const out = h("div.stack");
+      const hit = (s) => !q || s.toLowerCase().includes(q);
+      const keyDetail = (k) => webDetail(`Deleted key: ${k.path.split("\\").pop()}`, [
+        ["Hive", k.hive], ["Key", k.path], [`Last changed (${zoneName()})`, t16(k.last_written)], ["Records", k.notable],
+        ["Path", k.complete_path ? "complete: its parent key still exists" : "incomplete: a parent key is gone too and was not found; the path starts at the oldest parent found"],
+        ["Subkeys it had", String(k.subkeys)],
+        ["Values", k.values.length ? h("div.stack", k.values.map((v) => h("div", h("b", v.name || "(default)"), h("span.muted", ` ${v.kind}`), h("div.mono", { style: { wordBreak: "break-all" } }, v.text), v.data_reused ? h("div.muted", "The data's cell is in use again: these bytes may belong to newer data.") : null))) : "none recovered"],
+        ["Hive file", fileOf(k.file)],
+      ]);
+      const fill = () => {
+        const ks = keys.filter((k) => (!traces || k.notable) && hit(`${k.hive} ${k.path} ${k.notable} ${k.values.map((v) => v.name + " " + v.text).join(" ")}`));
+        const vs = vals.filter((v) => (!traces || v.notable) && hit(`${v.hive} ${v.key} ${v.name} ${v.text}`));
+        out.replaceChildren(
+          card(`Deleted keys (${num(ks.length)})`, ks.length ? table([`Last changed (${zoneName()})`, "Key", "Values", "Records"], ks.slice(0, 3000).map((k) =>
+            h("tr", { onclick: () => keyDetail(k) }, h("td.mono", t16(k.last_written)),
+              h("td.nm", h("b", k.path), h("div.muted", k.hive), k.complete_path ? null : h("span.pill.warn", { title: "A parent key is gone too and was not found" }, "parent not found")),
+              h("td.nm", k.values.slice(0, 3).map((v) => h("div.ell", h("b", v.name || "(default)"), " = ", v.text)), k.values.length > 3 ? h("div.muted", `${k.values.length - 3} more`) : null),
+              h("td", k.notable ? h("span.pill.warn", k.notable) : null)))) : h("p.muted", "None.")),
+          card(`Deleted values (${num(vs.length)})`, vs.length ? table(["Key", "Value", "Type", "Data", "Records"], vs.slice(0, 3000).map((v) =>
+            h("tr", h("td.nm", v.key ? h("b", v.key) : h("span.muted", "key not known"), h("div.muted", v.hive)), h("td", v.name || "(default)"), h("td.muted", v.kind),
+              h("td.nm.mono", { title: v.text, style: { wordBreak: "break-all" } }, v.text.slice(0, 200), v.data_reused ? h("div.muted", "data cell reused") : null),
+              h("td", v.notable ? h("span.pill.warn", v.notable) : null)))) : h("p.muted", "None.")),
+        );
+      };
+      fill();
+      const tog = h("label.row", { style: { gap: "6px" } }, h("input", { type: "checkbox", onchange: (e) => { traces = e.target.checked; fill(); } }), "Only keys that record user activity");
+      return [h("div.row.wrap", filterBox("Filter by key, value or data...", (v) => { q = v.toLowerCase(); fill(); }), tog),
+        h("p.muted", { style: { fontSize: "12.5px" } }, "When a key or value is deleted, Windows marks its cell in the hive as free but does not clear it, so it stays until the space is reused. Kokino looks through every hive's free space. A key is listed with the path of the live key it belonged to; its time is when it last changed before it was deleted, not the deletion itself. Values that an older copy of a live key still holds, but the key no longer has, are listed under that key; values found on their own have no key. \"Records\" names keys that keep a trace of user activity, which cleaners delete."), out];
     },
     folders: () => {
       let q = "";
@@ -1738,10 +1771,11 @@ async function systemTab(ctx) {
   drawSeg();
   draw();
   // Analyzed before 1.2.8: the newer Windows artifacts are missing, not absent.
-  const stale = isNtfs(r.fs) && r.schema < 7
+  const stale = isNtfs(r.fs) && r.schema < 9
     ? h("div.card.flat.stack", h("p", { style: { margin: 0, color: "var(--warn)" } }, r.schema < 6
-      ? "This evidence was analyzed by an earlier Kokino version, before scheduled tasks, the change journal, ShellBags, BAM/DAM, SRUM and the names of deleted files from folder indexes and $LogFile were read. Those parts are empty until it is analyzed again."
-      : "This evidence was analyzed by an earlier Kokino version, before scheduled tasks were read. They are missing until it is analyzed again."),
+      ? "This evidence was analyzed by an earlier Kokino version, before deleted registry keys, scheduled tasks, the change journal, ShellBags, BAM/DAM, SRUM and the names of deleted files from folder indexes and $LogFile were read. Those parts are empty until it is analyzed again."
+      : r.schema < 7 ? "This evidence was analyzed by an earlier Kokino version, before scheduled tasks and deleted registry keys were read. They are missing until it is analyzed again."
+      : "This evidence was analyzed by an earlier Kokino version, before deleted registry keys were looked for. They are missing until it is analyzed again."),
       canWrite() ? h("div", h("button.primary", { onclick: () => reingest(ctx.cid, ctx.eid, false) }, "Re-analyze now")) : h("p.muted", { style: { margin: 0 } }, "Ask an examiner on this case to re-analyze it."))
     : null;
   render(h("div.stack", intro, stale, seg, body));

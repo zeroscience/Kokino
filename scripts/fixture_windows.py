@@ -118,8 +118,11 @@ def lh_hash(name):
     return h
 
 
-def write_hive(root, embedded_name):
+def write_hive(root, embedded_name, deleted=(), orphans=()):
+    """deleted: (parent path, Key) subtrees written and then freed, as Windows
+    leaves a deleted key; orphans: (name, kind, data) values freed the same way."""
     cells = bytearray()
+    offsets = {}
 
     def cell(body):
         off = 32 + len(cells)
@@ -135,11 +138,12 @@ def write_hive(root, embedded_name):
             size, doff = len(data), cell(data)
         return cell(b"vk" + struct.pack("<HIIIHH", len(nb), size, doff, kind, 1 if nb else 0, 0) + nb)
 
-    def key(k, parent):
+    def key(k, parent, path=""):
         # children first so their offsets are known; parent offsets patched after
         nb = k.name.encode("ascii")
         nk_off = cell(b"\0" * (76 + len(nb)))  # placeholder, rewritten below
-        subs = [key(s, nk_off) for s in k.subkeys]
+        offsets[path.lower()] = nk_off
+        subs = [key(s, nk_off, (path + "\\" + s.name).lstrip("\\")) for s in k.subkeys]
         sl = 0xFFFFFFFF
         if subs:
             body = b"lh" + struct.pack("<H", len(subs))
@@ -158,6 +162,17 @@ def write_hive(root, embedded_name):
         return nk_off
 
     root_off = key(root, None)
+    # Deleted keys and values: written like live ones, then their cells freed.
+    start = len(cells)
+    for parent, k in deleted:
+        key(k, offsets[parent.lower()], "deleted:" + parent)
+    for v in orphans:
+        value(*v)
+    p = start
+    while p < len(cells):
+        sz = -struct.unpack_from("<i", cells, p)[0]
+        struct.pack_into("<i", cells, p, sz)
+        p += sz
     size = (32 + len(cells) + 4095) // 4096 * 4096
     hbin = bytearray(size)
     hbin[0:4] = b"hbin"
@@ -406,7 +421,16 @@ def hive_ntuser():
         path_key(exp + "\\WordWheelQuery", [binary("0", u16s("password")), binary("1", u16s("nightjar")), binary("MRUListEx", mru_ex([1, 0]))], ts=ft(2026, 10, 20, 9, 50)),
         path_key("Software\\Microsoft\\Windows\\CurrentVersion\\Run", [sz("OneDrive", "\"C:\\Users\\alice\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe\" /background")], ts=ft(2025, 3, 2, 8, 20)),
     ]
-    return write_hive(Key("ROOT", [], merge(keys), ts=ft(2026, 10, 21, 2, 9)), "\\??\\C:\\Users\\alice\\ntuser.dat")
+    # Deleted (REG_DELETED below is the ground truth for the tests): typed
+    # addresses removed with their parent key, the SDelete EULA key with its
+    # parent, and an older copy of RunMRU that still has an entry removed
+    # since. UsrClass.dat holds a deleted value on its own.
+    deleted = [
+        ("Software\\Microsoft", Key("Internet Explorer", [], [Key("TypedURLs", [sz("url1", "http://drop.test/")], [], ft(2026, 10, 21, 2, 11))], ft(2026, 10, 21, 2, 11))),
+        ("Software", Key("Sysinternals", [], [Key("SDelete", [dword("EulaAccepted", 1)], [], ft(2026, 10, 20, 10, 19))], ft(2026, 10, 20, 10, 19))),
+        (exp, Key("RunMRU", [sz("c", "sdelete64 plan.docx\\1")], [], ft(2026, 10, 21, 2, 7))),
+    ]
+    return write_hive(Key("ROOT", [], merge(keys), ts=ft(2026, 10, 21, 2, 9)), "\\??\\C:\\Users\\alice\\ntuser.dat", deleted)
 
 
 def fat_dt(y, mo, d, h=0, mi=0, s=0):
@@ -466,7 +490,7 @@ def hive_usrclass():
         path_key(b + "\\0\\1", [binary("0", shell_folder("PROJEC~1", "Projects 2026", (39, 1), (2026, 10, 1, 12, 0), (2026, 9, 30, 10, 0))), binary("1", shell_folder("NIGHTJ~1", "Nightjar leak", (41, 1), (2026, 10, 20, 9, 40), (2026, 10, 20, 9, 40))), binary("MRUListEx", mru_ex([1, 0]))], ts=ft(2026, 10, 20, 9, 47)),
         path_key(b + "\\1", [binary("0", shell_folder("Q3", "Q3", (0, 0), (2026, 10, 18, 11, 0), (2026, 7, 1, 9, 0))), binary("MRUListEx", mru_ex([0]))], ts=ft(2026, 10, 20, 9, 46)),
     ]
-    return write_hive(Key("ROOT", [], merge(keys), ts=ft(2026, 10, 20, 9, 47)), "\\??\\C:\\Users\\alice\\AppData\\Local\\Microsoft\\Windows\\UsrClass.dat")
+    return write_hive(Key("ROOT", [], merge(keys), ts=ft(2026, 10, 20, 9, 47)), "\\??\\C:\\Users\\alice\\AppData\\Local\\Microsoft\\Windows\\UsrClass.dat", orphans=[sz("LastFile", "C:\\Users\\alice\\Desktop\\keys.txt")])
 
 
 def hive_amcache():

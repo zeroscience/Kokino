@@ -302,6 +302,8 @@ fn ese(d: &[u8]) {
 
 fn registry(d: &[u8]) {
     let Ok(h) = kokino_artifacts::registry::Hive::parse(d.to_vec()) else { return };
+    // Deleted keys and values in free cells.
+    let _ = h.deleted();
     let mut n = 0;
     h.root().walk(&mut |k, _| {
         n += 1;

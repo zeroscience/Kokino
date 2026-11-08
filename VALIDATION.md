@@ -34,6 +34,7 @@ without an MFT record and the SRUM database. Run on Windows 10.
 | NIST CFReDS DFR, 22 ext images (ext2, ext3, ext4) | Every deleted file with content, block by block; deleted names against NIST's layout | 962 of 965 tagged files complete, 99.9996% of blocks right; 302 files recovered through the ext3/ext4 journal; 2,782 deleted names listed; wrong content without a warning in 1 file |
 | A real Windows 10 22H2 SRUM database (SRUDB.dat, 70 MB, 1.2.8) | Every row and value of every table against Windows' own esent.dll | All 310,255 rows and 2,800,979 values the same, after two fixes (below) |
 | Digital Detective practice files: SOFTWARE hive of a Windows 7 laptop (unreleased) | Scheduled tasks in TaskCache | 83 tasks read, none falsely flagged as hidden, after one fix (below) |
+| Digital Detective practice files: SOFTWARE and SYSTEM hives (unreleased) | Deleted keys and values in the hives' free space | 181 deleted keys (176 with full paths) and 627 values without a key recovered: Windows Installer and servicing entries removed at setup, a removed shadow copy device |
 | Digital Detective practice files: Internet Explorer 9 index.dat files and the formatted E01 (unreleased) | History, cache and downloads read live; records carved from free space against the live counts | All 16 files read; all 15 index.dat files and all 5,920 records recovered from the formatted volume, the same counts as live, after two fixes (below) |
 | NIST CFReDS DFR, 61 images (FAT12/16/32, exFAT, NTFS) | Every deleted file Kokino lists, block by block, against the files' own tags; counts against NIST's layout | 3,048 of 3,323 deleted test files complete, 1,367,020 of 1,370,338 blocks right (99.8%); exFAT 100%, NTFS 100% of blocks; wrong content without a warning in 4 files |
 
@@ -331,6 +332,34 @@ cache entries (5 LEAK), 89 cookies, 5 downloads and 35 redirects, all inside
 the carved files. Before the fix, records inside a carved file longer than
 the 1 MiB read window were skipped (only 1,539 of the cache's records were
 listed), and the clock offset was truncated to UTC+02:45 instead of rounded.
+
+## Deleted registry keys: the Digital Detective hives (unreleased)
+
+The SOFTWARE and SYSTEM hives in Digital Detective's practice files (a
+Windows 7 laptop) were searched for deleted keys and values
+(`kokino artifact --full`). There is no published list to compare with, so
+this checks that what is recovered is real and makes sense, not that
+nothing is missed.
+
+- SOFTWARE (85,033 live keys): 177 deleted keys with 1,366 values, 172
+  of them with a full path. 176 were last changed on 2011-10-18 at 23:18,
+  the evening the laptop was set up: 163 Windows Installer component
+  registrations (`Installer\UserData\S-1-5-18\Components`), 9 servicing
+  package entries (Component Based Servicing) and 4 keys whose parent was
+  not found. The last one, a key with values `Reason`, `ID` (the user's
+  SID), `Data` and `Scope`, was last changed on 2011-10-19 at 10:44:40.
+  478 values were found on their own, mostly servicing package states. No
+  older copy of a live key holds a value the live key lost.
+- SYSTEM (31,650 live keys): 4 deleted keys, the device entries of a
+  Volume Shadow Copy (`Enum\STORAGE\VolumeSnapshot\HarddiskVolumeSnapshot2`),
+  last changed on 2011-10-19 at 10:42:54: the snapshot device was removed.
+  149 values were found on their own; for 10 of them the data cell is in
+  use again, and their data is marked as possibly newer.
+- Reading all of SOFTWARE's free space takes 0.3 s.
+
+The practice files hold no user hives (NTUSER.DAT, UsrClass.dat), where the
+deleted keys of user activity would be; those are covered by the test
+image (`finds_windows_artifacts`).
 
 ## NIST CFReDS: deleted file recovery on ext2, ext3 and ext4
 
