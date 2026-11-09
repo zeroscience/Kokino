@@ -56,6 +56,7 @@ const COMPONENTS = [
   ["argon2", "Password hashing (Argon2id)", "MIT OR Apache-2.0", "RustCrypto"],
   ["md-5, sha1, sha2", "Evidence hashing", "MIT OR Apache-2.0", "RustCrypto"],
   ["flate2", "zlib for E01 chunks", "MIT OR Apache-2.0", "rust-lang"],
+  ["lzma-rs, ruzstd", "XZ and zstd fields in systemd journals", "MIT", "gendx; Moritz Borcherding"],
   ["serde, chrono, clap, uuid", "Data, time, CLI, ids", "MIT OR Apache-2.0", "various"],
   ["rust-embed", "GUI files inside the binary", "MIT", "pyrossh"],
 ];
@@ -199,7 +200,8 @@ const WIKI = [
         ["Summary", "Disk layout, counts, the impact summary in plain sentences, the anti-forensics gauge and an activity histogram (click a day to open the timeline)."],
         ["Explorer", "The folder tree including deleted and orphaned entries. Click a file for its detail drawer: both timestamp sets side by side, data streams, signature, entropy, where its MFT record lies on disk, its timeline events and a hex preview."],
         ["Timeline", "MACB events from $SI and $FN interleaved with browser visits, downloads and searches, Windows artifacts and, on NTFS, files created, deleted and renamed per the change journal (USN). Filter by text, date, source, deleted or flagged."],
-        ["Web activity", "Browser history per profile (Chrome family, Firefox, Internet Explorer): visits, downloads, searches and Internet Explorer's cache. Click a profile card to filter by it."],
+        ["Web activity", "Browser history per profile (Chrome family, Firefox, Internet Explorer): visits, downloads, searches and Internet Explorer's cache and cookies. Click a profile card to filter by it."],
+        ["Email", "Messages in mbox mailboxes and .eml files, with their text and attachments."],
         ["Anti-forensics", "Each indicator with its weight, caveat and the exact files: click Show files to list them, then a file to open it."],
         ["Hex", "The whole image, any size. See Hex and exports."],
       ]),
@@ -274,6 +276,7 @@ const WIKI = [
   {
     id: "web", title: "Browser history", icon: "globe",
     body: [
+      p("Email is on its own page: see Email."),
       p("Kokino reads Chrome, Edge, Brave, Opera, Vivaldi and Firefox profiles it finds on any parsed volume, including history still waiting in the -wal file that the browser had not merged yet, and Internet Explorer's index.dat files (Internet Explorer 4 to 9: history, cache and downloads)."),
       ul(
         h("span", h("b", "Visits:"), " time, page, how it was reached (typed, link, reload, form...), time on page and visit count."),
@@ -281,9 +284,22 @@ const WIKI = [
         h("span", h("b", "Downloads:"), " source URL, where it was saved, size, state and the browser's danger warning."),
         h("span", h("b", "Searches:"), " from the browser's own keyword table and from visited search-engine pages."),
         h("span", h("b", "Internet Explorer:"), " one card per index.dat: the main history (last visit of each page), daily and weekly files (one entry per page per day or week), protected-mode history, the cache (IE cache list: URL, cached file, content type) and the download list. A page in both the main and a daily file is shown once. ", h("i", "Deleted entry"), " marks an entry recovered from free blocks inside index.dat; ", h("i", "LEAK"), " a cache entry that was deleted while its file was in use. Daily files keep each visit also in local time, so the card says what the computer's clock was set to."),
+        h("span", h("b", "Cookies (Internet Explorer):"), " the cookie index and the cookie text files in the Cookies folders: site, name, value, created, expires and when the site's cookies were last used. Cookie files the index no longer lists, and index entries whose file is gone, are marked."),
         h("span", h("b", "Deleted index.dat files:"), " Carve on the Carved files page: whole index.dat files and single history, cache and download records are recovered from free space (list ie-records)."),
       ),
       p("A history with no visits at all, or a deleted history database, raises the ", h("i", "Browser history cleared"), " indicator."),
+    ],
+  },
+  {
+    id: "mail", title: "Email", icon: "mail",
+    body: [
+      p("Kokino lists the messages in mbox mailboxes (Thunderbird and SeaMonkey mail folders, /var/mail and /var/spool/mail on Linux, .mbox files) and single .eml files, live and deleted: date, sender, recipients, subject, attachments and the first words of the text. Click a message for its text, every header and its attachments; Export saves an attachment in the case's exports folder with its hashes in the audit log."),
+      ul(
+        h("span", h("b", "Deleted in Thunderbird:"), " a message deleted in Thunderbird stays in the mailbox file, marked deleted, until the folder is compacted. Kokino lists it and marks it."),
+        h("span", h("b", "Search:"), " message text (quoted-printable, base64 and character sets decoded, HTML without its markup) and document attachments (PDF, Office, ZIP...) are in the full-text index."),
+        h("span", h("b", "Timeline:"), " every dated message is an event (source MAIL)."),
+        h("span", h("b", "Not read yet:"), " Outlook PST and OST files, Apple Mail .emlx and Windows Live Mail stores."),
+      ),
     ],
   },
   {
@@ -294,6 +310,7 @@ const WIKI = [
         h("span", h("b", "Overview:"), " computer name, Windows version and build, install date, owner, time zone and last shutdown, plus highlights (log clearing, anti-forensic tools, unusual autostart entries)."),
         h("span", h("b", "Programs run:"), " Prefetch (run count and last eight run times, Windows 10/11 compressed files included), UserAssist (per user, with run count and focus time), BAM and DAM (the last run of each program per user, kept about a week, Windows 10 1709 and later), Amcache (path, SHA-1, first seen), ShimCache and process-creation events (4688)."),
         h("span", h("b", "Files and folders:"), " shortcuts and Jump Lists with the target's volume label, serial number and drive type (which ties a file to a USB stick or network share) and the machine name and MAC address; recent documents, typed paths, the Run box and Explorer searches."),
+        h("span", h("b", "Windows XP and 2003:"), " the legacy event logs (SecEvent.Evt, SysEvent.Evt, AppEvent.Evt), including records left in the unused part of the log, are read like the logs of later Windows: their Security events (logons 528/540, failed logons 529-539, log cleared 517, process started 592, accounts created 624, group changes, service installs 601) appear under Events with the user, logon type and address. Profiles under Documents and Settings and a Windows 2000 \\WINNT folder are found too."),
         h("span", h("b", "Deleted registry:"), " keys and values recovered from the free space of every hive. Windows marks a deleted key's cell free but does not clear it. Each key is shown with the path of the key it belonged to, when it last changed before it was deleted (not the deletion itself) and the values still there. Values that an older copy of a live key holds but the key no longer has are listed under that key; values found on their own have no key. Keys that record user activity (recent documents, the Run box, typed addresses, UserAssist, ShellBags...) are named: deleting them is what cleaners do, and the anti-forensics score counts it. Transaction logs (.LOG1/.LOG2) are not applied yet."),
         h("span", h("b", "Folders (ShellBags):"), " every folder a user opened in Explorer, from UsrClass.dat (Windows 7 and later) or NTUSER.DAT, kept after the folder, the USB stick or the network share is gone: full path, when it was last opened, the folder's own times and its MFT record (tied to this volume when it matches). Folders inside ZIP files and on network shares are included."),
         h("span", h("b", "Change journal:"), " Windows records every change to a file in $UsnJrnl: created, written, renamed (with the old name), deleted. Records of one round of changes are combined into one line; filter by kind or path. The journal keeps the newest tens of megabytes, which covers days on a busy system and much longer on a quiet one, and it keeps names and folders of files whose MFT records were reused long ago. The overview says what period it covers."),
@@ -531,7 +548,7 @@ const WIKI = [
     body: [
       p("Evidence can be made to attack the tool that reads it: a disk image, registry hive or picture crafted to crash Kokino, hang an ingest, or use up the examiner's memory. Kokino is written in Rust with ", code("unsafe"), " code forbidden in every crate, and every parser that reads evidence has been fuzzed."),
       h("h3", "Fuzzing"),
-      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks, optical media, Mac disks, NTFS folder indexes and $LogFile, the change journal, ShellBags, ESE databases (SRUM), scheduled tasks, Internet Explorer index.dat, deleted registry keys, legacy Office files and registry logs ran ", h("b", "475,652,711 inputs"), " and found ", h("b", "29 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
+      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks, optical media, Mac disks, NTFS folder indexes and $LogFile, the change journal, ShellBags, ESE databases (SRUM), scheduled tasks, Internet Explorer index.dat, deleted registry keys, legacy Office files, registry logs, legacy event logs, email and journald compression ran ", h("b", "567,157,854 inputs"), " and found ", h("b", "29 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
       h("div.scroll", h("table.tbl",
         h("thead", h("tr", h("th", "Target"), h("th", "Covers"), h("th", "Inputs"), h("th", "Found"))),
         h("tbody", [
@@ -548,6 +565,9 @@ const WIKI = [
         ["shellbags", "BagMRU trees and every shell item kind", "15,785,595", "none"],
         ["ese", "ESE databases (pages, B+ trees, catalog, records, long values, 7-bit and XPRESS compression) and SRUM, two rounds", "824,539", "none"],
         ["task", "Scheduled task XML, the TaskCache Actions and DynamicInfo blobs, TaskCache in a hive", "19,733,957", "none"],
+        ["evt", "Legacy .evt event logs (Windows NT to 2003)", "30,689,834", "none"],
+        ["mail", "Mailboxes and messages: MIME, encodings, attachments", "7,542,816", "none"],
+        ["journalz", "journald compressed fields: XZ, LZ4, zstd", "45,374,291", "none"],
         ["reglog", "Registry transaction logs (both formats) applied to a dirty hive", "58,565,421", "none"],
         ["iecache", "Internet Explorer index.dat: records, history, cache, downloads, records in free space", "21,653,615", "1 (out-of-range slice, fixed)"],
         ["ewf", "E01 (EWF) images: sections, chunk tables, zlib chunks, stored hashes", "42,686", "1 (overflow)"],

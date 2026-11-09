@@ -495,6 +495,8 @@ enum Kind {
     WlanProfile,
     Task,
     Evtx,
+    /// Windows NT to Server 2003 event log.
+    Evt,
     Prefetch,
     Lnk,
     JumpList,
@@ -502,7 +504,28 @@ enum Kind {
 
 fn classify(path: &str) -> Option<Kind> {
     let p = path.to_ascii_lowercase();
+    // Windows 2000 installs to \WINNT.
+    let p = match p.strip_prefix("/winnt/") {
+        Some(rest) => format!("/windows/{}", rest),
+        None => p,
+    };
     let parts: Vec<&str> = p.split('/').collect();
+    // Windows XP and 2003: profiles under Documents and Settings.
+    if parts.len() >= 4 && parts[1] == "documents and settings" {
+        let rest = parts[3..].join("/");
+        if rest == "ntuser.dat" {
+            return Some(Kind::NtUser);
+        }
+        if rest == "local settings/application data/microsoft/windows/usrclass.dat" {
+            return Some(Kind::UsrClass);
+        }
+        if p.ends_with(".lnk") && (rest.starts_with("recent/") || rest.starts_with("application data/microsoft/office/recent/")) {
+            return Some(Kind::Lnk);
+        }
+    }
+    if p.starts_with("/windows/system32/config/") && p.ends_with(".evt") {
+        return Some(Kind::Evt);
+    }
     match p.as_str() {
         "/windows/system32/config/system" => return Some(Kind::System),
         "/windows/system32/config/software" => return Some(Kind::Software),
@@ -545,7 +568,7 @@ fn classify(path: &str) -> Option<Kind> {
 
 fn user_of(path: &str) -> String {
     let parts: Vec<&str> = path.split('/').collect();
-    if parts.len() > 2 && parts[1].eq_ignore_ascii_case("users") { parts[2].to_string() } else { String::new() }
+    if parts.len() > 2 && (parts[1].eq_ignore_ascii_case("users") || parts[1].eq_ignore_ascii_case("documents and settings")) { parts[2].to_string() } else { String::new() }
 }
 
 pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow], progress: crate::Progress) -> WindowsArtifacts {
@@ -572,7 +595,7 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
         }
         let f = &files[i];
         let limit = match kind {
-            Kind::Evtx => MAX_LOG,
+            Kind::Evtx | Kind::Evt => MAX_LOG,
             Kind::Task => MAX_TASK,
             _ => MAX_HIVE,
         };
@@ -632,7 +655,11 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
                 Ok(())
             }
             Kind::Evtx => {
-                events(&mut w, &d, i, f);
+                events(&mut w, &d, i, f, false);
+                Ok(())
+            }
+            Kind::Evt => {
+                events(&mut w, &d, i, f, true);
                 Ok(())
             }
             Kind::Prefetch => {
@@ -1165,6 +1192,7 @@ fn kind_name(k: Kind) -> &'static str {
         Kind::Task => "Scheduled task",
         Kind::Amcache => "Amcache.hve",
         Kind::Evtx => "Event log",
+        Kind::Evt => "Event log (legacy .evt)",
         Kind::Prefetch => "Prefetch",
         Kind::Lnk => "Shortcut (LNK)",
         Kind::JumpList => "Jump List",
@@ -1937,6 +1965,32 @@ const NOTABLE: &[Notable] = &[
     Notable { channel: "Security", id: 4740, category: "Account", title: "Account locked out" },
     Notable { channel: "Security", id: 4778, category: "Remote desktop", title: "Session reconnected" },
     Notable { channel: "Security", id: 4779, category: "Remote desktop", title: "Session disconnected" },
+    // Windows NT, 2000, XP and Server 2003 (legacy .evt logs).
+    Notable { channel: "Security", id: 517, category: "Log cleared", title: "Security log cleared" },
+    Notable { channel: "Security", id: 528, category: "Logon", title: "Logon" },
+    Notable { channel: "Security", id: 540, category: "Logon", title: "Network logon" },
+    Notable { channel: "Security", id: 529, category: "Failed logon", title: "Failed logon (bad user name or password)" },
+    Notable { channel: "Security", id: 530, category: "Failed logon", title: "Failed logon (time restriction)" },
+    Notable { channel: "Security", id: 531, category: "Failed logon", title: "Failed logon (account disabled)" },
+    Notable { channel: "Security", id: 532, category: "Failed logon", title: "Failed logon (account expired)" },
+    Notable { channel: "Security", id: 533, category: "Failed logon", title: "Failed logon (not allowed on this computer)" },
+    Notable { channel: "Security", id: 534, category: "Failed logon", title: "Failed logon (logon type not granted)" },
+    Notable { channel: "Security", id: 535, category: "Failed logon", title: "Failed logon (password expired)" },
+    Notable { channel: "Security", id: 539, category: "Failed logon", title: "Failed logon (account locked out)" },
+    Notable { channel: "Security", id: 552, category: "Logon", title: "Logon with explicit credentials" },
+    Notable { channel: "Security", id: 592, category: "Process", title: "Process created" },
+    Notable { channel: "Security", id: 601, category: "Service", title: "Service installed" },
+    Notable { channel: "Security", id: 612, category: "Account", title: "Audit policy changed" },
+    Notable { channel: "Security", id: 520, category: "Time change", title: "System time changed" },
+    Notable { channel: "Security", id: 624, category: "Account", title: "User account created" },
+    Notable { channel: "Security", id: 626, category: "Account", title: "User account enabled" },
+    Notable { channel: "Security", id: 628, category: "Account", title: "Password reset" },
+    Notable { channel: "Security", id: 629, category: "Account", title: "User account disabled" },
+    Notable { channel: "Security", id: 630, category: "Account", title: "User account deleted" },
+    Notable { channel: "Security", id: 632, category: "Account", title: "Member added to global group" },
+    Notable { channel: "Security", id: 636, category: "Account", title: "Member added to local group" },
+    Notable { channel: "Security", id: 660, category: "Account", title: "Member added to universal group" },
+    Notable { channel: "Security", id: 644, category: "Account", title: "Account locked out" },
     Notable { channel: "System", id: 6005, category: "System", title: "Event log service started (boot)" },
     Notable { channel: "System", id: 6006, category: "System", title: "Event log service stopped (shutdown)" },
     Notable { channel: "System", id: 6008, category: "System", title: "Unexpected shutdown" },
@@ -1999,23 +2053,23 @@ fn summarize(e: &evtx::Event) -> (String, String, String) {
         (ip, ws) => format!(" from {} ({})", ip, ws),
     };
     let s = match (e.channel.as_str(), e.event_id) {
-        ("Security", 1102) => format!("Security log cleared by {}", if subject.is_empty() { "unknown" } else { &subject }),
+        ("Security", 1102) | ("Security", 517) => format!("Security log cleared by {}", if subject.is_empty() { "unknown" } else { &subject }),
         ("System", 104) => format!("{} log cleared by {}", g("Channel"), subject),
-        ("Security", 4624) | ("Security", 4625) => {
+        ("Security", 4624 | 4625 | 528 | 540 | 529..=537 | 539) => {
             let lt = g("LogonType");
             let ip = if ip == "127.0.0.1" || ip == "::1" { String::new() } else { ip.clone() };
             let kind = if logon_type(&lt).is_empty() { format!("(type {})", lt) } else { format!("({})", logon_type(&lt)) };
-            format!("{} {} {}{}", target, if e.event_id == 4624 { "logged on" } else { "failed to log on" }, kind, from(&ip, &g("WorkstationName")))
+            format!("{} {} {}{}", target, if matches!(e.event_id, 4624 | 528 | 540) { "logged on" } else { "failed to log on" }, kind, from(&ip, &g("WorkstationName")))
         }
         ("Security", 4672) => format!("{} received administrator privileges", subject),
-        ("Security", 4688) => format!("{} ran {}", subject, if g("CommandLine").is_empty() { g("NewProcessName") } else { g("CommandLine") }),
-        ("Security", 4720) => format!("{} created account {}", subject, target),
-        ("Security", 4732) | ("Security", 4728) | ("Security", 4756) => {
+        ("Security", 4688 | 592) => format!("{} ran {}", subject, if g("CommandLine").is_empty() { g("NewProcessName") } else { g("CommandLine") }),
+        ("Security", 4720 | 624) => format!("{} created account {}", subject, target),
+        ("Security", 4732 | 4728 | 4756 | 632 | 636 | 660) => {
             let member = if g("MemberName").is_empty() { g("MemberSid") } else { g("MemberName") };
             format!("{} added {} to {}", subject, member, g("TargetUserName"))
         }
         ("Security", 4616) => format!("{} changed the time from {} to {}", subject, g("PreviousTime"), g("NewTime")),
-        ("System", 7045) => format!("{} ({}, {})", g("ServiceName"), g("ImagePath"), g("StartType")),
+        ("System", 7045) | ("Security", 601) => format!("{} ({}, {})", g("ServiceName"), g("ImagePath"), g("StartType")),
         ("System", 1074) => format!("{} by {}: {}", g("param5"), g("param7"), g("param3")),
         (_, 21) | (_, 23) | (_, 24) | (_, 25) => format!("{}{}", g("User"), from(&g("Address"), "")),
         (_, 1149) => format!("{}{}", g("Param1"), from(&g("Param3"), "")),
@@ -2030,23 +2084,24 @@ fn summarize(e: &evtx::Event) -> (String, String, String) {
     (s, user, ip)
 }
 
-fn events(w: &mut WindowsArtifacts, d: &[u8], i: usize, f: &FileRow) {
+fn events(w: &mut WindowsArtifacts, d: &[u8], i: usize, f: &FileRow, legacy: bool) {
     let mut counts: BTreeMap<(String, u32), u64> = BTreeMap::new();
     let mut kept = 0usize;
     let mut notable = 0u64;
     let mut channel = String::new();
     let mut new_events = vec![];
     let mut execs = vec![];
-    let res = evtx::parse(d, &mut |e| {
+    let legacy_channel = kokino_artifacts::evt::channel_of(&f.e.name);
+    let mut each = |e: evtx::Event| {
         if channel.is_empty() {
             channel = e.channel.clone();
         }
         *counts.entry((e.channel.clone(), e.event_id)).or_default() += 1;
         let Some(n) = NOTABLE.iter().find(|n| n.id == e.event_id && n.channel.eq_ignore_ascii_case(&e.channel)) else { return };
-        if e.channel == "Security" && matches!(e.event_id, 4624 | 4625 | 4672 | 4647 | 4648) && machine_account(&e) {
+        if e.channel == "Security" && matches!(e.event_id, 4624 | 4625 | 4672 | 4647 | 4648 | 528 | 529..=537 | 538 | 539 | 540 | 552 | 576) && machine_account(&e) {
             return;
         }
-        if e.event_id == 4624 && e.get("LogonType") == Some("5") {
+        if matches!(e.event_id, 4624 | 528) && e.get("LogonType") == Some("5") {
             return;
         }
         if e.event_id == 4616 && matches!(e.user_sid.as_deref(), Some("S-1-5-19")) {
@@ -2057,10 +2112,10 @@ fn events(w: &mut WindowsArtifacts, d: &[u8], i: usize, f: &FileRow) {
             return;
         }
         kept += 1;
-        if e.event_id == 4688 && e.channel == "Security" {
+        if matches!(e.event_id, 4688 | 592) && e.channel == "Security" {
             let program = e.get("NewProcessName").unwrap_or("").to_string();
             execs.push(Execution {
-                source: "Event 4688".into(),
+                source: format!("Event {}", e.event_id),
                 tool: is_tool(&program),
                 program,
                 user: e.get("SubjectUserName").unwrap_or("").into(),
@@ -2086,13 +2141,14 @@ fn events(w: &mut WindowsArtifacts, d: &[u8], i: usize, f: &FileRow) {
             data: e.data.iter().filter(|(_, v)| !v.is_empty()).take(24).map(|(k, v)| (k.clone(), v.chars().take(2000).collect())).collect(),
             file: i as u32,
         });
-    });
+    };
+    let res = if legacy { kokino_artifacts::evt::parse(d, &legacy_channel, &mut each) } else { evtx::parse(d, &mut each) };
     let (info, error) = match res {
         Ok(info) => (info, None),
         Err(e) => (evtx::LogInfo::default(), Some(format!("{:#}", e))),
     };
     if channel.is_empty() {
-        channel = f.e.name.trim_end_matches(".evtx").replace("%4", "/");
+        channel = if legacy { legacy_channel.clone() } else { f.e.name.trim_end_matches(".evtx").replace("%4", "/") };
     }
     w.events.extend(new_events);
     w.execution.extend(execs);
@@ -2345,6 +2401,24 @@ fn or<'a>(s: &'a str, d: &'a str) -> &'a str {
 /// What a single artifact file holds, for `kokino artifact`: detected by
 /// content, summarized (or dumped in full with `full`).
 pub fn inspect(name: &str, data: &[u8], full: bool) -> anyhow::Result<Value> {
+    if data.get(4..8) == Some(b"LfLe") {
+        let channel = kokino_artifacts::evt::channel_of(name);
+        let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+        let mut events = vec![];
+        let info = kokino_artifacts::evt::parse(data, &channel, &mut |e| {
+            *counts.entry(format!("{} {}", e.provider, e.event_id)).or_default() += 1;
+            if full {
+                events.push(e);
+            }
+        })?;
+        let mut top: Vec<(String, u64)> = counts.into_iter().collect();
+        top.sort_by(|a, b| b.1.cmp(&a.1));
+        let mut v = json!({"kind": "evt", "file": name, "channel": channel, "log": info, "event_ids": top.iter().take(40).map(|(k, n)| json!([k, n])).collect::<Vec<_>>()});
+        if full {
+            v["events"] = json!(events);
+        }
+        return Ok(v);
+    }
     if data.starts_with(kokino_artifacts::iecache::SIGNATURE) {
         use kokino_artifacts::iecache::{self, Location};
         let ix = iecache::parse(data)?;
@@ -2432,6 +2506,40 @@ pub fn inspect(name: &str, data: &[u8], full: bool) -> anyhow::Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Windows XP Security log: logons, a log clearing, a process start,
+    /// an account created, read like the EVTX events of later Windows.
+    #[test]
+    fn legacy_evt_events() {
+        use kokino_artifacts::evt::tests::{header, record_bytes};
+        let t = 1_160_000_000u32;
+        let mut d = header(0x10000, 0);
+        d.extend(record_bytes(1, t, 528, 8, "Security", "XP-LAB", &["bob", "XP-LAB", "(0x0,0x1)", "10", "User32", "Negotiate", "XP-LAB", "-", "XP-LAB$", "WORKGROUP", "-", "640", "-", "192.0.2.7", "1025"]));
+        d.extend(record_bytes(2, t + 5, 528, 8, "Security", "XP-LAB", &["XP-LAB$", "WORKGROUP", "(0x0,0x2)", "5", "Advapi", "Negotiate", "XP-LAB"]));
+        d.extend(record_bytes(3, t + 10, 592, 8, "Security", "XP-LAB", &["1234", "C:\\tools\\sdelete.exe", "640", "bob", "XP-LAB", "(0x0,0x1)"]));
+        d.extend(record_bytes(4, t + 20, 624, 8, "Security", "XP-LAB", &["helpdesk", "XP-LAB", "S-1-5-21-1-2-3-1005", "bob", "XP-LAB", "(0x0,0x1)"]));
+        d.extend(record_bytes(5, t + 30, 517, 8, "Security", "XP-LAB", &["SYSTEM", "NT AUTHORITY", "(0x0,0x3E7)", "bob", "XP-LAB", "(0x0,0x1)"]));
+        d.extend(record_bytes(6, t + 40, 6005, 4, "EventLog", "XP-LAB", &[]));
+        let f = crate::antiforensics::tests::row(50, "/WINDOWS/system32/config/SecEvent.Evt", false, 0, None);
+        assert!(matches!(classify(&f.e.path), Some(Kind::Evt)));
+        assert!(matches!(classify("/WINNT/system32/config/SysEvent.Evt"), Some(Kind::Evt)));
+        assert!(matches!(classify("/Documents and Settings/bob/NTUSER.DAT"), Some(Kind::NtUser)));
+        assert!(matches!(classify("/Documents and Settings/bob/Recent/plan.doc.lnk"), Some(Kind::Lnk)));
+        assert_eq!(user_of("/Documents and Settings/bob/NTUSER.DAT"), "bob");
+        let mut w = WindowsArtifacts::default();
+        events(&mut w, &d, 7, &f, true);
+        let s: Vec<(u32, &str, &str)> = w.events.iter().map(|e| (e.event_id, e.category.as_str(), e.summary.as_str())).collect();
+        assert_eq!(s, [
+            (528, "Logon", "XP-LAB\\bob logged on (remote desktop) from 192.0.2.7 (XP-LAB)"),
+            (592, "Process", "bob ran C:\\tools\\sdelete.exe"),
+            (624, "Account", "bob created account XP-LAB\\helpdesk"),
+            (517, "Log cleared", "Security log cleared by bob"),
+        ], "{:?}", w.events);
+        assert_eq!(w.events[0].ip, "192.0.2.7");
+        assert!(w.execution.iter().any(|x| x.source == "Event 592" && x.tool));
+        assert_eq!((w.logs[0].channel.as_str(), w.logs[0].info.records), ("Security", 6));
+        assert!(w.event_counts.iter().any(|c| c.0 == "Security" && c.1 == 6005));
+    }
 
     #[test]
     fn helpers() {

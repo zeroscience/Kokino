@@ -74,6 +74,9 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/file/{idx}/bytes", get(file_bytes))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/file/{idx}/export", get(file_export))
         .route("/cases/{cid}/evidence/{eid}/lists", get(lists))
+        .route("/cases/{cid}/evidence/{eid}/fs/{fi}/mail", get(mail_list))
+        .route("/cases/{cid}/evidence/{eid}/fs/{fi}/mail/{n}", get(mail_message))
+        .route("/cases/{cid}/evidence/{eid}/fs/{fi}/mail/{n}/attachment/{k}/export", get(mail_attachment_export))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/list/{what}/export", get(list_export))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/timeline", get(timeline))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/web", get(web))
@@ -991,6 +994,70 @@ async fn file_export(State(st): St, Extension(me): Me, Path((cid, eid, fi, idx))
         .body(Body::from(data))?)
 }
 
+#[derive(Deserialize)]
+struct MailQ {
+    q: Option<String>,
+    mailbox: Option<u32>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+/// Mailboxes and one page of messages (newest last), filtered by text.
+async fn mail_list(State(st): St, Path((cid, eid, fi)): Path<(String, String, usize)>, Query(q): Query<MailQ>) -> R {
+    let l = st.loaded(&cid, &eid)?;
+    let f = fs_of(&l, fi)?;
+    let m = &f.mail;
+    let needle = q.q.unwrap_or_default().to_lowercase();
+    let hits: Vec<(usize, &kokino_analysis::mail::Message)> = m
+        .messages
+        .iter()
+        .enumerate()
+        .filter(|(_, x)| q.mailbox.is_none_or(|b| b == x.file))
+        .filter(|(_, x)| needle.is_empty() || format!("{} {} {} {} {} {}", x.from, x.to, x.cc, x.subject, x.snippet, x.attachments.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(" ")).to_lowercase().contains(&needle))
+        .collect();
+    let off = q.offset.unwrap_or(0);
+    let lim = q.limit.unwrap_or(300).min(3000);
+    let items: Vec<Value> = hits.iter().skip(off).take(lim).map(|(n, x)| { let mut v = json!(x); v["n"] = json!(n); v["date_iso"] = json!(if x.date == 0 { String::new() } else { filetime_to_iso(x.date) }); v }).collect();
+    Ok(Json(json!({"schema": l.analysis.schema, "mailboxes": m.mailboxes, "total": hits.len(), "offset": off, "items": items})))
+}
+
+fn mail_raw(l: &Loaded, fi: usize, n: usize) -> anyhow::Result<(kokino_analysis::mail::Message, Vec<u8>)> {
+    let f = l.analysis.filesystems.get(fi).ok_or_else(|| anyhow::anyhow!("no such file system"))?;
+    let m = f.mail.messages.get(n).ok_or_else(|| anyhow::anyhow!("no such message"))?.clone();
+    let e = &f.files.get(m.file as usize).ok_or_else(|| anyhow::anyhow!("mailbox file missing"))?.e;
+    let raw = l.read_file(fi, e, "", m.offset, m.len as usize)?;
+    Ok((m, raw))
+}
+
+/// One message: its headers, text and attachments, read from the mailbox.
+async fn mail_message(State(st): St, Path((cid, eid, fi, n)): Path<(String, String, usize, usize)>) -> R {
+    let l = st.loaded(&cid, &eid)?;
+    let (m, raw) = tokio::task::spawn_blocking(move || mail_raw(&l, fi, n)).await??;
+    let p = kokino_analysis::mail::parse(&raw);
+    let text: String = p.text.chars().take(200_000).collect();
+    let atts: Vec<Value> = p.attachments.iter().map(|(a, d)| json!({"name": a.name, "content_type": a.content_type, "size": d.len(), "sig": kokino_analysis::signatures::detect(&d[..d.len().min(4096)]).map(|s| s.label)})).collect();
+    Ok(Json(json!({"message": m, "date_iso": if m.date == 0 { String::new() } else { filetime_to_iso(m.date) }, "headers": p.headers, "text": text, "attachments": atts})))
+}
+
+/// One attachment: saved in the case's exports folder with its hashes in
+/// the audit log, and sent as a download.
+async fn mail_attachment_export(State(st): St, Extension(me): Me, Path((cid, eid, fi, n, k)): Path<(String, String, usize, usize, usize)>) -> Result<Response, AppError> {
+    let l = st.loaded(&cid, &eid)?;
+    let (m, raw) = tokio::task::spawn_blocking(move || mail_raw(&l, fi, n)).await??;
+    let p = kokino_analysis::mail::parse(&raw);
+    let (a, data) = p.attachments.into_iter().nth(k).ok_or_else(|| anyhow::anyhow!("no such attachment"))?;
+    let case = st.case(&cid)?;
+    let (hashes, _) = kokino_core::hashing::hash_reader(&data[..], |_| true)?;
+    let safe: String = a.name.chars().map(|c| if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' }).take(120).collect();
+    let out_name = format!("{}_mail{}_{}_{}", eid, n, k, safe);
+    std::fs::write(case.dir.join("exports").join(&out_name), &data)?;
+    case.audit.append(&me.username, "mail.attachment.export", json!({"evidence": eid, "fs": fi, "message": n, "subject": m.subject, "from": m.from, "date": if m.date == 0 { String::new() } else { filetime_to_iso(m.date) }, "attachment": a.name, "bytes": data.len(), "hashes": hashes, "saved_as": out_name}))?;
+    Ok(Response::builder()
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"", out_name))
+        .body(Body::from(data))?)
+}
+
 /// Rows in each list of one file system (for the export dialog).
 fn list_count(l: &Loaded, fi: usize, carved: Option<&kokino_analysis::carve::CarveResult>, what: &str) -> usize {
     let Some(f) = l.analysis.filesystems.get(fi) else { return 0 };
@@ -1003,6 +1070,8 @@ fn list_count(l: &Loaded, fi: usize, carved: Option<&kokino_analysis::carve::Car
         "downloads" => f.web.downloads.len(),
         "searches" => f.web.searches.len(),
         "iecache" => f.web.cache.len(),
+        "cookies" => f.web.cookies.len(),
+        "mail" => f.mail.messages.len(),
         "execution" => w.execution.len(),
         "access" => w.access.len(),
         "shellbags" => w.shellbags.len(),
@@ -1310,6 +1379,10 @@ async fn web(State(st): St, Path((cid, eid, fi)): Path<(String, String, usize)>,
             let hits: Vec<_> = w.downloads.iter().filter(|d| src_ok(d.src) && (needle.is_empty() || format!("{} {} {}", d.url, d.target, d.referrer).to_lowercase().contains(&needle))).collect();
             (hits.len(), hits.into_iter().skip(off).take(lim).map(|d| { let mut v = json!(d); v["start_iso"] = json!(iso(d.start)); v["end_iso"] = json!(iso(d.end)); v }).collect())
         }
+        "cookies" => {
+            let hits: Vec<_> = w.cookies.iter().filter(|c| src_ok(c.src) && (needle.is_empty() || format!("{} {} {} {}", c.site, c.name, c.value, c.file).to_lowercase().contains(&needle))).collect();
+            (hits.len(), hits.into_iter().skip(off).take(lim).map(|c| { let mut v = json!(c); v["created_iso"] = json!(iso(c.created)); v["expires_iso"] = json!(iso(c.expires)); v["last_access_iso"] = json!(iso(c.last_access)); v }).collect())
+        }
         "cache" => {
             let hits: Vec<_> = w.cache.iter().filter(|c| src_ok(c.src) && (needle.is_empty() || format!("{} {} {}", c.url, c.file, c.content_type).to_lowercase().contains(&needle))).collect();
             (hits.len(), hits.into_iter().skip(off).take(lim).map(|c| { let mut v = json!(c); v["t_iso"] = json!(iso(c.t)); v["modified_iso"] = json!(iso(c.modified)); v }).collect())
@@ -1325,7 +1398,7 @@ async fn web(State(st): St, Path((cid, eid, fi)): Path<(String, String, usize)>,
     };
     let sources: Vec<Value> = w.sources.iter().map(|s| { let mut v = json!(s); v["oldest_iso"] = json!(iso(s.oldest)); v["newest_iso"] = json!(iso(s.newest)); v }).collect();
     Ok(Json(json!({"schema": l.analysis.schema, "sources": sources, "total": total, "offset": off, "items": items,
-        "counts": {"visits": w.visits.len(), "downloads": w.downloads.len(), "searches": w.searches.len(), "cache": w.cache.len()}})))
+        "counts": {"visits": w.visits.len(), "downloads": w.downloads.len(), "searches": w.searches.len(), "cache": w.cache.len(), "cookies": w.cookies.len()}})))
 }
 
 async fn indicator_files(State(st): St, Path((cid, eid, fi, id)): Path<(String, String, usize, String)>) -> R {

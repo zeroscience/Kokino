@@ -27,7 +27,7 @@ checked against public test images with known answers where they exist
 - [x] Linux system summary: users and groups, logins (wtmp, btmp, lastlog), auth.log and syslog, journald, cron and systemd units, shell histories, SSH keys and known hosts, installed packages
 - [x] Linux events on the timeline
 - [x] Validation against the NIST CFReDS ext images (22 images, VALIDATION.md)
-- [ ] journald: compressed fields (XZ, LZ4, zstd)
+- [x] journald: compressed fields (XZ, LZ4, zstd) (unreleased)
 - [ ] Older journal copies of whole directories (names of files deleted long ago)
 
 ## Next
@@ -62,14 +62,15 @@ checked against public test images with known answers where they exist
 - [x] BAM/DAM (1.2.8)
 - [ ] SRUM energy, push notification and app timeline tables; other ESE databases (Windows Search, WebCache of Internet Explorer 10 and 11 and old Edge)
 - [x] Internet Explorer 4 to 9 history, cache and downloads (index.dat), with deleted entries and records carved from free space (1.2.9)
-- [ ] Internet Explorer cookies (index.dat and the cookie text files)
+- [x] Internet Explorer cookies (index.dat and the cookie text files) (unreleased)
 - [x] Scheduled tasks (task files and TaskCache, hidden tasks flagged) (1.2.9)
 - [x] Deleted registry keys and values from free cells in the hives (1.2.9)
 - [x] Registry transaction logs (.LOG1/.LOG2) applied to hives that were not cleanly saved (unreleased)
-- [ ] Legacy .evt event logs
+- [x] Legacy .evt event logs (Windows NT to 2003), with Windows XP profile paths (unreleased)
 
 ### Content
-- [ ] Email stores: PST/OST and MBOX
+- [x] Email: mbox mailboxes (Thunderbird, /var/mail) and .eml files (unreleased)
+- [ ] Email: Outlook PST and OST
 - [x] Text from legacy Office files (DOC, XLS, PPT), Outlook .msg and RTF (unreleased)
 - [ ] Carving of fragmented files
 

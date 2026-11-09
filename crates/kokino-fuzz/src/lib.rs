@@ -20,6 +20,7 @@ pub const TARGETS: &[Target] = &[
     Target { name: "fat", run: fat, seeds: &["tests/fixtures/fat12.img", "tests/fixtures/fat16.img", "tests/fixtures/fat32.img", "tests/fixtures/exfat.img"] },
     Target { name: "ext", run: ext, seeds: &["tests/fixtures/ext2.img", "tests/fixtures/ext3.img", "tests/fixtures/ext4.img"] },
     Target { name: "linuxlogs", run: linuxlogs, seeds: &["crates/kokino-fuzz/seeds/linux"] },
+    Target { name: "journalz", run: journalz, seeds: &["crates/kokino-fuzz/seeds/linux/compressed.journal"] },
     Target { name: "vdisk", run: vdisk, seeds: &["tests/fixtures/vd-dynamic.vhd", "tests/fixtures/vd-dynamic.vhdx", "tests/fixtures/vd-sparse.vmdk", "tests/fixtures/vd-stream.vmdk"] },
     Target { name: "optical", run: optical, seeds: &["tests/fixtures/iso-rr-joliet.iso", "tests/fixtures/iso-udf.iso", "tests/fixtures/iso-multisession.iso"] },
     Target { name: "mac", run: mac, seeds: &["tests/fixtures/hfsplus.img", "tests/fixtures/apfs.img"] },
@@ -28,6 +29,8 @@ pub const TARGETS: &[Target] = &[
     Target { name: "usn", run: usn, seeds: &["crates/kokino-fuzz/seeds/usn"] },
     Target { name: "shellbags", run: shellbags, seeds: &["crates/kokino-fuzz/seeds/shellbags"] },
     Target { name: "task", run: task, seeds: &["tests/fixtures/win/Windows_System32_Tasks_Updater Check", "tests/fixtures/win/Windows_System32_Tasks_Microsoft_Windows_WinUpdate_Sync", "tests/fixtures/win/Windows_System32_Tasks_Microsoft_Windows_Defrag_ScheduledDefrag", "tests/fixtures/win/Windows_System32_config_SOFTWARE"] },
+    Target { name: "evt", run: evt, seeds: &["crates/kokino-fuzz/seeds/evt"] },
+    Target { name: "mail", run: mail, seeds: &["crates/kokino-fuzz/seeds/mail"] },
     Target { name: "reglog", run: reglog, seeds: &["tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_UsrClass.dat.LOG1", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_UsrClass.dat"] },
     Target { name: "iecache", run: iecache, seeds: &["tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_History_History.IE5_MSHist012025031020250311_index.dat", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_History_History.IE5_index.dat", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_Temporary Internet Files_Content.IE5_index.dat", "tests/fixtures/win/Users_alice_AppData_Roaming_Microsoft_Windows_IEDownloadHistory_index.dat"] },
     Target { name: "ese", run: ese, seeds: &["tests/fixtures/win/SRUDB-4k.dat", "tests/fixtures/win/SRUDB.dat", "tests/fixtures/win/ese-deep.dat"] },
@@ -132,6 +135,25 @@ fn ext(d: &[u8]) {
         }
     }
     v.free_runs(&mut c);
+}
+
+/// journald's compressed fields: XZ, LZ4 and zstd straight from the input,
+/// and at every offset of it (a journal file holds them inside objects).
+fn journalz(d: &[u8]) {
+    use kokino_analysis::linux::{decompress, lz4_block};
+    for flags in [1u8, 2, 4] {
+        let _ = decompress(flags, d, 1 << 16);
+    }
+    let _ = lz4_block(d, 1 << 16);
+    for at in (0..d.len()).step_by(64).take(64) {
+        let _ = decompress(2, &d[at..], 1 << 12);
+        if d[at..].starts_with(&[0x28, 0xb5, 0x2f, 0xfd]) {
+            let _ = decompress(4, &d[at..], 1 << 12);
+        }
+        if d[at..].starts_with(&[0xfd, b'7', b'z', b'X', b'Z']) {
+            let _ = decompress(1, &d[at..], 1 << 12);
+        }
+    }
 }
 
 fn linuxlogs(d: &[u8]) {
@@ -274,6 +296,23 @@ fn task(d: &[u8]) {
     let _ = kokino_artifacts::task::dynamic_info(d);
     // A SOFTWARE hive: TaskCache joined with no task files.
     kokino_analysis::windows::fuzz_tasks(d);
+}
+
+/// Mailboxes and messages: splitting, headers, MIME parts, encodings, and
+/// the search text built from them (attachments opened as documents).
+fn mail(d: &[u8]) {
+    use kokino_analysis::mail;
+    let _ = mail::detect(d);
+    let _ = mail::messages(d, "mbox", 0, false);
+    let p = mail::parse(d);
+    let _ = mail::decode_words(&p.header("Subject"));
+    let _ = kokino_analysis::doctext::extract(d);
+}
+
+fn evt(d: &[u8]) {
+    let _ = kokino_artifacts::evt::parse(d, "Security", &mut |e| {
+        let _ = e.get("TargetUserName");
+    });
 }
 
 /// Registry transaction logs: the input as a log for the test image's

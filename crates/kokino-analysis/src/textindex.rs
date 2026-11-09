@@ -431,7 +431,8 @@ pub fn build(ev: &Evidence, analysis: &Analysis, carved: Option<&crate::carve::C
             ch.flush()?;
             st.chunks += ch.chunks;
             if read_any && len <= MAX_DOC_BYTES {
-                let head = fs.read(&mut r, e, &name, 0, 8).unwrap_or_default();
+                // Mail is recognized by its first header lines, so read a little more.
+                let head = fs.read(&mut r, e, &name, 0, 2048.min(len as usize)).unwrap_or_default();
                 if crate::doctext::detect(&head).is_some() {
                     if let Ok(data) = fs.read(&mut r, e, &name, 0, len as usize) {
                         let x = crate::doctext::extract(&data);

@@ -337,6 +337,19 @@ the carved files. Before the fix, records inside a carved file longer than
 the 1 MiB read window were skipped (only 1,539 of the cache's records were
 listed), and the clock offset was truncated to UTC+02:45 instead of rounded.
 
+## Internet Explorer cookies: the Digital Detective practice case (unreleased)
+
+The practice files hold the user's two Cookies folders. Each `index.dat`
+was read with its cookie text files, as the analysis does:
+
+| Folder | Index entries | Cookies listed | Sites | Marked |
+|---|--:|--:|--:|---|
+| Cookies | 2 (1 deleted) | 3 | 1 | 1 deleted index entry whose cookie file is gone (a ferry operator's site) |
+| Cookies\Low (protected mode) | 87 (1 deleted) | 220 | 86 | 1 deleted index entry whose cookie file is gone (filehippo.com, a download site) |
+
+Creation and last-use times fall on 2011-10-18 and 2011-10-19, the two days
+of the case's browsing history.
+
 ## Registry transaction logs: public test hives (unreleased)
 
 Maxim Suhanov's yarp project publishes registry hives for testing

@@ -56,6 +56,8 @@ pub struct WebSource {
     /// Internet Explorer cache entries in this file.
     #[serde(default)]
     pub cached: u64,
+    #[serde(default)]
+    pub cookies: u64,
     /// Deleted entries recovered from inside the file.
     #[serde(default)]
     pub recovered: u64,
@@ -81,6 +83,29 @@ pub struct Visit {
     /// A deleted entry recovered from free blocks inside the history file.
     #[serde(default)]
     pub recovered: bool,
+}
+
+/// A cookie Internet Explorer kept (Cookies folder: index.dat and one text
+/// file per site).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Cookie {
+    pub src: u32,
+    /// Site and path, as `example.test/` or `www.example.test/shop/`.
+    pub site: String,
+    pub name: String,
+    /// The value (cut at 400 characters).
+    pub value: String,
+    pub created: u64,
+    pub expires: u64,
+    /// When the browser last used the site's cookie file (from index.dat).
+    pub last_access: u64,
+    /// The cookie file, e.g. `alice@shop[1].txt` or `1N9VWD9L.txt`.
+    pub file: String,
+    pub flags: u32,
+    /// The index.dat entry is deleted (recovered from free blocks).
+    pub recovered: bool,
+    /// Anything unusual: the cookie file is gone, or it has no index entry.
+    pub note: String,
 }
 
 /// A page part kept in Internet Explorer's cache (Content.IE5).
@@ -137,6 +162,8 @@ pub struct WebActivity {
     pub searches: Vec<Search>,
     #[serde(default)]
     pub cache: Vec<CacheEntry>,
+    #[serde(default)]
+    pub cookies: Vec<Cookie>,
 }
 
 impl WebActivity {

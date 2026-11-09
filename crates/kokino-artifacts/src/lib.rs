@@ -7,6 +7,7 @@ pub mod bin;
 pub mod browser;
 pub mod cfb;
 pub mod ese;
+pub mod evt;
 pub mod evtx;
 pub mod iecache;
 pub mod jumplist;

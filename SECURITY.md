@@ -136,7 +136,16 @@ Exports, legacy Office text and registry logs (unreleased):
 | `doc` | again, now with Word, Excel and PowerPoint 97-2003, Outlook .msg and RTF seeds (piece tables, shared strings split over CONTINUE records, text atoms, property sets, RTF groups and escapes) | 10 min | 37,498,697 | none |
 | `reglog` | registry transaction logs: base blocks, new-format log entries (Marvin32 checksums, dirty page lists, sequence order across two logs) and old-format dirty sector maps, applied to a dirty hive, then the hive read | 10 min | 58,565,421 | none |
 
-In all: 475,652,711 inputs over 28 targets, and 29 distinct problems
+Legacy event logs, email and journald compression (unreleased):
+
+| Target | What it covers | Rounds | Inputs in all | Distinct problems found |
+|---|---|---|--:|---|
+| `evt` | legacy .evt logs: header, records found at any 4-byte boundary, records wrapping around the end of the buffer, strings, SIDs | 10 min | 30,689,834 | none |
+| `mail` | mbox splitting, headers and encoded words, MIME parts (nested, attached messages), quoted-printable, base64, charsets, and the search text built from messages and their attachments | 10 min | 7,542,816 | none |
+| `journalz` | journald's compressed fields: XZ, LZ4 (Kokino's own decoder) and zstd, from the input and from offsets inside it | 10 min | 45,374,291 | none |
+| `linuxlogs` | again, with a journal holding XZ and LZ4 fields | 10 min | 7,898,202 | none |
+
+In all: 567,157,854 inputs over 31 targets, and 29 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed

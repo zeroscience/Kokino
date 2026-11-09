@@ -54,6 +54,10 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
             if let Err(e) = res {
                 src.error = Some(format!("{:#}", e));
             }
+            if src.profile.starts_with("Cookies") {
+                let mut read = |e: &kokino_ntfs::FsEntry| fs.read(r, e, "", 0, e.size as usize).ok();
+                ie_cookie_files(&mut read, files, i, out.sources.len() as u32, &mut src, &mut out);
+            }
             out.sources.push(src);
             continue;
         }
@@ -84,9 +88,64 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
     ie_repeats(&mut out);
     out.visits.sort_by_key(|v| v.t);
     out.cache.sort_by_key(|c| c.t);
+    out.cookies.sort_by_key(|c| c.created.max(c.last_access));
     out.downloads.sort_by_key(|d| d.start);
     out.searches.sort_by_key(|s| s.t);
     out
+}
+
+/// Internet Explorer cookies: index.dat names each site's cookie file in
+/// the same folder; the cookies are in those text files. Files the index
+/// no longer lists (deleted entries, deleted files) are read too.
+fn ie_cookie_files(read_file: &mut dyn FnMut(&kokino_ntfs::FsEntry) -> Option<Vec<u8>>, files: &[FileRow], index: usize, src_idx: u32, src: &mut browser::WebSource, out: &mut WebActivity) {
+    let parent = files[index].e.parent;
+    let in_folder: Vec<usize> = files.iter().enumerate().filter(|(_, f)| f.e.parent == parent && !f.e.is_dir && f.e.name.to_ascii_lowercase().ends_with(".txt")).map(|(j, _)| j).collect();
+    let mut read = |j: usize| -> Vec<browser::Cookie> {
+        let e = &files[j].e;
+        if e.size == 0 || e.size > 1 << 20 {
+            return vec![];
+        }
+        read_file(e).map(|d| iecache::cookie_text(&d)).unwrap_or_default()
+    };
+    let entries: Vec<browser::Cookie> = {
+        let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut out.cookies).into_iter().partition(|c| c.src == src_idx);
+        out.cookies = rest;
+        mine
+    };
+    let mut used = std::collections::HashSet::new();
+    let mut rows = vec![];
+    for e in entries {
+        // A live file of that name first, else a deleted one.
+        let j = in_folder.iter().copied().filter(|&j| files[j].e.name.eq_ignore_ascii_case(&e.file)).min_by_key(|&j| files[j].e.deleted);
+        match j {
+            Some(j) => {
+                used.insert(j);
+                let cs = read(j);
+                if cs.is_empty() {
+                    rows.push(browser::Cookie { note: "the cookie file is empty or unreadable".into(), ..e });
+                    continue;
+                }
+                for c in cs {
+                    rows.push(browser::Cookie { src: src_idx, last_access: e.last_access, file: e.file.clone(), recovered: e.recovered, note: if files[j].e.deleted { "cookie file deleted".into() } else { String::new() }, ..c });
+                }
+            }
+            None => rows.push(browser::Cookie { note: "the cookie file is gone; only the index entry remains".into(), ..e }),
+        }
+    }
+    for j in in_folder.into_iter().filter(|j| !used.contains(j)) {
+        let note = if files[j].e.deleted { "cookie file deleted, and not in index.dat" } else { "not in index.dat (its entry was removed)" };
+        for c in read(j) {
+            rows.push(browser::Cookie { src: src_idx, file: files[j].e.name.clone(), note: note.into(), ..c });
+        }
+    }
+    rows.truncate(200_000);
+    src.cookies = rows.len() as u64;
+    let times = rows.iter().flat_map(|c| [c.created, c.last_access]).filter(|&t| t > 0);
+    if src.oldest == 0 {
+        src.oldest = times.clone().min().unwrap_or(0);
+    }
+    src.newest = src.newest.max(times.max().unwrap_or(0));
+    out.cookies.extend(rows);
 }
 
 /// IE's main history keeps the last visit of each page, which is also in
@@ -180,6 +239,9 @@ fn ie_impact(s: &browser::WebSource) -> Option<String> {
         if s.cached > 0 {
             parts.push(format!("{} cached {}", s.cached, if s.cached == 1 { "file" } else { "files" }));
         }
+        if s.cookies > 0 {
+            parts.push(format!("{} {}", s.cookies, if s.cookies == 1 { "cookie" } else { "cookies" }));
+        }
         if s.downloads > 0 {
             parts.push(plural(s.downloads, "download"));
         }
@@ -212,4 +274,53 @@ fn day(ft: u64) -> String {
         return "?".into();
     }
     kokino_core::time::filetime_to_iso(ft).chars().take(10).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Cookie files joined to their index entries; a file whose entry was
+    /// deleted, a file with no entry, and an entry whose file is gone.
+    #[test]
+    fn ie_cookies_joined_to_files() {
+        let row = |rec: u64, path: &str, size: u64, deleted: bool| {
+            let mut r = crate::antiforensics::tests::row(rec, path, false, 0, None);
+            r.e.parent = 77;
+            r.e.size = size;
+            r.e.deleted = deleted;
+            r
+        };
+        let dir = "/Users/alice/AppData/Roaming/Microsoft/Windows/Cookies";
+        let c = |name: &str, value: &str, site: &str| format!("{name}\n{value}\n{site}\n1024\n3643744512\n30550353\n674454847\n30182824\n*\n");
+        let bank = c("session", "4471a9", "bank.test/") + &c("lang", "en", "bank.test/");
+        let drop = c("uploader", "alice", "drop.test/");
+        let tools = c("dl", "sdelete", "tools.test/");
+        let files = vec![
+            row(1, &format!("{dir}/index.dat"), 0x5000, false),
+            row(2, &format!("{dir}/alice@bank[1].txt"), bank.len() as u64, false),
+            row(3, &format!("{dir}/alice@drop[1].txt"), drop.len() as u64, true),
+            row(4, &format!("{dir}/alice@tools[1].txt"), tools.len() as u64, false),
+        ];
+        let mut out = WebActivity::default();
+        out.sources.push(browser::WebSource::default());
+        let t = 133_000_000_000_000_000u64;
+        let entry = |site: &str, file: &str, recovered: bool| browser::Cookie { src: 1, site: site.into(), file: file.into(), last_access: t, recovered, ..Default::default() };
+        out.cookies = vec![entry("bank.test/", "alice@bank[1].txt", false), entry("drop.test/", "alice@drop[1].txt", true), entry("gone.test/", "alice@gone[1].txt", false)];
+        let mut src = iecache::classify(&format!("{dir}/index.dat"), "index.dat").unwrap();
+        let data = [bank, drop, tools];
+        let mut read = |e: &kokino_ntfs::FsEntry| Some(data[(e.record - 2) as usize].clone().into_bytes());
+        ie_cookie_files(&mut read, &files, 0, 1, &mut src, &mut out);
+        let got: Vec<(&str, &str, &str, u64, bool, &str)> = out.cookies.iter().map(|c| (c.site.as_str(), c.name.as_str(), c.value.as_str(), c.last_access, c.recovered, c.note.as_str())).collect();
+        assert_eq!(got, [
+            ("bank.test/", "session", "4471a9", t, false, ""),
+            ("bank.test/", "lang", "en", t, false, ""),
+            ("drop.test/", "uploader", "alice", t, true, "cookie file deleted"),
+            ("gone.test/", "", "", t, false, "the cookie file is gone; only the index entry remains"),
+            ("tools.test/", "dl", "sdelete", 0, false, "not in index.dat (its entry was removed)"),
+        ]);
+        assert_eq!(src.cookies, 5);
+        assert!(out.cookies[0].created > 0 && out.cookies[0].expires > out.cookies[0].created);
+        assert!(ie_impact(&browser::WebSource { cookies: 5, ..src.clone() }).unwrap().contains("5 cookies"));
+    }
 }

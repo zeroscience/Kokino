@@ -290,9 +290,26 @@ def utmp(ty, line, user, host, t):
     return bytes(r)
 
 
-def journal(entries):
-    """A small systemd journal (regular mode, uncompressed): each entry is
-    (realtime microseconds, {field: value})."""
+def lz4_literals(data):
+    """journald's LZ4 form: the size as 8 bytes, then one LZ4 block that
+    holds the data as literals (a valid block, if not a small one)."""
+    n = len(data)
+    block = bytearray([0xF0])
+    rest = n - 15
+    while rest >= 255:
+        block.append(255)
+        rest -= 255
+    block.append(rest)
+    return struct.pack("<Q", n) + bytes(block) + data
+
+
+def journal(entries, compress=None):
+    """A small systemd journal (regular mode): each entry is (realtime
+    microseconds, {field: value}). `compress` maps a field value to "xz" or
+    "lz4": that data object is stored compressed, as journald does with
+    long fields."""
+    import lzma
+    compress = compress or {}
     out = bytearray(256)
     out[:8] = b"LPKSHHRH"
     objs = bytearray()
@@ -310,7 +327,17 @@ def journal(entries):
         for kv in fields.items():
             if kv not in datas:
                 datas[kv] = 256 + len(objs)
-                objs += obj(1, ("%s=%s" % kv).encode())
+                raw = ("%s=%s" % kv).encode()
+                how = compress.get(kv[1])
+                if how == "xz":
+                    o = obj(1, lzma.compress(raw, format=lzma.FORMAT_XZ))
+                    o[1] = 1
+                elif how == "lz4":
+                    o = obj(1, lz4_literals(raw))
+                    o[1] = 2
+                else:
+                    o = obj(1, raw)
+                objs += o
     for t, fields in entries:
         items = b"".join(struct.pack("<QQ", datas[kv], 0) for kv in fields.items())
         e = obj(3, items)
@@ -319,6 +346,52 @@ def journal(entries):
     out += objs
     struct.pack_into("<QQ", out, 88, 256, len(objs))
     return bytes(out)
+
+
+MAIL_SPOOL = (
+    "From alice@lab.test Tue Oct 20 10:05:30 2026\r\n"
+    "Return-Path: <alice@lab.test>\r\n"
+    "Date: Tue, 20 Oct 2026 10:05:30 +0200\r\n"
+    "From: Alice <alice@lab.test>\r\n"
+    "To: bob@lab.test\r\n"
+    "Subject: =?UTF-8?B?UTMgcGxhbiDigJMgY29uZmlkZW50aWFs?=\r\n"
+    "Message-ID: <1@lab.test>\r\n"
+    "MIME-Version: 1.0\r\n"
+    "Content-Type: multipart/mixed; boundary=\"XYZ\"\r\n"
+    "\r\n"
+    "--XYZ\r\n"
+    "Content-Type: text/plain; charset=iso-8859-1\r\n"
+    "Content-Transfer-Encoding: quoted-printable\r\n"
+    "\r\n"
+    "Move the funds to the caf=E9 account to=\r\n"
+    "night.\r\n"
+    "--XYZ\r\n"
+    "Content-Type: application/pdf; name=\"ledger.pdf\"\r\n"
+    "Content-Disposition: attachment; filename=\"ledger.pdf\"\r\n"
+    "Content-Transfer-Encoding: base64\r\n"
+    "\r\n"
+    "JVBERi0xLjQKJcOkw7w=\r\n"
+    "--XYZ--\r\n"
+    "\r\n"
+    "From bob@lab.test Wed Oct 21 09:00:00 2026\n"
+    "Date: Wed, 21 Oct 2026 09:00:00 +0000\n"
+    "From: bob@lab.test\n"
+    "To: Alice <alice@lab.test>\n"
+    "Subject: Re: wipe the laptop\n"
+    "Content-Type: text/html; charset=utf-8\n"
+    "\n"
+    "<p>Done. Used <b>sdelete</b> on everything.</p>\n"
+)
+
+SAVED_EML = (
+    "Date: Thu, 22 Oct 2026 07:45:00 +0000\n"
+    "From: it-support@lab.test\n"
+    "To: alice@lab.test\n"
+    "Subject: Password reset\n"
+    "Content-Type: text/plain; charset=utf-8\n"
+    "\n"
+    "Your new VPN password is in the attached note.\n"
+)
 
 
 def server_tree():
@@ -373,9 +446,14 @@ def server_tree():
         "/var/log/wtmp": b"".join([utmp(2, "~", "reboot", "6.1.0-lab-amd64", L(6868)), utmp(7, "pts/0", "alice", "192.0.2.10", L(7471)),
                                    utmp(8, "pts/0", "", "", L(9000)), utmp(1, "~~", "shutdown", "6.1.0-lab-amd64", L(10000))]),
         "/var/log/btmp": utmp(6, "ssh:notty", "admin", "198.51.100.7", L(8073)),
-        "/var/log/journal/%s/system.journal" % machine: journal([(L(7200) * 1000000, {"SYSLOG_IDENTIFIER": "sshd", "_HOSTNAME": "lab-srv",
-                                                                   "MESSAGE": "Accepted password for bob from 203.0.113.9 port 40022 ssh2"})]),
+        # Both messages stored compressed (XZ and LZ4), as journald does with long fields.
+        "/var/log/journal/%s/system.journal" % machine: journal([
+            (L(7200) * 1000000, {"SYSLOG_IDENTIFIER": "sshd", "_HOSTNAME": "lab-srv", "MESSAGE": "Accepted password for bob from 203.0.113.9 port 40022 ssh2"}),
+            (L(7250) * 1000000, {"SYSLOG_IDENTIFIER": "sshd", "_HOSTNAME": "lab-srv", "MESSAGE": "Failed password for root from 203.0.113.9 port 40030 ssh2"}),
+        ], {"Accepted password for bob from 203.0.113.9 port 40022 ssh2": "xz", "Failed password for root from 203.0.113.9 port 40030 ssh2": "lz4"}),
         "/home/alice/.bash_history": history,
+        "/var/mail/alice": MAIL_SPOOL,
+        "/home/alice/Downloads/reset.eml": SAVED_EML,
         "/home/alice/.ssh/authorized_keys": 'ssh-ed25519 %s alice@lab-laptop\ncommand="/tmp/.x/k" ssh-ed25519 %s backdoor@lab.test\n' % (pub, pub),
         "/home/alice/.ssh/known_hosts": "192.0.2.10 ssh-ed25519 %s\n" % pub,
         "/root/.bash_history": ("link", "/dev/null"),

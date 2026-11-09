@@ -23,7 +23,7 @@
 //! access and the secondary time the server's last-modified date.
 
 use crate::bin::*;
-use crate::browser::{CacheEntry, Download, Engine, Search, Visit, WebActivity, WebSource};
+use crate::browser::{CacheEntry, Cookie, Download, Engine, Search, Visit, WebActivity, WebSource};
 use serde::{Deserialize, Serialize};
 
 pub const SIGNATURE: &[u8] = b"Client UrlCache MMF Ver ";
@@ -275,6 +275,39 @@ pub fn record(d: &[u8], o: usize) -> Option<Record> {
     Some(rec)
 }
 
+/// The cookies in one Internet Explorer cookie file: records of name,
+/// value, site and path, flags, expiry (low, high), creation (low, high),
+/// each ended by a line holding `*`.
+pub fn cookie_text(d: &[u8]) -> Vec<Cookie> {
+    let text = String::from_utf8_lossy(d);
+    let mut out = vec![];
+    let mut lines: Vec<&str> = vec![];
+    for line in text.split('\n') {
+        let line = line.trim_end_matches('\r');
+        if line == "*" {
+            if lines.len() >= 8 {
+                let n = |i: usize| lines[i].trim().parse::<u64>().unwrap_or(0);
+                out.push(Cookie {
+                    name: lines[0].to_string(),
+                    value: lines[1].chars().take(400).collect(),
+                    site: lines[2].to_string(),
+                    flags: n(3) as u32,
+                    expires: plausible(n(5) << 32 | n(4)),
+                    created: plausible(n(7) << 32 | n(6)),
+                    ..Default::default()
+                });
+            }
+            lines.clear();
+            if out.len() >= 10_000 {
+                break;
+            }
+        } else if lines.len() < 64 {
+            lines.push(line);
+        }
+    }
+    out
+}
+
 /// A NUL-terminated string of printable single-byte characters, at least
 /// three long, wholly inside `r`.
 fn text(r: &[u8], o: usize) -> Option<String> {
@@ -369,6 +402,8 @@ pub fn classify(path: &str, name: &str) -> Option<WebSource> {
         format!("Cache{}", low)
     } else if parent.eq_ignore_ascii_case("IEDownloadHistory") {
         "Downloads".to_string()
+    } else if parent.eq_ignore_ascii_case("Cookies") || (parent.eq_ignore_ascii_case("Low") && n >= 3 && parts[n - 3].eq_ignore_ascii_case("Cookies")) {
+        format!("Cookies{}", low)
     } else {
         return None;
     };
@@ -421,6 +456,11 @@ pub fn to_web(src: &mut WebSource, d: &[u8], out: &mut WebActivity) -> anyhow::R
                 };
                 out.cache.push(CacheEntry { t: r.primary, modified: r.secondary, src: idx, url, file, content_type: r.content_type.clone(), hits: r.hits, recovered, leak: r.kind == Kind::Leak });
             }
+            Location::Cookie { url, .. } if r.kind == Kind::Url && src.profile.starts_with("Cookies") => {
+                // The cookies themselves are in the text file; the caller
+                // reads it (cookie_text) and fills in the rest.
+                out.cookies.push(Cookie { src: idx, site: url, last_access: r.primary, file: r.file.clone(), recovered, ..Default::default() });
+            }
             Location::Download => {
                 if let Some(dl) = &r.download {
                     let complete = dl.total > 0 && dl.received == dl.total;
@@ -466,6 +506,7 @@ pub fn to_web(src: &mut WebSource, d: &[u8], out: &mut WebActivity) -> anyhow::R
     src.visits = (out.visits.len() - v0) as u64;
     src.urls = src.visits;
     src.cached = (out.cache.len() - c0) as u64;
+    src.cookies = out.cookies.iter().filter(|c| c.src == idx).count() as u64;
     src.downloads = (out.downloads.len() - d0) as u64;
     src.searches = (out.searches.len() - s0) as u64;
     src.recovered = out.visits[v0..].iter().filter(|v| v.recovered).count() as u64 + out.cache[c0..].iter().filter(|c| c.recovered).count() as u64;
@@ -570,6 +611,21 @@ pub(crate) mod tests {
         d
     }
 
+    /// Day of a FILETIME, for the tests.
+    fn kokino_core_iso(ft: u64) -> String {
+        let days = (ft / 10_000_000 / 86_400) as i64 - 134_774; // days since 1970
+        let z = days + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+        format!("{:04}-{:02}-{:02}", y, m, d)
+    }
+
     // 2011-10-19 08:28:22 UTC and the same in UTC+3.
     pub const T: u64 = 129_634_865_020_000_000;
     pub const T_LOCAL: u64 = T + 3 * 3600 * 10_000_000;
@@ -620,7 +676,15 @@ pub(crate) mod tests {
         assert_eq!(c(&format!("{h}/Low/History.IE5/index.dat")).unwrap().1, "History (protected mode)");
         assert_eq!(c("/Documents and Settings/bob/Local Settings/Temporary Internet Files/Content.IE5/index.dat"), Some(("bob".into(), "Cache".into())));
         assert_eq!(c("/Users/alice/AppData/Roaming/Microsoft/Windows/IEDownloadHistory/index.dat").unwrap().1, "Downloads");
-        assert!(c("/Users/alice/AppData/Roaming/Microsoft/Windows/Cookies/index.dat").is_none());
+        assert_eq!(c("/Users/alice/AppData/Roaming/Microsoft/Windows/Cookies/index.dat").unwrap().1, "Cookies");
+        assert_eq!(c("/Users/alice/AppData/Roaming/Microsoft/Windows/Cookies/Low/index.dat").unwrap().1, "Cookies (protected mode)");
+        assert!(c("/Users/alice/AppData/Roaming/Microsoft/Windows/IECompatCache/index.dat").is_none());
+        let ck = cookie_text(b"sid\nabc123\nshop.test/\n1024\n3643744512\n30550353\n674454847\n30182824\n*\nlang\nen\nshop.test/\n0\n0\n0\n0\n0\n*\n");
+        assert_eq!(ck.len(), 2);
+        assert_eq!((ck[0].name.as_str(), ck[0].value.as_str(), ck[0].site.as_str(), ck[0].flags), ("sid", "abc123", "shop.test/", 1024));
+        assert_eq!(kokino_core_iso(ck[0].created), "2011-10-18");
+        assert_eq!(kokino_core_iso(ck[0].expires), "2016-10-18");
+        assert_eq!(ck[1].created, 0);
         assert!(classify("/x/History.IE5/other.dat", "other.dat").is_none());
         assert_eq!(day_number("20111020").unwrap() - day_number("20111019").unwrap(), 1);
         assert_eq!(day_number("20120301").unwrap() - day_number("20120228").unwrap(), 2);

@@ -59,6 +59,8 @@ pub enum Kind {
     /// OLE compound file: Word, Excel and PowerPoint 97-2003, Outlook .msg.
     Ole,
     Rtf,
+    /// An mbox mailbox or one email message.
+    Mail,
 }
 
 /// Container kind from the first bytes, if this module can decode it.
@@ -73,6 +75,8 @@ pub fn detect(head: &[u8]) -> Option<Kind> {
         Some(Kind::Ole)
     } else if head.starts_with(b"{\\rtf") {
         Some(Kind::Rtf)
+    } else if crate::mail::detect(head).is_some() {
+        Some(Kind::Mail)
     } else {
         None
     }
@@ -142,6 +146,30 @@ impl Cx {
             Some(Kind::Rtf) => {
                 let text = crate::oletext::rtf(data);
                 self.push(&format!("{}text", prefix), text);
+            }
+            Some(Kind::Mail) => {
+                // Each message: its headers and text; document attachments
+                // are opened like any other content.
+                let ranges = if data.starts_with(b"From ") { crate::mail::split_mbox(data) } else { vec![(0, data.len())] };
+                for (k, (o, n)) in ranges.into_iter().enumerate().take(100_000) {
+                    let p = crate::mail::parse(&data[o..o + n]);
+                    let label = format!("{}message {}", prefix, k + 1);
+                    let head: Vec<String> = ["Date", "From", "To", "Cc", "Subject"].iter().map(|h| format!("{}: {}", h, crate::mail::decode_words(&p.header(h)))).collect();
+                    let names: Vec<String> = p.attachments.iter().map(|(a, _)| a.name.clone()).collect();
+                    let mut text = head.join("\n");
+                    text.push('\n');
+                    text.push_str(&p.text);
+                    if !names.is_empty() {
+                        text.push_str(&format!("\nAttachments: {}", names.join(", ")));
+                    }
+                    self.push(&label, text);
+                    for (a, bytes) in p.attachments {
+                        if self.left == 0 {
+                            break;
+                        }
+                        self.content(&bytes, &format!("{}/{}", label, a.name), depth + 1);
+                    }
+                }
             }
             None => {}
         }

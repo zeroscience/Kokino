@@ -33,7 +33,7 @@ pub fn is_web(src: &str) -> bool {
 }
 
 pub fn is_windows(src: &str) -> bool {
-    matches!(src, "EXEC" | "OPEN" | "USB" | "INST" | "NET" | "EVT" | "USN" | "REG")
+    matches!(src, "EXEC" | "OPEN" | "USB" | "INST" | "NET" | "EVT" | "USN" | "REG" | "MAIL")
 }
 
 /// Events that do not point at a file row.
@@ -96,6 +96,7 @@ pub fn build(files: &[FileRow], web: &WebActivity, windows: &WindowsArtifacts, l
             "NET" => "NET",
             "FILE" => "USN",
             "REG" => "REG",
+            "MAIL" => "MAIL",
             _ => "EVT",
         };
         out.push(TimelineEvent { t: w.t, macb: String::new(), src, idx: i as u32 });

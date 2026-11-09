@@ -333,6 +333,7 @@ function caseNav(c, active, eid, helpActive = null) {
       { href: base + "/carved", label: "Carved files", icon: "layers", on: on("carved"), sub: true },
       { href: base + "/photos", label: "Pictures", icon: "image", on: on("photos") || on("photo"), sub: true },
       { href: base + "/web", label: "Web activity", icon: "globe", on: on("web"), sub: true },
+      { href: base + "/mail", label: "Email", icon: "mail", on: on("mail"), sub: true },
       { href: base + "/hashes", label: "Hash analysis", icon: "hash", on: on("hashes"), sub: true },
       { href: base + "/indicators", label: "Anti-forensics", icon: "alert", on: on("indicators"), sub: true },
       { href: base + "/hex", label: "Hex", icon: "hex", on: on("hex"), sub: true },
@@ -547,7 +548,7 @@ async function workspace(cid, eid, tab, q) {
   if (!ev) throw new Error("evidence not found");
   await loadBookmarks(cid).catch(() => {});
   caseNav(c, tab, eid);
-  setCrumbs([{ label: "Cases", href: "/" }, { label: c.info.name, href: "/c/" + cid }, { label: ev.record.name, href: `/c/${cid}/e/${eid}/summary` }, { label: { web: "Web activity", photos: "Pictures", photo: "Picture", hashes: "Hash analysis" }[tab] || tab[0].toUpperCase() + tab.slice(1) }]);
+  setCrumbs([{ label: "Cases", href: "/" }, { label: c.info.name, href: "/c/" + cid }, { label: ev.record.name, href: `/c/${cid}/e/${eid}/summary` }, { label: { web: "Web activity", mail: "Email", photos: "Pictures", photo: "Picture", hashes: "Hash analysis" }[tab] || tab[0].toUpperCase() + tab.slice(1) }]);
   if (!ev.analyzed) {
     // The job list may predate this ingest (started in another tab or by
     // another examiner): ask the server before deciding.
@@ -583,6 +584,7 @@ async function workspace(cid, eid, tab, q) {
   if (tab === "timeline") return timelineTab(ctx);
   if (tab === "indicators") return indicatorsTab(ctx);
   if (tab === "web") return webTab(ctx);
+  if (tab === "mail") return mailTab(ctx);
   if (tab === "system") return systemTab(ctx);
   return summaryTab(ctx);
 }
@@ -991,7 +993,7 @@ async function timelineTab(ctx) {
     const params = new URLSearchParams({ q: q.value, from: f && !raw ? dayStart(f) : f, to: t && !raw ? dayStart(next(t)) : t, only, offset, limit: 400 });
     const r = await api(`${base}?${params}`);
     total = r.total;
-    const WIN = { EXEC: "Program run", OPEN: "File or folder opened", USB: "USB device", INST: "Program installed", NET: "Network", EVT: "Event", USN: "File change (change journal)", REG: "Registry key deleted" };
+    const WIN = { EXEC: "Program run", OPEN: "File or folder opened", USB: "USB device", INST: "Program installed", NET: "Network", EVT: "Event", USN: "File change (change journal)", REG: "Registry key deleted", MAIL: "Email" };
     const rows = r.items.map((e) => {
       const art = e.web || e.windows;
       const click = e.web ? () => webDetail(e.src === "DL" ? "Download" : e.src === "SEARCH" ? "Search" : "Page visit", [[`Time (${zoneName()})`, ts(e.t)], ["What", e.path], ["Where", e.detail]])
@@ -1794,11 +1796,12 @@ async function systemTab(ctx) {
   drawSeg();
   draw();
   // Analyzed before 1.2.8: the newer Windows artifacts are missing, not absent.
-  const stale = isNtfs(r.fs) && r.schema < 9
+  const stale = isNtfs(r.fs) && r.schema < 10
     ? h("div.card.flat.stack", h("p", { style: { margin: 0, color: "var(--warn)" } }, r.schema < 6
       ? "This evidence was analyzed by an earlier Kokino version, before deleted registry keys, scheduled tasks, the change journal, ShellBags, BAM/DAM, SRUM and the names of deleted files from folder indexes and $LogFile were read. Those parts are empty until it is analyzed again."
       : r.schema < 7 ? "This evidence was analyzed by an earlier Kokino version, before scheduled tasks and deleted registry keys were read. They are missing until it is analyzed again."
-      : "This evidence was analyzed by an earlier Kokino version, before deleted registry keys were looked for. They are missing until it is analyzed again."),
+      : r.schema < 9 ? "This evidence was analyzed by an earlier Kokino version, before deleted registry keys were looked for and registry transaction logs applied. They are missing until it is analyzed again."
+      : "This evidence was analyzed by an earlier Kokino version, before registry transaction logs were applied and Windows XP event logs (.evt) were read. They are missing until it is analyzed again."),
       canWrite() ? h("div", h("button.primary", { onclick: () => reingest(ctx.cid, ctx.eid, false) }, "Re-analyze now")) : h("p.muted", { style: { margin: 0 } }, "Ask an examiner on this case to re-analyze it."))
     : null;
   render(h("div.stack", intro, stale, seg, body));
@@ -1893,6 +1896,74 @@ async function carvedTab(ctx) {
   if (ctx.q.id != null) { const f = r.files.find((x) => String(x.id) === String(ctx.q.id)); if (f) detail(f); }
 }
 
+// ---------------------------------------------------------------- email
+async function mailTab(ctx) {
+  const base = `/cases/${ctx.cid}/evidence/${ctx.eid}/fs/${ctx.fi}/mail`;
+  const head = await api(`${base}?limit=1`);
+  const intro = h("div.hd", h("h1", "Email"), h("span.sp"), exportButtons(ctx, ctx.fi, "mail"), fsPicker(ctx, "mail"));
+  if (head.schema < 10) {
+    return render(h("div.stack", intro, h("div.card.empty", h("p", "This evidence was analyzed by an earlier Kokino version, before email was read."),
+      canWrite() ? h("button.primary", { onclick: () => reingest(ctx.cid, ctx.eid, false) }, "Re-analyze now") : h("p.muted", "Ask an examiner on this case to re-analyze it."))));
+  }
+  if (!head.mailboxes.length) {
+    return render(h("div.stack", intro, h("div.card.empty", "No mailboxes on this volume: no Thunderbird mail folders, /var/mail spools, .mbox or .eml files.")));
+  }
+  let box = ctx.q.box != null && ctx.q.box !== "" ? Number(ctx.q.box) : null;
+  let offset = 0;
+  const cards = h("div.grid.g3.stagger");
+  const drawCards = () => cards.replaceChildren(...head.mailboxes.map((b, i) => h("div.card.web-src", { class: box === b.file ? "on" : null, style: { "--i": i }, title: b.path, onclick: () => { box = box === b.file ? null : b.file; drawCards(); reload(); } },
+    h("div.row", h("span.bbadge", icon("mail", 14)), h("div", { style: { minWidth: 0 } }, h("b", b.path.split("/").pop()), h("div.muted.ell", b.client ? `${b.client}, ${b.path}` : b.path)), h("span.sp"),
+      b.deleted ? h("span.pill.bad", "deleted file") : null, b.kind === "eml" ? h("span.pill", ".eml") : null),
+    b.error ? h("p.bad-text", b.error) : h("div.web-stats", h("div", h("b", num(b.messages)), h("small", "messages"))))));
+  drawCards();
+  const q = h("input", { placeholder: "Filter by sender, recipient, subject, text or attachment name...", value: ctx.q.q || "", style: { flex: 1 } });
+  const tbody = h("tbody");
+  const count = h("span.muted");
+  const more = h("button", "Load more");
+  const detail = async (x) => {
+    const d = await api(`${base}/${x.n}`);
+    const att = d.attachments.map((a, k) => h("div.row", { style: { gap: "8px" } }, h("b", a.name), h("span.muted", `${a.content_type}, ${bytes(a.size)}${a.sig ? ", " + a.sig : ""}`),
+      canWrite() ? h("a.btn.sm", { href: apiUrl(`${base}/${x.n}/attachment/${k}/export`), download: "", title: "Saved in the case's exports folder and recorded in the audit log with its hashes" }, "Export") : null));
+    modal([
+      h("div.hd", h("h2", d.message.subject || "(no subject)"), h("span.sp"),
+        bmButton({ cid: ctx.cid, eid: ctx.eid, kind: "web", fi: ctx.fi, key: `mail:${ctx.eid}:${ctx.fi}:${d.message.file}:${d.message.offset}`, title: `Email: ${d.message.subject || "(no subject)"}`, path: `${d.message.from} to ${d.message.to}`, time: d.date_iso || "" }),
+        h("button.ghost.sm", { onclick: closeModal }, "Close")),
+      h("div.kv", [["Date", ts(d.date_iso)], ["From", d.message.from], ["To", d.message.to], ["Cc", d.message.cc], ["Message-ID", d.message.message_id],
+        ["Note", [d.message.expunged ? "Deleted in Thunderbird, still in the mailbox file (the folder was not compacted)." : "", d.message.deleted ? "The mailbox file is deleted." : ""].filter(Boolean).join(" ")]]
+        .filter(([, v]) => v).map(([k, v]) => [h("span", k), h("span.mono.wrap", v)])),
+      att.length ? h("div.stack", h("h4", `Attachments (${att.length})`), ...att) : null,
+      h("h4", "Text"),
+      h("pre.mailtext", { style: { whiteSpace: "pre-wrap", maxHeight: "50vh", overflow: "auto" } }, d.text || "(no text)"),
+      h("details", h("summary", `All headers (${d.headers.length})`), h("pre", { style: { whiteSpace: "pre-wrap", fontSize: "12px" } }, d.headers.map(([k, v]) => `${k}: ${v}`).join("\n"))),
+    ]);
+  };
+  const row = (x) => h("tr", { class: x.expunged || x.deleted ? "deleted" : null, onclick: () => detail(x) },
+    h("td.mono", ts(x.date_iso, 16)), h("td.nm.ell", { title: x.from }, x.from), h("td.nm.ell", { title: x.to }, x.to),
+    h("td.nm", h("b", x.subject || "(no subject)"), h("div.muted.ell", x.snippet)),
+    h("td", x.attachments.length ? h("span.pill.info", { title: x.attachments.map((a) => a.name).join(", ") }, `${x.attachments.length} attached`) : null, x.expunged ? h("span.pill.warn", "deleted") : null));
+  const load = async (append) => {
+    const p = new URLSearchParams({ q: q.value, offset, limit: 300 });
+    if (box != null) p.set("mailbox", box);
+    const r = await api(`${base}?${p}`);
+    const rows = r.items.map(row);
+    if (append) tbody.append(...rows); else tbody.replaceChildren(...rows);
+    offset += r.items.length;
+    count.textContent = `${num(r.total)} messages`;
+    more.style.display = offset < r.total ? "" : "none";
+    history.replaceState(null, "", `#/c/${ctx.cid}/e/${ctx.eid}/mail?fi=${ctx.fi}${box != null ? "&box=" + box : ""}${q.value ? "&q=" + encodeURIComponent(q.value) : ""}`);
+  };
+  const reload = debounce(() => { offset = 0; load(false); }, 200);
+  q.addEventListener("input", reload);
+  more.onclick = () => load(true);
+  render(h("div.stack", intro,
+    h("p.muted", "Messages in mbox mailboxes (Thunderbird mail folders, /var/mail) and .eml files, live and deleted. " + zoneSentence() + " Messages Thunderbird deleted stay in the mailbox file until the folder is compacted; they are listed and marked. Message text and document attachments are in the full-text index."),
+    cards,
+    h("div.row.wrap", q, count),
+    h("div.scroll", { style: { maxHeight: "calc(100vh - 300px)" } }, h("table.tbl.web", h("thead", h("tr", [`Date (${zoneName()})`, "From", "To", "Subject", ""].map((c) => h("th", c)))), tbody)),
+    h("div.row", h("span.sp"), more)));
+  load(false);
+}
+
 async function webTab(ctx) {
   const base = `/cases/${ctx.cid}/evidence/${ctx.eid}/fs/${ctx.fi}/web`;
   const head = await api(`${base}?kind=visits&limit=1`);
@@ -1901,8 +1972,8 @@ async function webTab(ctx) {
     return render(h("div.stack", intro, h("div.card.empty", h("p", "This evidence was analyzed by an earlier Kokino version, before browser history extraction existed."),
       canWrite() ? h("button.primary", { onclick: () => reingest(ctx.cid, ctx.eid, false) }, "Re-analyze now") : h("p.muted", "Ask an examiner on this case to re-analyze it."))));
   }
-  const ieStale = head.schema < 8
-    ? h("div.card.flat.row.wrap", h("p", { style: { margin: 0, color: "var(--warn)", flex: 1 } }, "This evidence was analyzed by an earlier Kokino version, before Internet Explorer history (index.dat) was read. It is missing until the evidence is analyzed again."),
+  const ieStale = head.schema < 10
+    ? h("div.card.flat.row.wrap", h("p", { style: { margin: 0, color: "var(--warn)", flex: 1 } }, head.schema < 8 ? "This evidence was analyzed by an earlier Kokino version, before Internet Explorer history (index.dat) and cookies were read. They are missing until the evidence is analyzed again." : "This evidence was analyzed by an earlier Kokino version, before Internet Explorer cookies were read. They are missing until the evidence is analyzed again."),
       canWrite() ? h("button.primary", { onclick: () => reingest(ctx.cid, ctx.eid, false) }, "Re-analyze now") : null)
     : null;
   if (!head.sources.length) {
@@ -1910,15 +1981,15 @@ async function webTab(ctx) {
   }
   const sources = head.sources;
   const webTarget = (what, title, where, t) => ({ cid: ctx.cid, eid: ctx.eid, kind: "web", fi: ctx.fi, key: `web:${ctx.eid}:${ctx.fi}:${what}:${t}:${String(where).slice(0, 200)}`, title: `${what}: ${title}`, path: where, time: t || "" });
-  let kind = ["visits", "downloads", "searches", "cache"].includes(ctx.q.kind) ? ctx.q.kind : "visits";
+  let kind = ["visits", "downloads", "searches", "cache", "cookies"].includes(ctx.q.kind) ? ctx.q.kind : "visits";
   let src = ctx.q.src != null && ctx.q.src !== "" ? Number(ctx.q.src) : null;
   let offset = 0;
 
   const cards = h("div.grid.g3.stagger");
   const drawCards = () => cards.replaceChildren(...sources.map((s, i) => {
     const ie = s.engine === "ie";
-    const empty = !s.error && s.visits === 0 && s.urls === 0 && !(ie && (s.cached || s.downloads));
-    const stats = ie ? [["visits", s.visits], ["downloads", s.downloads], ["searches", s.searches], ["cached", s.cached]] : [["visits", s.visits], ["downloads", s.downloads], ["searches", s.searches], ["URLs", s.urls]];
+    const empty = !s.error && s.visits === 0 && s.urls === 0 && !(ie && (s.cached || s.downloads || s.cookies));
+    const stats = ie ? (s.cookies ? [["cookies", s.cookies], ["visits", s.visits], ["searches", s.searches], ["downloads", s.downloads]] : [["visits", s.visits], ["downloads", s.downloads], ["searches", s.searches], ["cached", s.cached]]) : [["visits", s.visits], ["downloads", s.downloads], ["searches", s.searches], ["URLs", s.urls]];
     return h("div.card.web-src", { class: src === i ? "on" : null, style: { "--i": i }, title: s.path, onclick: () => { src = src === i ? null : i; drawCards(); reload(); } },
       h("div.row", h("span.bbadge", s.browser.slice(0, 2)), h("div", { style: { minWidth: 0 } }, h("b", s.browser), h("div.muted.ell", `${s.user || "unknown user"} / ${s.profile || "?"}`)), h("span.sp"),
         s.deleted ? h("span.pill.bad", ie ? "deleted file" : "deleted DB") : null, s.recovered ? h("span.pill.warn", { title: "Deleted entries recovered from free blocks inside index.dat" }, `${num(s.recovered)} recovered`) : null, empty ? h("span.pill.warn", "empty") : null, s.wal ? h("span.pill.info", { title: "Changes still in the -wal file were applied" }, "WAL") : null),
@@ -1934,7 +2005,7 @@ async function webTab(ctx) {
 
   const seg = h("div.seg");
   const exp = h("span");
-  const drawSeg = () => (exp.replaceChildren(exportButtons(ctx, ctx.fi, kind === "cache" ? "iecache" : kind) || ""), seg.replaceChildren(...[["visits", "Visits"], ["downloads", "Downloads"], ["searches", "Searches"], ["cache", "IE cache"]].filter(([k]) => k !== "cache" || head.counts.cache || kind === "cache").map(([k, l]) => h("button", { class: kind === k ? "on" : null, onclick: () => { kind = k; drawSeg(); reload(); } }, `${l} (${num(head.counts[k])})`))));
+  const drawSeg = () => (exp.replaceChildren(exportButtons(ctx, ctx.fi, kind === "cache" ? "iecache" : kind) || ""), seg.replaceChildren(...[["visits", "Visits"], ["downloads", "Downloads"], ["searches", "Searches"], ["cache", "IE cache"], ["cookies", "IE cookies"]].filter(([k]) => !["cache", "cookies"].includes(k) || head.counts[k] || kind === k).map(([k, l]) => h("button", { class: kind === k ? "on" : null, onclick: () => { kind = k; drawSeg(); reload(); } }, `${l} (${num(head.counts[k])})`))));
   drawSeg();
   const q = h("input", { placeholder: "Filter by URL, title, file or search term...", value: ctx.q.q || "", style: { flex: 1 } });
   const thead = h("thead");
@@ -1942,13 +2013,18 @@ async function webTab(ctx) {
   const count = h("span.muted");
   const more = h("button", "Load more");
   const who = (i) => h("span.muted", { title: srcName(sources[i]) }, sources[i] ? sources[i].browser : "");
-  const COLS = { visits: [`Time (${zoneName()})`, "Browser", "Page", "How", "Visits"], downloads: [`Started (${zoneName()})`, "Browser", "File", "From", "Size", "State"], searches: [`Time (${zoneName()})`, "Browser", "Engine", "Search term", "Source"], cache: [`Last access (${zoneName()})`, "Browser", "URL", "Cached as", "Hits"] };
+  const COLS = { visits: [`Time (${zoneName()})`, "Browser", "Page", "How", "Visits"], downloads: [`Started (${zoneName()})`, "Browser", "File", "From", "Size", "State"], searches: [`Time (${zoneName()})`, "Browser", "Engine", "Search term", "Source"], cache: [`Last access (${zoneName()})`, "Browser", "URL", "Cached as", "Hits"], cookies: [`Created (${zoneName()})`, "Browser", "Site", "Cookie", "Expires", "Last used"] };
   const row = (x) => {
     if (kind === "downloads") {
       const file = (x.target || "").split(/[\\/]/).pop() || "(no target path)";
       return h("tr", { onclick: () => webDetail("Download", [[`Started (${zoneName()})`, ts(x.start_iso)], [`Finished (${zoneName()})`, ts(x.end_iso)], ["Browser", srcName(sources[x.src])], ["Saved to", x.target], ["Source URL", x.url], ["Referrer", x.referrer], ["Size", `${num(x.received)} of ${num(x.total)} bytes`], ["State", x.state], ["Danger", x.danger], ["MIME type", x.mime], ["Opened", x.opened ? "yes" : ""]], webTarget("Download", x.target || x.url, x.url, x.start_iso)) },
         h("td.mono", ts(x.start_iso, 19)), h("td", who(x.src)), h("td.nm", { title: x.target }, h("b", file), h("div.muted.ell", x.target)), h("td.nm.muted", { title: x.url }, x.url),
         h("td.num", x.received >= 0 ? bytes(x.received) : ""), h("td", h("span.pill" + (x.state === "complete" ? ".ok" : x.state.startsWith("interrupted") || x.state === "cancelled" ? ".warn" : ""), x.state), x.danger ? h("span.pill.bad", { style: { marginLeft: "6px" } }, x.danger) : null));
+    }
+    if (kind === "cookies") {
+      return h("tr", { class: x.note ? "faint" : null, onclick: () => webDetail("Cookie", [[`Created (${zoneName()})`, ts(x.created_iso)], ["Expires", ts(x.expires_iso)], ["Site's cookie file last used", ts(x.last_access_iso)], ["Browser", srcName(sources[x.src])], ["Site", x.site], ["Name", x.name], ["Value", x.value], ["Flags", String(x.flags)], ["Cookie file", x.file], ["Note", [x.recovered ? "Its index.dat entry is deleted (recovered from free blocks inside index.dat)." : "", x.note].filter(Boolean).join(" ")]], webTarget("Cookie", `${x.site} ${x.name}`, x.site, x.created_iso)) },
+        h("td.mono", ts(x.created_iso, 19)), h("td", who(x.src)), h("td.nm", h("b", x.site)), h("td.nm", h("span.mono", x.name), x.value ? h("div.muted.ell", { title: x.value }, x.value) : null, x.note ? h("span.pill.warn", x.note.startsWith("not in") ? "no index entry" : x.note.includes("deleted") ? "deleted" : "file gone") : null),
+        h("td.mono", ts(x.expires_iso, 10)), h("td.mono", ts(x.last_access_iso, 16)));
     }
     if (kind === "cache") {
       const note = x.recovered ? "A deleted entry, recovered from free blocks inside index.dat." : x.leak ? "LEAK entry: deleted from the cache, but its file could not be removed at the time (it was in use)." : "";

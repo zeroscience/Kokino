@@ -98,8 +98,9 @@ def sqlite_db():
 def docx():
     b = io.BytesIO()
     with zipfile.ZipFile(b, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("[Content_Types].xml", "<Types/>")
-        z.writestr("word/document.xml", "<w:document><w:body><w:p><w:r><w:t>Recovered draft: wire instructions for Nightjar</w:t></w:r></w:p></w:body></w:document>")
+        # A fixed time, so the fixture is the same every time it is built.
+        for name, text in [("[Content_Types].xml", "<Types/>"), ("word/document.xml", "<w:document><w:body><w:p><w:r><w:t>Recovered draft: wire instructions for Nightjar</w:t></w:r></w:p></w:body></w:document>")]:
+            z.writestr(zipfile.ZipInfo(name, (2026, 10, 20, 10, 31, 0)), text, zipfile.ZIP_DEFLATED)
     return b.getvalue()
 
 

@@ -111,7 +111,7 @@ const RULES: &[Rule] = &[
         category: "Log tampering",
         weight: 0.6,
         k: 1.0,
-        explanation: "Event 1102 (Security) or 104 (System) is written when someone clears an event log; it names the account and the time. Clearing logs destroys the record of logons, process starts and other activity.",
+        explanation: "Event 1102 (Security; 517 on Windows XP and 2003) or 104 (System) is written when someone clears an event log; it names the account and the time. Clearing logs destroys the record of logons, process starts and other activity.",
         caveat: "Administrators sometimes clear logs during maintenance or imaging. Check who cleared it and what else happened around that time.",
     },
     Rule {
@@ -273,8 +273,8 @@ const RULES: &[Rule] = &[
         category: "Log tampering",
         weight: 0.55,
         k: 1.0,
-        explanation: "Security.evtx is missing or no larger than a freshly initialised log (68 KiB), consistent with clearing (wevtutil cl, Clear-EventLog).",
-        caveat: "A brand-new installation has a small log too. Parse EVTX for event 1102 to confirm.",
+        explanation: "Security.evtx is missing or no larger than a freshly initialised log (68 KiB), or on Windows XP and 2003 SecEvent.Evt is no larger than a reset log (64 KiB), consistent with clearing (wevtutil cl, Clear-EventLog, Event Viewer).",
+        caveat: "A brand-new installation has a small log too. Look for event 1102 (517 on Windows XP and 2003) to confirm.",
     },
     Rule {
         id: "prefetch_empty",
@@ -412,6 +412,12 @@ pub fn evaluate(files: &mut [FileRow], now: u64, web: &WebActivity, win: &Window
             Some(i) if files[*i].e.size <= 69_632 => hits.entry("evtx_cleared").or_default().push(*i),
             _ => {}
         }
+        // Windows XP and 2003: a reset SecEvent.Evt is 64 KiB.
+        if let Some(i) = by_path.get("/windows/system32/config/secevent.evt") {
+            if files[*i].e.size <= 65_536 {
+                hits.entry("evtx_cleared").or_default().push(*i);
+            }
+        }
         if let Some(pi) = by_path.get("/windows/prefetch") {
             let pf = files.iter().filter(|f| !f.e.deleted && f.e.path.to_ascii_lowercase().starts_with("/windows/prefetch/") && f.ext == "pf").count();
             if pf == 0 {
@@ -542,7 +548,7 @@ pub fn score(indicators: &[Indicator]) -> Score {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -565,7 +571,7 @@ mod tests {
         assert_eq!(strength(0.5, 1.0, 0), 0.0);
     }
 
-    fn row(record: u64, path: &str, is_dir: bool, created: u64, stream: Option<&str>) -> FileRow {
+    pub(crate) fn row(record: u64, path: &str, is_dir: bool, created: u64, stream: Option<&str>) -> FileRow {
         let e = kokino_ntfs::FsEntry {
             record,
             seq: 1,

@@ -27,6 +27,8 @@ pub const LISTS: &[(&str, &str)] = &[
     ("downloads", "Web: downloads"),
     ("searches", "Web: searches"),
     ("iecache", "Web: Internet Explorer cache"),
+    ("cookies", "Web: Internet Explorer cookies"),
+    ("mail", "Email messages"),
     ("execution", "Windows: programs run"),
     ("access", "Windows: files and folders opened"),
     ("shellbags", "Windows: folders opened (ShellBags)"),
@@ -132,7 +134,7 @@ pub fn table(l: &Loaded, fi: usize, hs: Option<&HashStatus>, carved: Option<&Car
                 f.indicators.iter().map(|i| vec![s(&i.id), s(&i.title), s(&i.category), json!(i.count), json!((i.strength as f64 * 1000.0).round() / 1000.0), json!(i.weight), s(&i.explanation), s(&i.caveat), s(i.records.iter().map(|r| r.to_string()).collect::<Vec<_>>().join(" "))]).collect(),
             )
         }
-        "visits" | "downloads" | "searches" | "iecache" => {
+        "visits" | "downloads" | "searches" | "iecache" | "cookies" => {
             let w = &fsa()?.web;
             let src = |i: u32| w.sources.get(i as usize).map(|x| format!("{} / {} / {}", x.browser, x.user, x.profile)).unwrap_or_default();
             match what {
@@ -147,6 +149,10 @@ pub fn table(l: &Loaded, fi: usize, hs: Option<&HashStatus>, carved: Option<&Car
                 "searches" => tb(
                     vec!["time_utc", "browser", "engine", "term", "recorded_in", "url"],
                     w.searches.iter().map(|q| vec![t(q.t), s(src(q.src)), s(&q.engine), s(&q.term), s(&q.how), s(&q.url)]).collect(),
+                ),
+                "cookies" => tb(
+                    vec!["created_utc", "expires_utc", "last_access_utc", "browser", "site", "name", "value", "flags", "cookie_file", "recovered_index_entry", "note"],
+                    w.cookies.iter().map(|c| vec![t(c.created), t(c.expires), t(c.last_access), s(src(c.src)), s(&c.site), s(&c.name), s(&c.value), json!(c.flags), s(&c.file), json!(c.recovered), s(&c.note)]).collect(),
                 ),
                 _ => tb(
                     vec!["last_access_utc", "server_modified_utc", "browser", "url", "cached_as", "content_type", "hits", "recovered_deleted_entry", "leak"],
@@ -216,6 +222,13 @@ pub fn table(l: &Loaded, fi: usize, hs: Option<&HashStatus>, carved: Option<&Car
                     w.srum.as_ref().map(|r| r.apps.iter().map(|a| vec![s(&a.app), s(&a.user), t(a.first), t(a.last), json!(a.sent), json!(a.received), json!(a.read), json!(a.written)]).collect()).unwrap_or_default(),
                 ),
             }
+        }
+        "mail" => {
+            let f = fsa()?;
+            tb(
+                vec!["date_utc", "from", "to", "cc", "subject", "attachments", "deleted_in_thunderbird", "mailbox_deleted", "message_id", "mailbox", "offset", "length"],
+                f.mail.messages.iter().map(|m| vec![t(m.date), s(&m.from), s(&m.to), s(&m.cc), s(&m.subject), s(m.attachments.iter().map(|a| format!("{} ({} bytes)", a.name, a.size)).collect::<Vec<_>>().join("; ")), json!(m.expunged), json!(m.deleted), s(&m.message_id), s(f.files.get(m.file as usize).map(|r| r.e.path.clone()).unwrap_or_default()), json!(m.offset), json!(m.len)]).collect(),
+            )
         }
         "linux-commands" | "linux-logons" | "linux-events" | "linux-packages" | "linux-persistence" => {
             let f = fsa()?;

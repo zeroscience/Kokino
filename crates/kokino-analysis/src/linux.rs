@@ -1122,7 +1122,7 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
                         lf.first = j.entries.first().map(|e| e.0).unwrap_or(0);
                         lf.last = j.entries.last().map(|e| e.0).unwrap_or(0);
                         if j.compressed > 0 {
-                            lf.note = format!("{} compressed field(s) not read", j.compressed);
+                            lf.note = format!("{} compressed field(s) could not be decoded", j.compressed);
                         }
                         if j.dirty {
                             lf.note = [lf.note.as_str(), "not closed cleanly"].iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join("; ");
@@ -1934,6 +1934,7 @@ pub fn impact(a: &LinuxArtifacts) -> Vec<String> {
 pub struct Journal {
     /// (realtime FILETIME, fields)
     pub entries: Vec<(u64, Vec<(String, String)>)>,
+    /// Compressed fields that could not be decoded.
     pub compressed: u64,
     pub dirty: bool,
 }
@@ -1941,7 +1942,8 @@ pub struct Journal {
 const JOURNAL_FIELDS: &[&str] = &["MESSAGE", "SYSLOG_IDENTIFIER", "_COMM", "_PID", "_HOSTNAME", "_UID", "_EXE", "_CMDLINE"];
 
 /// Reads a systemd journal file: every entry object with the fields Kokino
-/// uses. Compressed data objects (XZ, LZ4, zstd) are counted, not read.
+/// uses. Compressed data objects (XZ, LZ4 or zstd, as journald writes long
+/// fields) are decoded; one that cannot be is counted.
 pub fn journal(d: &[u8]) -> anyhow::Result<Journal> {
     if d.len() < 240 || &d[..8] != b"LPKSHHRH" {
         anyhow::bail!("not a systemd journal file");
@@ -1994,22 +1996,155 @@ fn data_field(d: &[u8], off: usize, compact: bool, end: usize, compressed: &mut 
     if size < start - off || off.checked_add(size).is_none_or(|e| e > end) {
         return None;
     }
-    let payload = &d[start..off + size];
+    let raw = &d[start..off + size];
+    let flags = d[off + 1] & 7;
+    let decoded;
+    let payload: &[u8] = if flags == 0 {
+        raw
+    } else {
+        match decompress(flags, raw, 64 + 4000) {
+            Some(v) => {
+                decoded = v;
+                &decoded
+            }
+            None => {
+                *compressed += 1;
+                return None;
+            }
+        }
+    };
     let eq = payload.iter().take(64).position(|&c| c == b'=')?;
     let name = std::str::from_utf8(&payload[..eq]).ok()?;
     if !JOURNAL_FIELDS.contains(&name) {
         return None;
     }
-    if d[off + 1] & 7 != 0 {
-        *compressed += 1;
-        return None;
-    }
     Some((name.to_string(), String::from_utf8_lossy(&payload[eq + 1..payload.len().min(eq + 1 + 4000)]).into_owned()))
+}
+
+/// A journald data object's payload: flag 1 XZ, 2 LZ4 (journald's form:
+/// the uncompressed size as 8 bytes, then one LZ4 block), 4 zstd. At most
+/// `max` bytes are produced; `None` when it cannot be decoded.
+pub fn decompress(flags: u8, raw: &[u8], max: usize) -> Option<Vec<u8>> {
+    use std::io::Read;
+    match flags {
+        1 => {
+            struct Capped(Vec<u8>, usize);
+            impl std::io::Write for Capped {
+                fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                    let room = self.1.saturating_sub(self.0.len());
+                    self.0.extend_from_slice(&b[..b.len().min(room)]);
+                    if room < b.len() {
+                        return Err(std::io::Error::other("enough"));
+                    }
+                    Ok(b.len())
+                }
+                fn flush(&mut self) -> std::io::Result<()> {
+                    Ok(())
+                }
+            }
+            let mut out = Capped(vec![], max);
+            let res = lzma_rs::xz_decompress(&mut std::io::BufReader::new(raw), &mut out);
+            // Stopping early at the cap is fine; a damaged stream with nothing out is not.
+            (res.is_ok() || out.0.len() >= max).then_some(out.0)
+        }
+        2 => {
+            let size = u64::from_le_bytes(raw.get(..8)?.try_into().ok()?) as usize;
+            lz4_block(raw.get(8..)?, size.min(max))
+        }
+        4 => {
+            let mut src = raw;
+            let mut dec = ruzstd::streaming_decoder::StreamingDecoder::new(&mut src).ok()?;
+            let mut out = vec![];
+            (&mut dec).take(max as u64).read_to_end(&mut out).ok()?;
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+/// One LZ4 block, up to `max` bytes of output.
+pub fn lz4_block(src: &[u8], max: usize) -> Option<Vec<u8>> {
+    let mut out: Vec<u8> = Vec::with_capacity(max.min(1 << 20));
+    let mut p = 0usize;
+    let len = |p: &mut usize, mut n: usize| -> Option<usize> {
+        if n == 15 {
+            loop {
+                let b = *src.get(*p)?;
+                *p += 1;
+                n = n.checked_add(b as usize)?;
+                if b != 255 {
+                    break;
+                }
+            }
+        }
+        Some(n)
+    };
+    while p < src.len() && out.len() < max {
+        let token = src[p];
+        p += 1;
+        let lit = len(&mut p, (token >> 4) as usize)?;
+        let lits = src.get(p..p.checked_add(lit)?)?;
+        out.extend_from_slice(&lits[..lits.len().min(max - out.len())]);
+        p += lit;
+        if p >= src.len() || out.len() >= max {
+            break; // the last sequence has literals only
+        }
+        let off = u16::from_le_bytes([*src.get(p)?, *src.get(p + 1)?]) as usize;
+        p += 2;
+        if off == 0 || off > out.len() {
+            return None;
+        }
+        let mlen = len(&mut p, (token & 15) as usize)?.checked_add(4)?;
+        let start = out.len() - off;
+        for k in 0..mlen.min(max - out.len()) {
+            let b = out[start + k];
+            out.push(b);
+        }
+    }
+    Some(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The three compressions journald uses for long fields.
+    #[test]
+    fn journal_compression() {
+        // LZ4 as journald stores it: the size, then one block. "MESSAGE=abc"
+        // as literals, then a match of 27 bytes at offset 3 (abc repeated).
+        let want = [b"MESSAGE=".to_vec(), b"abc".repeat(10)].concat();
+        let mut lz4 = (want.len() as u64).to_le_bytes().to_vec();
+        lz4.push(0xBF); // 11 literals; match length 15 + extra
+        lz4.extend_from_slice(b"MESSAGE=abc");
+        lz4.extend_from_slice(&3u16.to_le_bytes());
+        lz4.push(8); // 4 + 15 + 8 = 27
+        assert_eq!(decompress(2, &lz4, 4096).unwrap(), want);
+        assert_eq!(decompress(2, &lz4, 20).unwrap(), &want[..20]);
+        // A match reaching before the start is refused.
+        assert!(lz4_block(&[0x14, b'a', 9, 0], 100).is_none());
+        // XZ (LZMA2, compressed chunk) made by Python's lzma module.
+        let xz: &[u8] = &[
+            0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00, 0x00, 0x04, 0xe6, 0xd6, 0xb4, 0x46, 0x02, 0x00, 0x21, 0x01,
+            0x16, 0x00, 0x00, 0x00, 0x74, 0x2f, 0xe5, 0xa3, 0xe0, 0x01, 0x4b, 0x00, 0x3f, 0x5d, 0x00, 0x26,
+            0x91, 0x46, 0xc0, 0xd1, 0x94, 0x57, 0xe4, 0x94, 0xc7, 0xf1, 0xa1, 0xe0, 0xaf, 0x68, 0x9d, 0xc1,
+            0x00, 0x7e, 0x40, 0x2a, 0xdb, 0x53, 0x70, 0x5c, 0x01, 0x7b, 0x74, 0x11, 0x6f, 0x74, 0x54, 0xdf,
+            0xf1, 0xd9, 0xf8, 0x58, 0xf4, 0x61, 0xf0, 0x40, 0x24, 0xbf, 0xd0, 0x54, 0xf0, 0x71, 0x04, 0xba,
+            0xa9, 0x06, 0x36, 0x3a, 0x45, 0x50, 0x6b, 0x0a, 0x3c, 0xcc, 0x7c, 0xe5, 0xe0, 0x00, 0x00, 0x00,
+            0xf1, 0x7f, 0xab, 0x2b, 0x20, 0x8d, 0xa2, 0x66, 0x00, 0x01, 0x5b, 0xcc, 0x02, 0x00, 0x00, 0x00,
+            0xb8, 0xe1, 0xf0, 0x23, 0xb1, 0xc4, 0x67, 0xfb, 0x02, 0x00, 0x00, 0x00, 0x00, 0x04, 0x59, 0x5a,
+        ];
+        let text = [b"MESSAGE=".to_vec(), b"pam_unix(sshd:session): session opened for user alice ".repeat(6)].concat();
+        assert_eq!(decompress(1, xz, 1 << 16).unwrap(), text);
+        assert_eq!(decompress(1, xz, 30).unwrap(), &text[..30]);
+        // zstd: a frame written by the zstd tool (the ruzstd test fixture
+        // abc.txt.zst, with its content checksum).
+        let zst: &[u8] = &[0x28, 0xb5, 0x2f, 0xfd, 0x04, 0x58, 0xd1, 0x00, 0x00, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x6f, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x5c, 0x83, 0x89, 0xfa];
+        assert_eq!(decompress(4, zst, 4096).as_deref(), Some(&b"abcdefghijklmnopqrstuvwxyz"[..]));
+        assert!(decompress(4, b"not zstd", 4096).is_none());
+        assert!(decompress(1, b"not xz", 4096).is_none());
+        assert!(decompress(3, &lz4, 4096).is_none());
+    }
 
     #[test]
     fn rules_and_zones() {

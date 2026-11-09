@@ -1,0 +1,32 @@
+From alice@lab.test Tue Oct 20 10:05:30 2026
+Return-Path: <alice@lab.test>
+Date: Tue, 20 Oct 2026 10:05:30 +0200
+From: Alice <alice@lab.test>
+To: bob@lab.test
+Subject: =?UTF-8?B?UTMgcGxhbiDigJMgY29uZmlkZW50aWFs?=
+Message-ID: <1@lab.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="XYZ"
+
+--XYZ
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: quoted-printable
+
+Move the funds to the caf=E9 account to=
+night.
+--XYZ
+Content-Type: application/pdf; name="ledger.pdf"
+Content-Disposition: attachment; filename="ledger.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKJcOkw7w=
+--XYZ--
+
+From bob@lab.test Wed Oct 21 09:00:00 2026
+Date: Wed, 21 Oct 2026 09:00:00 +0000
+From: bob@lab.test
+To: Alice <alice@lab.test>
+Subject: Re: wipe the laptop
+Content-Type: text/html; charset=utf-8
+
+<p>Done. Used <b>sdelete</b> on everything.</p>

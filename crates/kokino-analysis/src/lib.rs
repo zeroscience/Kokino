@@ -11,6 +11,7 @@ pub mod binview;
 pub mod signatures;
 pub mod carve;
 pub mod doctext;
+pub mod mail;
 pub mod oletext;
 pub mod fs;
 pub mod hashsets;
@@ -39,7 +40,9 @@ use stats::Stats;
 /// 7: scheduled tasks (`WindowsArtifacts::tasks`).
 /// 8: Internet Explorer index.dat history, cache and downloads (`WebActivity::cache`).
 /// 9: deleted registry keys and values (`WindowsArtifacts::reg_deleted_keys`).
-pub const SCHEMA_VERSION: u32 = 9;
+/// 10: email (`FsAnalysis::mail`), Internet Explorer cookies, legacy .evt logs,
+///     registry transaction logs applied.
+pub const SCHEMA_VERSION: u32 = 10;
 
 /// Bytes read from the start of every file for signature and entropy.
 const HEAD: usize = 8 * 1024;
@@ -82,6 +85,9 @@ pub struct FsAnalysis {
     /// Linux system artifacts found on this volume (schema 5+).
     #[serde(default)]
     pub linux: linux::LinuxArtifacts,
+    /// Email in mbox mailboxes and .eml files (schema 10+).
+    #[serde(default)]
+    pub mail: mail::Mail,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,6 +181,11 @@ fn analyze_fs(ev: &Evidence, v: &Volume, progress: Progress) -> anyhow::Result<F
     let web = web::collect(&fs, &mut r, &files, &mut *progress);
     let windows = windows::collect(&fs, &mut r, &files, &mut *progress);
     let linux = linux::collect(&fs, &mut r, &files, &mut *progress);
+    let mail = mail::collect(&fs, &mut r, &files, &mut *progress);
+    // Email joins the system events on the timeline.
+    let mut windows = windows;
+    windows.timeline.extend(mail::timeline(&mail));
+    windows.timeline.sort_by_key(|t| t.t);
 
     progress(&format!("Volume {}: anti-forensics indicators", v.index), 0, 1);
     let now = kokino_core::time::datetime_to_filetime(chrono::Utc::now());
@@ -198,8 +209,9 @@ fn analyze_fs(ev: &Evidence, v: &Volume, progress: Progress) -> anyhow::Result<F
     stats.impact.extend(web::impact(&web));
     stats.impact.extend(windows::impact(&windows));
     stats.impact.extend(linux::impact(&linux));
+    stats.impact.extend(mail::impact(&mail));
 
-    Ok(FsAnalysis { volume: v.clone(), info: scan.info, files, unreadable: scan.unreadable, indicators, score, stats, web, windows, linux })
+    Ok(FsAnalysis { volume: v.clone(), info: scan.info, files, unreadable: scan.unreadable, indicators, score, stats, web, windows, linux, mail })
 }
 
 fn content_facts<R: std::io::Read + std::io::Seek>(fs: &Fs, r: &mut R, e: FsEntry) -> FileRow {
@@ -638,8 +650,34 @@ mod tests {
         let ssh = l.events.iter().find(|e| e.category == "Logon" && e.user == "alice").unwrap();
         assert_eq!(iso(ssh.time), "2026-10-20T08:10:01.0000000Z");
         assert_eq!(ssh.ip, "192.0.2.10");
-        assert_eq!(l.events.iter().filter(|e| e.category == "Failed logon").count(), 2);
+        // Two failed logons in auth.log, one in the journal (its message LZ4-compressed).
+        assert_eq!(l.events.iter().filter(|e| e.category == "Failed logon").count(), 3);
+        assert!(l.events.iter().any(|e| e.category == "Failed logon" && e.user == "root" && e.source == "journal"));
+        // The journal stores this message XZ-compressed.
         assert!(l.events.iter().any(|e| e.category == "Logon" && e.user == "bob" && e.source == "journal" && e.ip == "203.0.113.9"));
+        assert!(l.logs.iter().all(|x| !x.note.contains("compressed")), "{:?}", l.logs);
+        // Email: a mail spool with two messages and a saved .eml.
+        let m = &fs.mail;
+        let boxes: Vec<(&str, &str, u64)> = m.mailboxes.iter().map(|b| (b.path.as_str(), b.kind.as_str(), b.messages)).collect();
+        assert_eq!(boxes, [("/var/mail/alice", "mbox", 2), ("/home/alice/Downloads/reset.eml", "eml", 1)], "{:?}", m.mailboxes);
+        let subjects: Vec<&str> = m.messages.iter().map(|x| x.subject.as_str()).collect();
+        assert_eq!(subjects, ["Q3 plan \u{2013} confidential", "Re: wipe the laptop", "Password reset"]);
+        assert_eq!(m.messages[0].attachments[0].name, "ledger.pdf");
+        assert!(fs.windows.timeline.iter().any(|t| t.kind == "MAIL" && t.what == "Re: wipe the laptop"));
+        // Message text is decoded for search: quoted-printable with a soft
+        // line break ("to=" / "night") and HTML without its tags.
+        {
+            use crate::textindex::{build, search, Mode, Scope};
+            let dir = std::env::temp_dir().join(format!("kokino-mail-idx-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let out = dir.join("idx.sqlite");
+            build(&ev, &a, None, &out, &mut |_, _, _| true).unwrap();
+            let kw = |q: &str| search(&out, &a, &Mode::Keyword(q.into()), Scope::Files, None, 50, 10_000).unwrap().hits;
+            assert!(kw("account tonight").iter().any(|h| h.part.as_deref() == Some("message 1")), "{:?}", kw("account tonight"));
+            assert!(kw("used sdelete on everything").iter().any(|h| h.part.as_deref() == Some("message 2")));
+            std::fs::remove_dir_all(&dir).ok();
+        }
+        assert!(fs.stats.impact.iter().any(|l| l.starts_with("3 email message(s) in 2 mailbox(es), from 2026-10-20 to 2026-10-22, with 1 attachment(s)")), "{:?}", fs.stats.impact);
         assert!(l.events.iter().any(|e| e.category == "Account" && e.user == "svc-backup"));
         assert!(l.logons.iter().any(|x| x.source == "wtmp" && x.user == "alice" && x.end > x.time));
         assert!(l.logons.iter().any(|x| x.source == "btmp" && x.user == "admin" && x.kind == "failed"));
