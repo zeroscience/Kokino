@@ -204,7 +204,7 @@ const WIKI = [
         ["Summary", "Disk layout, counts, the impact summary in plain sentences, the anti-forensics gauge and an activity histogram (click a day to open the timeline)."],
         ["Explorer", "The folder tree including deleted and orphaned entries. Click a file for its detail drawer: both timestamp sets side by side, data streams, signature, entropy, where its MFT record lies on disk, its timeline events and a hex preview."],
         ["Timeline", "MACB events from $SI and $FN interleaved with browser visits, downloads and searches, Windows artifacts and, on NTFS, files created, deleted and renamed per the change journal (USN). Filter by text, date, source, deleted or flagged."],
-        ["Web activity", "Browser history per profile (Chrome family, Firefox, Internet Explorer): visits, downloads, searches and Internet Explorer's cache and cookies. Click a profile card to filter by it."],
+        ["Web activity", "Browser history per profile (Chrome family, Firefox, Safari, Internet Explorer and the old Edge): visits, downloads, searches and Internet Explorer's cache and cookies. Click a profile card to filter by it."],
         ["Email", "Messages in Outlook PST and OST files, mbox mailboxes and .eml files, with their text and attachments."],
         ["Anti-forensics", "Each indicator with its weight, caveat and the exact files: click Show files to list them, then a file to open it."],
         ["Hex", "The whole image, any size. See Hex and exports."],
@@ -283,7 +283,7 @@ const WIKI = [
     id: "web", title: "Browser history", icon: "globe",
     body: [
       p("Email is on its own page: see Email."),
-      p("Kokino reads Chrome, Edge, Brave, Opera, Vivaldi, Firefox and Safari (History.db and Downloads.plist) profiles it finds on any parsed volume, including history still waiting in the -wal file that the browser had not merged yet, and Internet Explorer's index.dat files (Internet Explorer 4 to 9: history, cache and downloads)."),
+      p("Kokino reads Chrome, Edge, Brave, Opera, Vivaldi, Firefox and Safari (History.db and Downloads.plist) profiles it finds on any parsed volume, including history still waiting in the -wal file that the browser had not merged yet, and Internet Explorer's index.dat files (Internet Explorer 4 to 9: history, cache and downloads) and WebCache database (WebCacheV01.dat: Internet Explorer 10 and 11 and the old Edge: history, cache, cookies and downloads; a copy taken while in use may lack the newest entries, which are still in its log files)."),
       ul(
         h("span", h("b", "Visits:"), " time, page, how it was reached (typed, link, reload, form...), time on page and visit count."),
         h("span", h("b", "URL table only:"), " pages whose visit rows are gone (expired or deleted selectively); the time shown is the last recorded visit."),
@@ -556,7 +556,7 @@ const WIKI = [
     body: [
       p("Evidence can be made to attack the tool that reads it: a disk image, registry hive or picture crafted to crash Kokino, hang an ingest, or use up the examiner's memory. Kokino is written in Rust with ", code("unsafe"), " code forbidden in every crate, and every parser that reads evidence has been fuzzed."),
       h("h3", "Fuzzing"),
-      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks, optical media, Mac disks, NTFS folder indexes and $LogFile, the change journal, ShellBags, ESE databases (SRUM), scheduled tasks, Internet Explorer index.dat, deleted registry keys, legacy Office files, registry logs, legacy event logs, email, journald compression, ZIP and tar collections, shadow copies, BitLocker, VHDX logs, Outlook PST, property lists and FSEvents ran ", h("b", "650,641,797 inputs"), " and found ", h("b", "37 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
+      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks, optical media, Mac disks, NTFS folder indexes and $LogFile, the change journal, ShellBags, ESE databases (SRUM), scheduled tasks, Internet Explorer index.dat, deleted registry keys, legacy Office files, registry logs, legacy event logs, email, journald compression, ZIP and tar collections, shadow copies, BitLocker, VHDX logs, Outlook PST, property lists, FSEvents and WebCache ran ", h("b", "651,384,954 inputs"), " and found ", h("b", "37 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
       h("div.scroll", h("table.tbl",
         h("thead", h("tr", h("th", "Target"), h("th", "Covers"), h("th", "Inputs"), h("th", "Found"))),
         h("tbody", [
@@ -579,6 +579,7 @@ const WIKI = [
         ["pst", "Outlook PST and OST: B-trees, blocks, data and subnode trees, property and table contexts, messages", "8,102,508", "2 (crash on dates, read past the end; fixed)"],
         ["plist", "Apple property lists, binary and XML", "1,229,272", "1 (overflow on a huge date; fixed)"],
         ["fsevents", "macOS FSEvents: gzip, pages of every version, records", "50,215,572", "none"],
+        ["webcache", "WebCache (Internet Explorer 10 and 11, old Edge) read into web activity", "743,157", "none"],
         ["vss", "Volume Shadow Copies: catalog, block lists, overlays and forwarders, snapshot reads", "9,887,067", "2 (overflow, stack overflow; fixed)"],
         ["bde", "BitLocker: metadata, key protectors, key unwrapping, startup key files, the decrypting reader for every method", "4,459,482", "1 (overflow, fixed)"],
         ["mail", "Mailboxes and messages: MIME, encodings, attachments", "7,542,816", "none"],

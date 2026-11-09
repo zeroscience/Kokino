@@ -158,6 +158,7 @@ Shadow copies, BitLocker, triage collections, VHDX logs, Outlook and macOS (unre
 | `pst` | Outlook PST and OST: header, node and block B-trees, blocks (decoding, inflating), data and subnode trees, heaps, property and table contexts, folders, messages rendered as RFC 822 and parsed back | 2 x 10 min + 5 min | 8,102,508 | 2: a crash on dates outside years 0 to 9999, and a read past the end of a one-byte subnode block; fixed (the third round, with compressed RTF bodies, found nothing) |
 | `plist` | Apple property lists, binary (offset tables, object references, counts, every object type) and XML, every value walked | 10 + 5 min | 1,229,272 | 1: an integer overflow converting a huge date; fixed (found in a first round stopped to fix it and not counted) |
 | `fsevents` | macOS FSEvents files: gzip, pages of versions 1 to 3, records, flags | 10 min | 50,215,572 | none |
+| `webcache` | WebCache (Internet Explorer 10 and 11, old Edge): the ESE database, its Containers table and every container read into web activity | 10 min | 743,157 | none |
 
 The first `vss` round ran an optimized build without overflow checks and
 found nothing; the same inputs on the `fuzz` profile (overflow checks on)
@@ -168,7 +169,7 @@ not counted in the inputs; the rounds after the fixes found nothing.
 The `vdisk` target writes each input to a file (virtual disks are opened
 by path), so it runs far fewer inputs than the others.
 
-In all: 650,641,797 inputs over 38 targets, and 37 distinct problems
+In all: 651,384,954 inputs over 39 targets, and 37 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed

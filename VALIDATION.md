@@ -432,6 +432,16 @@ specification and are covered only by the fuzzer. The synthetic PST in
 `crates/kokino-analysis/src/pst.rs` (two-level B-trees, a recipient
 table, an attachment spread over three blocks) is checked byte for byte.
 
+## WebCache (unreleased)
+
+Checked on `tests/fixtures/win/WebCacheV01.dat`, written by Windows' own
+database engine (esent.dll) with the tables and columns Internet Explorer
+10 and 11 use: every visit, the search, the cached file, the cookie and the
+download come out with the times and values the script put in. The
+database pages, B-trees and records are therefore real ESE; the column set
+follows published research on WebCache, not a database taken from a real
+Internet Explorer, which has not been checked yet.
+
 ## macOS artifacts (unreleased)
 
 Checked on `collection-uac-mac.tar.gz` only, whose property lists and

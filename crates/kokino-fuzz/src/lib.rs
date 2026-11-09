@@ -37,6 +37,7 @@ pub const TARGETS: &[Target] = &[
     Target { name: "pst", run: pst, seeds: &["crates/kokino-fuzz/seeds/pst"] },
     Target { name: "plist", run: plist, seeds: &["crates/kokino-fuzz/seeds/plist"] },
     Target { name: "fsevents", run: fsevents, seeds: &["crates/kokino-fuzz/seeds/fsevents"] },
+    Target { name: "webcache", run: webcache, seeds: &["tests/fixtures/win/WebCacheV01.dat"] },
     Target { name: "zip", run: zipfs, seeds: &["crates/kokino-fuzz/seeds/zip", "tests/fixtures/iso-rr-joliet.iso"] },
     Target { name: "reglog", run: reglog, seeds: &["tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_UsrClass.dat.LOG1", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_UsrClass.dat"] },
     Target { name: "iecache", run: iecache, seeds: &["tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_History_History.IE5_MSHist012025031020250311_index.dat", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_History_History.IE5_index.dat", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_Temporary Internet Files_Content.IE5_index.dat", "tests/fixtures/win/Users_alice_AppData_Roaming_Microsoft_Windows_IEDownloadHistory_index.dat"] },
@@ -403,6 +404,15 @@ fn fsevents(d: &[u8]) {
         for x in r.iter().take(1000) {
             let _ = (x.changes(), x.is_dir());
         }
+    }
+}
+
+/// WebCache (IE 10/11, old Edge): the ESE database and its containers read
+/// into web activity.
+fn webcache(d: &[u8]) {
+    let path = "/Users/alice/AppData/Local/Microsoft/Windows/WebCache/WebCacheV01.dat";
+    if let Some(mut src) = kokino_artifacts::webcache::classify(path, "WebCacheV01.dat") {
+        let _ = kokino_artifacts::webcache::to_web(&mut src, d, &mut Default::default());
     }
 }
 

@@ -21,4 +21,5 @@ pub mod shellbags;
 pub mod sqlite;
 pub mod task;
 pub mod usn;
+pub mod webcache;
 pub mod xpress;

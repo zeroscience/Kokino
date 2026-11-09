@@ -812,6 +812,24 @@ mod tests {
         assert!(!l.timeline.iter().any(|t| t.what.contains("plan.txt: Removed")), "FSEvents stay off the timeline");
     }
 
+    /// WebCache (IE 10/11, old Edge) on a volume (here in a tar collection):
+    /// with the other browsers and in the summary.
+    #[test]
+    fn webcache_on_a_volume() {
+        let wc = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/win/WebCacheV01.dat")).unwrap();
+        let t = crate::tarfs::tests::tar(&[("C/Users/alice/AppData/Local/Microsoft/Windows/WebCache/WebCacheV01.dat", b'0', &wc, ""), ("C/Windows/System32/config/SYSTEM", b'0', b"regf", "")]);
+        let dir = std::env::temp_dir().join(format!("kokino-webcache-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("c.tar");
+        std::fs::write(&p, &t).unwrap();
+        let a = analyze(&Evidence::open(&p).unwrap(), &mut |_, _, _| true).unwrap();
+        let fs = &a.filesystems[0];
+        let s = fs.web.sources.iter().find(|s| s.profile == "WebCache").expect("WebCache read");
+        assert_eq!((s.user.as_str(), s.visits, s.downloads, s.error.as_deref()), ("alice", 3, 1, None));
+        assert!(fs.stats.impact.iter().any(|l| l.starts_with("Internet Explorer / Edge WebCache of user alice: 3 visits, 1 cached file, 1 cookie, 1 download, 1 search")), "{:?}", fs.stats.impact);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// An Outlook PST on a volume (here in a tar collection): every message
     /// with its folder, on the timeline, and in the text index.
     #[test]

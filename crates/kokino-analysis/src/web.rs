@@ -5,7 +5,7 @@
 
 use crate::FileRow;
 use kokino_artifacts::browser::{self, Engine, WebActivity};
-use kokino_artifacts::iecache;
+use kokino_artifacts::{iecache, webcache};
 use std::collections::HashMap;
 use std::io::{Read, Seek};
 
@@ -32,7 +32,7 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
     let mut candidates: Vec<usize> = files
         .iter()
         .enumerate()
-        .filter(|(_, f)| !f.e.is_dir && (browser::classify(&f.e.path, &f.e.name).is_some() || iecache::classify(&f.e.path, &f.e.name).is_some()))
+        .filter(|(_, f)| !f.e.is_dir && (browser::classify(&f.e.path, &f.e.name).is_some() || iecache::classify(&f.e.path, &f.e.name).is_some() || webcache::classify(&f.e.path, &f.e.name).is_some()))
         .map(|(i, _)| i)
         .collect();
     // Daily and weekly IE history before the main file, so the main file's
@@ -57,6 +57,21 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
             if src.profile.starts_with("Cookies") {
                 let mut read = |e: &kokino_ntfs::FsEntry| fs.read(r, e, "", 0, e.size as usize).ok();
                 ie_cookie_files(&mut read, files, i, out.sources.len() as u32, &mut src, &mut out);
+            }
+            out.sources.push(src);
+            continue;
+        }
+        if let Some(mut src) = webcache::classify(&f.e.path, &f.e.name) {
+            src.record = f.e.record;
+            src.deleted = f.e.deleted;
+            src.size = f.e.size;
+            let res = if f.e.size > MAX_DB {
+                Err(anyhow::anyhow!("{} bytes; larger than the {} byte limit", f.e.size, MAX_DB))
+            } else {
+                fs.read(r, &f.e, "", 0, f.e.size as usize).and_then(|d| webcache::to_web(&mut src, &d, &mut out))
+            };
+            if let Err(e) = res {
+                src.error = Some(format!("{:#}", e));
             }
             out.sources.push(src);
             continue;
@@ -268,6 +283,10 @@ fn ie_impact(s: &browser::WebSource) -> Option<String> {
         }
         t
     };
+    if s.profile == "WebCache" {
+        let line = format!("Internet Explorer / Edge WebCache{}: {}.", who, what);
+        return Some(if s.deleted { format!("{} The WebCache database is deleted.", line) } else { line });
+    }
     let line = format!("Internet Explorer {}{}: {}.", s.profile.to_lowercase(), who, what);
     Some(if s.deleted { format!("{} The index.dat file is deleted.", line) } else { line })
 }

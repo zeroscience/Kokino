@@ -93,7 +93,8 @@ WIFI = (71 << 48) | 0x8001  # InterfaceLuid: IfType 71 (802.11) in the top 16 bi
 ETH = (6 << 48) | 0x8000
 
 
-def build(path, page_size, deep=False):
+def build(path, page_size, deep=False, tables=None):
+    """`tables(table, L, Q, D, U16)` makes the tables (SRUM's by default)."""
     work = tempfile.mkdtemp(prefix="kokino-ese-")
     inst = c_void_p()
     sp = esent.JetSetSystemParameterW
@@ -108,7 +109,7 @@ def build(path, page_size, deep=False):
     esent.JetBeginSessionW.argtypes = [c_void_p, POINTER(c_void_p), c_wchar_p, c_wchar_p]
     check(esent.JetBeginSessionW(inst, byref(ses), None, None), "session")
     db = c_uint32()
-    tmpdb = os.path.join(work, "SRUDB.dat")
+    tmpdb = os.path.join(work, os.path.basename(path))
     esent.JetCreateDatabaseW.argtypes = [c_void_p, c_wchar_p, c_wchar_p, POINTER(c_uint32), c_ulong]
     check(esent.JetCreateDatabaseW(ses, tmpdb, None, byref(db), JET_bitDbOverwriteExisting), "create db")
 
@@ -119,8 +120,10 @@ def build(path, page_size, deep=False):
         check(esent.JetCreateTableW(ses, db, name, 0, 100, byref(tid)), "table " + name)
         ids = {}
         esent.JetAddColumnW.argtypes = [c_void_p, c_void_p, c_wchar_p, POINTER(JET_COLUMNDEF), c_void_p, c_ulong, POINTER(c_ulong)]
-        for cname, typ, grbit in cols:
-            d = JET_COLUMNDEF(cbStruct=ctypes.sizeof(JET_COLUMNDEF), coltyp=typ, cp=0, grbit=grbit)
+        for col in cols:
+            # (name, type, flags) or (name, type, flags, code page): 1200 for Unicode text.
+            cname, typ, grbit = col[:3]
+            d = JET_COLUMNDEF(cbStruct=ctypes.sizeof(JET_COLUMNDEF), coltyp=typ, cp=col[3] if len(col) > 3 else 0, grbit=grbit)
             cid = c_ulong()
             check(esent.JetAddColumnW(ses, tid, cname, byref(d), None, 0, byref(cid)), "column " + cname)
             ids[cname] = cid.value
@@ -161,7 +164,7 @@ def build(path, page_size, deep=False):
     U16 = lambda s: (s + "\0").encode("utf-16-le")
 
     if not deep:
-        srum_tables(table, L, Q, D, U16)
+        (tables or srum_tables)(table, L, Q, D, U16)
 
     esent.JetCloseDatabase.argtypes = [c_void_p, c_uint32, c_ulong]
     check(esent.JetCloseDatabase(ses, db, 0), "close db")
