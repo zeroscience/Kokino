@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-11-09
+
+The built-in wiki brought up to date with everything 1.3.1 added; no changes to analysis.
+
 ### Changed
 - Wiki brought up to date with 1.3.1: the macOS system summary is under Mac disks (it said macOS artifacts were not read), carving of decrypted BitLocker volumes, the new validation images (dfvfs shadow copies and BitLocker To Go, the PST and OST samples) with thanks to their authors, release integrity (SBOM and signed provenance) under Security, and the About page's description of what Kokino reads; the README's description likewise.
 
