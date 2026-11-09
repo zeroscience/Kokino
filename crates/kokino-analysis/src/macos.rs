@@ -10,7 +10,10 @@
 //! - downloads from the quarantine database (QuarantineEventsV2: when, by
 //!   which program, from where);
 //! - application use from KnowledgeC (which app was in front, when, how
-//!   long).
+//!   long);
+//! - FSEvents (/.fseventsd), the file system's change log: which paths
+//!   were created, changed, renamed or removed. Also on USB drives a Mac
+//!   wrote to.
 //!
 //! Shell histories, SSH keys, /etc files and the time zone are read by the
 //! Unix code itself (/Users homes, /private/etc). Apple's times are seconds
@@ -25,13 +28,24 @@ use std::io::{Read, Seek};
 const MAX_DB: u64 = 512 << 20;
 const MAX_PLIST: u64 = 16 << 20;
 const MAX_EVENTS: usize = 200_000;
+const MAX_FSEVENTS: usize = 100_000;
 
 /// Whether these files hold a macOS system (or a Mac user's data).
-pub fn is_mac(files: &[FileRow]) -> bool {
+fn mac_system(files: &[FileRow]) -> bool {
     files.iter().any(|f| {
         let p = f.e.path.as_str();
         p == "/System/Library/CoreServices/SystemVersion.plist" || p.starts_with("/private/var/db/dslocal/") || (p.starts_with("/Users/") && p.contains("/Library/Preferences/"))
     })
+}
+
+fn is_fsevents(f: &FileRow) -> bool {
+    !f.e.is_dir && f.e.path.contains("/.fseventsd/") && f.e.name.len() == 16 && f.e.name.bytes().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Whether there is anything here for this module: a Mac system or user
+/// data, or a volume a Mac wrote FSEvents to (a USB drive, too).
+pub fn is_mac(files: &[FileRow]) -> bool {
+    mac_system(files) || files.iter().any(is_fsevents)
 }
 
 fn read<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, f: &FileRow, cap: u64) -> anyhow::Result<Vec<u8>> {
@@ -51,7 +65,9 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
     let src = |a: &mut LinuxArtifacts, i: usize, kind: &str, err: Option<String>| {
         a.sources.push(Source { file: i as u32, path: files[i].e.path.clone(), kind: kind.into(), deleted: files[i].e.deleted, error: err, note: None });
     };
-    a.computer.os_id = "macos".into();
+    if mac_system(files) {
+        a.computer.os_id = "macos".into();
+    }
     // The zone note about classic syslog lines does not apply to a Mac.
     if let Some(i) = a.computer.time_zone.find(" (zone data not found") {
         a.computer.time_zone.truncate(i);
@@ -248,6 +264,43 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
             Err(e) => src(a, i, "KnowledgeC", Some(format!("{:#}", e))),
         }
     }
+
+    // FSEvents: oldest batch first (the names are event ids, in hex).
+    let mut fsev: Vec<usize> = files.iter().enumerate().filter(|(_, f)| is_fsevents(f)).map(|(i, _)| i).collect();
+    fsev.sort_by_key(|&i| u64::from_str_radix(&files[i].e.name, 16).unwrap_or(0));
+    let mut kept = 0usize;
+    for i in fsev {
+        let f = &files[i];
+        let written = f.e.si.map(|t| t.modified).unwrap_or(0);
+        match read(fs, r, f, 64 << 20).and_then(|d| kokino_artifacts::fsevents::parse(&d)) {
+            Ok(recs) => {
+                let n = recs.len();
+                for x in recs.into_iter().filter(|x| x.flags & 0x26 == 0) {
+                    if kept >= MAX_FSEVENTS {
+                        break;
+                    }
+                    kept += 1;
+                    let changes = x.changes();
+                    a.events.push(LinuxEvent {
+                        time: written,
+                        category: "File change".into(),
+                        summary: format!("/{}{}: {}", x.path, if x.is_dir() { " (folder)" } else { "" }, if changes.is_empty() { "changed".into() } else { changes }),
+                        message: format!("event id {:#x}{}; time: when this FSEvents file was written (the latest the change can be)", x.id, x.node.map(|n| format!(", file id {}", n)).unwrap_or_default()),
+                        source: "FSEvents".into(),
+                        file: i as u32,
+                        ..Default::default()
+                    });
+                }
+                a.sources.push(Source { file: i as u32, path: f.e.path.clone(), kind: "FSEvents".into(), deleted: f.e.deleted, error: None, note: Some(format!("{} records", n)) });
+            }
+            Err(e) => src(a, i, "FSEvents", Some(format!("{:#}", e))),
+        }
+    }
+    if kept >= MAX_FSEVENTS {
+        if let Some(s) = a.sources.iter_mut().rev().find(|s| s.kind == "FSEvents") {
+            s.note = Some(format!("listing stopped at {} changes", MAX_FSEVENTS));
+        }
+    }
 }
 
 fn human_secs(s: u64) -> String {
@@ -267,6 +320,11 @@ pub fn impact(a: &LinuxArtifacts) -> Vec<String> {
     if dl > 0 {
         let agents: std::collections::BTreeSet<&str> = a.events.iter().filter(|e| e.category == "Download").map(|e| e.program.as_str()).filter(|s| !s.is_empty()).collect();
         out.push(format!("{} download(s) recorded in quarantine events{}.", dl, if agents.is_empty() { String::new() } else { format!(" (by {})", agents.into_iter().collect::<Vec<_>>().join(", ")) }));
+    }
+    let fsev = a.events.iter().filter(|e| e.category == "File change").count();
+    if fsev > 0 {
+        let removed = a.events.iter().filter(|e| e.category == "File change" && e.summary.contains("Removed")).count();
+        out.push(format!("{} file change(s) recorded in FSEvents, {} of them removals (paths of files that existed even if they are gone now).", fsev, removed));
     }
     let use_ = a.events.iter().filter(|e| e.category == "App use").count();
     if use_ > 0 {

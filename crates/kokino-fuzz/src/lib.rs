@@ -36,6 +36,7 @@ pub const TARGETS: &[Target] = &[
     Target { name: "tar", run: tarfs, seeds: &["crates/kokino-fuzz/seeds/tar"] },
     Target { name: "pst", run: pst, seeds: &["crates/kokino-fuzz/seeds/pst"] },
     Target { name: "plist", run: plist, seeds: &["crates/kokino-fuzz/seeds/plist"] },
+    Target { name: "fsevents", run: fsevents, seeds: &["crates/kokino-fuzz/seeds/fsevents"] },
     Target { name: "zip", run: zipfs, seeds: &["crates/kokino-fuzz/seeds/zip", "tests/fixtures/iso-rr-joliet.iso"] },
     Target { name: "reglog", run: reglog, seeds: &["tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_UsrClass.dat.LOG1", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_UsrClass.dat"] },
     Target { name: "iecache", run: iecache, seeds: &["tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_History_History.IE5_MSHist012025031020250311_index.dat", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_History_History.IE5_index.dat", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_Temporary Internet Files_Content.IE5_index.dat", "tests/fixtures/win/Users_alice_AppData_Roaming_Microsoft_Windows_IEDownloadHistory_index.dat"] },
@@ -393,6 +394,15 @@ fn plist(d: &[u8]) {
     if let Some(v) = kokino_artifacts::plist::parse(d) {
         walk(&v, &mut 0);
         let _ = v.path("System/System/ComputerName");
+    }
+}
+
+/// macOS FSEvents files (gzip or inflated): pages of every version, records.
+fn fsevents(d: &[u8]) {
+    if let Ok(r) = kokino_artifacts::fsevents::parse(d) {
+        for x in r.iter().take(1000) {
+            let _ = (x.changes(), x.is_dir());
+        }
     }
 }
 

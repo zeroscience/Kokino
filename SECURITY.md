@@ -156,7 +156,8 @@ Shadow copies, BitLocker, triage collections, VHDX logs, Outlook and macOS (unre
 | `tar` | tar and tar.gz collections (UAC): headers and checksums, base-256 sizes, GNU long names, PAX records, hard links, reads | 10 min | 4,169,869 | none |
 | `vdisk` | again, with a VHDX whose log holds writes to replay (entries, descriptors, data sectors, the circular log) | 10 min | 36,659 | none |
 | `pst` | Outlook PST and OST: header, node and block B-trees, blocks (decoding, inflating), data and subnode trees, heaps, property and table contexts, folders, messages rendered as RFC 822 and parsed back | 2 x 10 min + 5 min | 8,102,508 | 2: a crash on dates outside years 0 to 9999, and a read past the end of a one-byte subnode block; fixed (the third round, with compressed RTF bodies, found nothing) |
-| `plist` | Apple property lists, binary (offset tables, object references, counts, every object type) and XML, every value walked | 10 min | 827,837 | 1: an integer overflow converting a huge date; fixed (found in a first round stopped to fix it and not counted) |
+| `plist` | Apple property lists, binary (offset tables, object references, counts, every object type) and XML, every value walked | 10 + 5 min | 1,229,272 | 1: an integer overflow converting a huge date; fixed (found in a first round stopped to fix it and not counted) |
+| `fsevents` | macOS FSEvents files: gzip, pages of versions 1 to 3, records, flags | 10 min | 50,215,572 | none |
 
 The first `vss` round ran an optimized build without overflow checks and
 found nothing; the same inputs on the `fuzz` profile (overflow checks on)
@@ -167,7 +168,7 @@ not counted in the inputs; the rounds after the fixes found nothing.
 The `vdisk` target writes each input to a file (virtual disks are opened
 by path), so it runs far fewer inputs than the others.
 
-In all: 600,024,790 inputs over 37 targets, and 37 distinct problems
+In all: 650,641,797 inputs over 38 targets, and 37 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed

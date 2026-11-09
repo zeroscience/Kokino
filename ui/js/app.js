@@ -1439,7 +1439,7 @@ function linuxSystem(ctx, r) {
   const L = r.linux;
   const mac = L.computer.os_id === "macos";
   const intro = h("div.hd", h("div", h("h1", "System summary"), h("div.muted", (mac
-    ? "Accounts (dslocal), shell histories, launchd persistence, downloads (quarantine events) and application use (KnowledgeC) of this Mac. "
+    ? "Accounts (dslocal), shell histories, launchd persistence, downloads (quarantine events), application use (KnowledgeC) and file changes (FSEvents) of this Mac. "
     : "Accounts, logons, shell histories, logs, the journal, packages and persistence of this Linux volume. ") + zoneSentence())), h("span.sp"), fsPicker(ctx, "system"));
   const fileOf = (i) => (i == null ? "" : r.files[i] || "");
   const open = (i) => (i != null ? fileDrawer(ctx, i) : null);
@@ -1556,7 +1556,7 @@ async function systemTab(ctx) {
   const r = await api(`/cases/${ctx.cid}/evidence/${ctx.eid}/fs/${ctx.fi}/windows`);
   // What this page reads depends on the volume: Windows files on NTFS,
   // Linux files on ext, either (usually neither) on a FAT or exFAT drive.
-  const what = isMac(r.fs) ? "Accounts, shell histories, launchd persistence, downloads (quarantine events) and application use (KnowledgeC) of this Mac. Unified logs and FSEvents are not read yet."
+  const what = isMac(r.fs) ? "Accounts, shell histories, launchd persistence, downloads (quarantine events), application use (KnowledgeC) and file changes (FSEvents) of this Mac. Unified logs are not read yet."
     : isExt(r.fs) ? "Accounts, logons, shell histories, logs, the journal, packages and persistence of this Linux volume."
     : isFat(r.fs) || isOptical(r.fs) ? "Windows or Linux system files found on this volume (a removable drive or disc usually has none)."
     : "Registry, event logs, Prefetch, shortcuts, Jump Lists, ShellBags and the change journal of this Windows volume.";

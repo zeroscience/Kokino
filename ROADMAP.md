@@ -49,7 +49,8 @@ checked against public test images with known answers where they exist
 - [ ] HFS+ and APFS checked on disks from real Macs (so far: images made with Apple's own tools)
 - [ ] LZFSE decompression (decmpfs types 11 and 12)
 - [x] macOS artifacts: property lists, accounts, launchd persistence, quarantine events, KnowledgeC (unreleased)
-- [ ] macOS artifacts: unified logs, FSEvents, Safari history, checked on a real Mac image
+- [x] macOS: Safari history and downloads, FSEvents (unreleased)
+- [ ] macOS artifacts: unified logs, checked on a real Mac image
 - [ ] XFS
 - [x] BitLocker with a password or recovery password; clear key (unreleased)
 - [x] BitLocker: startup keys (.BEK), carving decrypted volumes (unreleased)

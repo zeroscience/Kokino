@@ -9,6 +9,7 @@ pub mod cfb;
 pub mod ese;
 pub mod evt;
 pub mod evtx;
+pub mod fsevents;
 pub mod iecache;
 pub mod jumplist;
 pub mod lnk;

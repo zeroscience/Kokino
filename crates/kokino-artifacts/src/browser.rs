@@ -1,5 +1,6 @@
 //! Browser history: Chromium family (Chrome, Edge, Brave, Opera, Vivaldi)
-//! `History` and Firefox `places.sqlite`. Internet Explorer's `index.dat`
+//! `History`, Firefox `places.sqlite` and Safari `History.db` (with its
+//! `Downloads.plist`). Internet Explorer's `index.dat`
 //! files are read by [`crate::iecache`] into the same structures.
 //!
 //! Databases are given as bytes (read from the evidence by the caller),
@@ -12,7 +13,8 @@
 //! columns exist and degrades to what the database has.
 //!
 //! All times are returned as Windows FILETIME (100 ns since 1601, UTC):
-//! Chromium stores microseconds since 1601, Firefox microseconds since 1970.
+//! Chromium stores microseconds since 1601, Firefox microseconds since 1970,
+//! Safari seconds since 2001.
 
 use anyhow::Context;
 use rusqlite::{Connection, OpenFlags};
@@ -30,6 +32,7 @@ pub enum Engine {
     Firefox,
     /// Internet Explorer 4 to 9 (index.dat).
     Ie,
+    Safari,
 }
 
 /// Where a history database came from.
@@ -179,6 +182,8 @@ pub fn classify(path: &str, name: &str) -> Option<WebSource> {
         Engine::Chromium
     } else if name.eq_ignore_ascii_case("places.sqlite") {
         Engine::Firefox
+    } else if name == "History.db" && path.contains("/Library/Safari/") {
+        Engine::Safari
     } else {
         return None;
     };
@@ -211,6 +216,7 @@ pub fn classify(path: &str, name: &str) -> Option<WebSource> {
             (b, p)
         }
         Engine::Ie => return None,
+        Engine::Safari => ("Safari".to_string(), String::new()),
         Engine::Firefox => {
             let b = if lower.contains("tor browser") { "Tor Browser" } else if lower.contains("waterfox") { "Waterfox" } else { "Firefox" };
             (b.to_string(), after("Profiles"))
@@ -240,7 +246,7 @@ pub fn parse(src: &mut WebSource, db: &[u8], wal: Option<&[u8]>, journal: Option
     // Touch the schema so WAL recovery and hot-journal rollback happen now.
     conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get::<_, i64>(0)).context("reading schema")?;
     conn.execute_batch("PRAGMA query_only = 1;")?;
-    let views = crate::sqlite::views_named(&conn, &["urls", "visits", "downloads", "downloads_url_chains", "keyword_search_terms", "moz_places", "moz_historyvisits", "moz_annos", "moz_anno_attributes"]);
+    let views = crate::sqlite::views_named(&conn, &["urls", "visits", "downloads", "downloads_url_chains", "keyword_search_terms", "moz_places", "moz_historyvisits", "moz_annos", "moz_anno_attributes", "history_items", "history_visits"]);
     if !views.is_empty() {
         anyhow::bail!("{} defined as a view, not a table: the database was altered, so it is not read", views.join(", "));
     }
@@ -249,6 +255,7 @@ pub fn parse(src: &mut WebSource, db: &[u8], wal: Option<&[u8]>, journal: Option
     match src.engine {
         Some(Engine::Chromium) => chromium(&conn, idx, src, out).map_err(crate::sqlite::explain)?,
         Some(Engine::Firefox) => firefox(&conn, idx, src, out).map_err(crate::sqlite::explain)?,
+        Some(Engine::Safari) => safari(&conn, idx, out).map_err(crate::sqlite::explain)?,
         Some(Engine::Ie) | None => anyhow::bail!("not a SQLite history engine"),
     }
     src.visits = out.visits[v0..].iter().filter(|v| !v.url_only).count() as u64;
@@ -440,6 +447,69 @@ fn firefox_visit_type(t: i64) -> (&'static str, bool) {
         _ => "other",
     };
     (s, t == 2)
+}
+
+/// Safari: every visit (history_visits) with its page (history_items);
+/// pages whose visits are gone are kept as URL-only.
+fn safari(c: &Connection, src: u32, out: &mut WebActivity) -> anyhow::Result<()> {
+    let has_col = |t: &str, col: &str| -> bool { c.prepare(&format!("SELECT {} FROM {} LIMIT 0", col, t)).is_ok() };
+    let redirect = if has_col("history_visits", "redirect_source") { "v.redirect_source" } else { "NULL" };
+    let mut st = c.prepare(&format!("SELECT v.visit_time, i.url, v.title, i.visit_count, {}, i.id FROM history_visits v JOIN history_items i ON v.history_item = i.id ORDER BY v.visit_time", redirect))?;
+    let rows = st.query_map([], |r| Ok((r.get::<_, Option<f64>>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, Option<i64>>(3)?, r.get::<_, Option<i64>>(4)?, r.get::<_, i64>(5)?)))?;
+    let mut seen = HashSet::new();
+    for (t, url, title, count, redir, item) in rows.flatten().take(MAX_ROWS) {
+        seen.insert(item);
+        out.visits.push(Visit {
+            t: t.map(crate::plist::mac_time).unwrap_or(0),
+            src,
+            url: url.unwrap_or_default(),
+            title: title.unwrap_or_default(),
+            how: if redir.is_some() { "redirect".into() } else { String::new() },
+            typed: false,
+            visit_count: count.unwrap_or(0),
+            duration_ms: 0,
+            url_only: false,
+            recovered: false,
+        });
+    }
+    let mut st = c.prepare("SELECT id, url, visit_count FROM history_items")?;
+    let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<i64>>(2)?)))?;
+    for (id, url, count) in rows.flatten().take(MAX_ROWS) {
+        if !seen.contains(&id) {
+            out.visits.push(Visit { t: 0, src, url: url.unwrap_or_default(), title: String::new(), how: String::new(), typed: false, visit_count: count.unwrap_or(0), duration_ms: 0, url_only: true, recovered: false });
+        }
+    }
+    searches_from_visits(src, out, &HashSet::new());
+    Ok(())
+}
+
+/// Safari's Downloads.plist (next to History.db): each download with its
+/// address, where it was saved and when. Returns how many were read.
+pub fn safari_downloads(d: &[u8], src: u32, out: &mut WebActivity) -> anyhow::Result<usize> {
+    let v = crate::plist::parse(d).ok_or_else(|| anyhow::anyhow!("Downloads.plist is not a property list"))?;
+    let list = v.get("DownloadHistory").map(|x| x.array()).unwrap_or(&[]);
+    let n0 = out.downloads.len();
+    for e in list.iter().take(MAX_ROWS) {
+        let s = |k: &str| e.get(k).and_then(|x| x.str()).unwrap_or("").to_string();
+        let i = |k: &str| e.get(k).and_then(|x| x.int()).unwrap_or(0) as i64;
+        let (got, total) = (i("DownloadEntryProgressBytesSoFar"), i("DownloadEntryProgressTotalToLoad"));
+        let end = e.get("DownloadEntryDateFinishedKey").map(|x| x.time()).unwrap_or(0);
+        out.downloads.push(Download {
+            start: e.get("DownloadEntryDateAddedKey").map(|x| x.time()).unwrap_or(0),
+            end,
+            src,
+            url: s("DownloadEntryURL"),
+            referrer: String::new(),
+            target: s("DownloadEntryPath"),
+            received: got,
+            total,
+            state: if end > 0 || (total > 0 && got >= total) { "complete".into() } else { "interrupted or in progress".into() },
+            danger: String::new(),
+            mime: String::new(),
+            opened: false,
+        });
+    }
+    Ok(out.downloads.len() - n0)
 }
 
 fn firefox(c: &Connection, src: u32, s: &mut WebSource, out: &mut WebActivity) -> anyhow::Result<()> {

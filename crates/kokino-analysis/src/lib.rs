@@ -797,6 +797,19 @@ mod tests {
         assert_eq!(apps, ["com.apple.Safari in front for 10 min 0 s", "com.apple.Terminal in front for 6 min 30 s"]);
         assert!(l.commands.iter().any(|x| x.command.contains("rm -P") && x.flag == "secure deletion" && x.user == "alice"));
         assert!(l.timeline.iter().any(|t| t.what.contains("tools.dmg")), "downloads on the timeline");
+        // Safari: visits (one a search), a page without visits, a download.
+        let w = &fs.web;
+        let s = w.sources.iter().find(|s| s.browser == "Safari").expect("Safari history");
+        assert_eq!((s.user.as_str(), s.visits, s.downloads, s.searches), ("alice", 3, 1, 1));
+        assert!(w.searches.iter().any(|x| x.term == "how to wipe a mac"));
+        assert!(w.visits.iter().any(|v| v.url == "https://old.lab.test/forgotten" && v.url_only && v.visit_count == 3));
+        let d = &w.downloads[0];
+        assert_eq!((d.url.as_str(), d.target.as_str(), d.state.as_str()), ("https://downloads.lab.test/tools.dmg", "~/Downloads/tools.dmg", "complete"));
+        assert_eq!(kokino_core::time::filetime_to_iso(d.start), "2026-10-20T08:15:30.0000000Z");
+        // FSEvents: the removal of plan.txt and a rename, timed by the file.
+        let fe: Vec<&str> = l.events.iter().filter(|e| e.source == "FSEvents").map(|e| e.summary.as_str()).collect();
+        assert_eq!(fe, ["/Users/alice/Documents/plan.txt: Created, Modified", "/Users/alice/Documents/plan.txt: Removed", "/Users/alice/Projects/old-name (folder): Renamed", "/Users/alice/Projects/new-name (folder): Renamed"]);
+        assert!(!l.timeline.iter().any(|t| t.what.contains("plan.txt: Removed")), "FSEvents stay off the timeline");
     }
 
     /// An Outlook PST on a volume (here in a tar collection): every message

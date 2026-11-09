@@ -906,7 +906,8 @@ fn read_file<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, f: &FileRow, cap: u6
 pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow], progress: crate::Progress) -> LinuxArtifacts {
     let mut a = LinuxArtifacts::default();
     // An ext volume, or a collection (tar, ZIP) that may hold a Linux system.
-    if !fs.is_ext() && !fs.is_collection() && !fs.is_mac() {
+    // FAT and exFAT too: USB drives can carry FSEvents from a Mac.
+    if !fs.is_ext() && !fs.is_collection() && !fs.is_mac() && !fs.is_fat() {
         return a;
     }
     if let crate::fs::Fs::Ext(v) = fs {
@@ -1374,7 +1375,8 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
     }
     a.events.sort_by_key(|e| e.time);
     a.logons.sort_by_key(|l| l.time);
-    for e in &a.events {
+    // FSEvents changes have no time of their own: not on the timeline.
+    for e in a.events.iter().filter(|e| e.source != "FSEvents") {
         a.timeline.push(WinTime { t: e.time, kind: if e.category == "USB" { "USB" } else { "EVT" }.into(), what: e.summary.clone(), detail: format!("{}: {}", e.source, e.category) });
     }
     for l in a.logons.iter().filter(|l| l.source != "auth log" && l.source != "journal") {

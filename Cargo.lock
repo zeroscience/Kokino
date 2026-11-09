@@ -1059,6 +1059,7 @@ version = "1.3.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "flate2",
  "rusqlite",
  "serde",
  "serde_json",

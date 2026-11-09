@@ -82,6 +82,15 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
         if let Err(e) = res {
             src.error = Some(format!("{:#}", e));
         }
+        // Safari keeps its downloads in Downloads.plist next to History.db.
+        if src.engine == Some(browser::Engine::Safari) {
+            if let Some(j) = by_name.get(&(f.e.parent, "downloads.plist".into())).copied() {
+                match read(j).and_then(|d| browser::safari_downloads(&d, out.sources.len() as u32, &mut out)) {
+                    Ok(n) => src.downloads += n as u64,
+                    Err(e) => src.note = format!("Downloads.plist: {:#}", e),
+                }
+            }
+        }
         out.sources.push(src);
     }
     progress("Browser history", total, total);
@@ -206,14 +215,16 @@ pub fn impact(web: &WebActivity) -> Vec<String> {
             continue;
         }
         let who = if s.user.is_empty() { String::new() } else { format!(" of user {}", s.user) };
+        // Safari has no profiles.
+        let prof = if s.profile.is_empty() { String::new() } else { format!(" ({})", s.profile) };
         let line = match &s.error {
-            Some(e) => format!("{} history{} ({}) could not be read: {}.", s.browser, who, s.profile, e),
-            None if s.visits == 0 && s.urls == 0 => format!("{} history{} ({}) is empty: cleared, or the profile was never used.", s.browser, who, s.profile),
+            Some(e) => format!("{} history{}{} could not be read: {}.", s.browser, who, prof, e),
+            None if s.visits == 0 && s.urls == 0 => format!("{} history{}{} is empty: cleared, or the profile was never used.", s.browser, who, prof),
             None => format!(
-                "{} history{} ({}): {}, {}, {}, from {} to {}{}.",
+                "{} history{}{}: {}, {}, {}, from {} to {}{}.",
                 s.browser,
                 who,
-                s.profile,
+                prof,
                 plural(s.visits, "visit"),
                 plural(s.downloads, "download"),
                 plural(s.searches, "search"),
