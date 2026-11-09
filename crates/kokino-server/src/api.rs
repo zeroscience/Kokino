@@ -73,6 +73,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/file/{idx}", get(file_detail))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/file/{idx}/bytes", get(file_bytes))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/file/{idx}/export", get(file_export))
+        .route("/cases/{cid}/evidence/{eid}/lists", get(lists))
+        .route("/cases/{cid}/evidence/{eid}/fs/{fi}/list/{what}/export", get(list_export))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/timeline", get(timeline))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/web", get(web))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/windows", get(windows))
@@ -989,6 +991,84 @@ async fn file_export(State(st): St, Extension(me): Me, Path((cid, eid, fi, idx))
         .body(Body::from(data))?)
 }
 
+/// Rows in each list of one file system (for the export dialog).
+fn list_count(l: &Loaded, fi: usize, carved: Option<&kokino_analysis::carve::CarveResult>, what: &str) -> usize {
+    let Some(f) = l.analysis.filesystems.get(fi) else { return 0 };
+    let (w, x) = (&f.windows, &f.linux);
+    match what {
+        "files" => f.files.len(),
+        "timeline" => l.fs.get(fi).map(|i| i.timeline.len()).unwrap_or(0),
+        "indicators" => f.indicators.len(),
+        "visits" => f.web.visits.len(),
+        "downloads" => f.web.downloads.len(),
+        "searches" => f.web.searches.len(),
+        "iecache" => f.web.cache.len(),
+        "execution" => w.execution.len(),
+        "access" => w.access.len(),
+        "shellbags" => w.shellbags.len(),
+        "journal" => w.journal.as_ref().map(|j| j.changes.len()).unwrap_or(0),
+        "autoruns" => w.autoruns.len(),
+        "tasks" => w.tasks.len(),
+        "programs" => w.programs.len(),
+        "usb" => w.usb.len(),
+        "networks" => w.networks.len(),
+        "accounts" => w.users.len(),
+        "events" => w.events.len(),
+        "regkeys" => w.reg_deleted_keys.len(),
+        "regvalues" => w.reg_deleted_values.len(),
+        "srum" => w.srum.as_ref().map(|s| s.apps.len()).unwrap_or(0),
+        "linux-commands" => x.commands.len(),
+        "linux-logons" => x.logons.len(),
+        "linux-events" => x.events.len(),
+        "linux-packages" => x.packages.len(),
+        "linux-persistence" => x.persistence.len(),
+        "carved" => carved.map(|c| c.files.len()).unwrap_or(0),
+        "ie-records" => carved.map(|c| c.records.len()).unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// Every list of every file system that has rows, with its row count.
+async fn lists(State(st): St, Path((cid, eid)): Path<(String, String)>) -> R {
+    let l = st.loaded(&cid, &eid)?;
+    let case = st.case(&cid)?;
+    let carved = jobs::load_carved(&case, &eid);
+    let mut out = vec![];
+    for (fi, f) in l.analysis.filesystems.iter().enumerate() {
+        let items: Vec<Value> = crate::exports::LISTS
+            .iter()
+            .filter(|(id, _)| !matches!(*id, "carved" | "ie-records"))
+            .map(|(id, label)| (id, label, list_count(&l, fi, carved.as_ref(), id)))
+            .filter(|x| x.2 > 0)
+            .map(|(id, label, n)| json!({"id": id, "label": label, "count": n}))
+            .collect();
+        out.push(json!({"fi": fi, "volume": f.volume.index, "fs": f.volume.fs_label, "lists": items}));
+    }
+    let carve: Vec<Value> = ["carved", "ie-records"].iter().map(|id| (id, list_count(&l, 0, carved.as_ref(), id))).filter(|x| x.1 > 0).map(|(id, n)| json!({"id": id, "label": crate::exports::LISTS.iter().find(|x| x.0 == *id).map(|x| x.1).unwrap_or(""), "count": n})).collect();
+    Ok(Json(json!({"filesystems": out, "carving": carve})))
+}
+
+#[derive(Deserialize)]
+struct ListQ {
+    format: Option<String>,
+}
+
+/// One list as CSV or JSON: saved in the case's exports folder, its
+/// SHA-256 recorded in the audit log, and sent as a download.
+async fn list_export(State(st): St, Extension(me): Me, Path((cid, eid, fi, what)): Path<(String, String, usize, String)>, Query(q): Query<ListQ>) -> Result<Response, AppError> {
+    let json_out = match q.format.as_deref().unwrap_or("csv") {
+        "csv" => false,
+        "json" => true,
+        other => return Err(anyhow::anyhow!("unknown format {}: csv or json", other).into()),
+    };
+    let st2 = st.clone();
+    let (name, data) = tokio::task::spawn_blocking(move || crate::exports::export_list(&st2, &cid, &eid, fi, &what, json_out, &me.username, false)).await??.ok_or_else(|| anyhow::anyhow!("empty list"))?;
+    Ok(Response::builder()
+        .header(header::CONTENT_TYPE, if json_out { "application/json; charset=utf-8" } else { "text/csv; charset=utf-8" })
+        .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"", name))
+        .body(Body::from(data))?)
+}
+
 #[derive(Deserialize)]
 struct TimelineQ {
     q: Option<String>,
@@ -1071,7 +1151,7 @@ async fn timeline(State(st): St, Path((cid, eid, fi)): Path<(String, String, usi
 }
 
 /// (main text, detail, size) for a browser timeline event.
-fn web_text(f: &FsAnalysis, src: &str, i: usize) -> (String, String, u64) {
+pub(crate) fn web_text(f: &FsAnalysis, src: &str, i: usize) -> (String, String, u64) {
     let w = &f.web;
     let who = |s: u32| w.sources.get(s as usize).map(|x| format!("{} / {} / {}", x.browser, x.user, x.profile)).unwrap_or_default();
     match src {

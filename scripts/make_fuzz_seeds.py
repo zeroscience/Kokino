@@ -37,6 +37,56 @@ def zipped(files, method=zipfile.ZIP_DEFLATED):
     return b.getvalue()
 
 
+
+def legacy_office():
+    """Word, Excel and PowerPoint 97-2003, an Outlook message and RTF, as
+    the oletext tests build them."""
+    import fixture_windows
+    cfb = fixture_windows.cfb
+    out = {}
+    # Word: FIB, one 8-bit piece and one UTF-16 piece in a 1Table piece table.
+    wd = bytearray(0x600)
+    struct.pack_into("<H", wd, 0, 0xA5EC)
+    struct.pack_into("<H", wd, 0x0A, 0x0200)
+    t8 = b"Wire the funds \x13 HYPERLINK x \x14today\x15\r"
+    t16 = "to the cafe account\r".encode("utf-16-le")
+    wd[0x400:0x400 + len(t8)] = t8
+    wd[0x500:0x500 + len(t16)] = t16
+    n8, n16 = len(t8), len(t16) // 2
+    plc = struct.pack("<III", 0, n8, n8 + n16)
+    plc += b"\0\0" + struct.pack("<I", (0x400 * 2) | 0x40000000) + b"\0\0"
+    plc += b"\0\0" + struct.pack("<I", 0x500) + b"\0\0"
+    clx = b"\x02" + struct.pack("<I", len(plc)) + plc
+    table = b"\0" * 16 + clx
+    struct.pack_into("<II", wd, 0x01A2, 16, len(clx))
+    out["legacy.doc"] = cfb([("WordDocument", bytes(wd)), ("1Table", table)])
+
+    # Excel: BOF, a sheet name, a shared string table split over CONTINUE.
+    def rec(ty, body):
+        return struct.pack("<HH", ty, len(body)) + body
+    bs = b"\0" * 6 + bytes([7, 0]) + b"Ledger1"
+    sst = struct.pack("<II", 2, 2) + struct.pack("<H", 6) + b"\0" + b"Amount" + struct.pack("<H", 14) + b"\0" + b"offshore"
+    cont = b"\x01" + " acct!".encode("utf-16-le")
+    out["legacy.xls"] = cfb([("Workbook", rec(0x0809, b"\0" * 16) + rec(0x0085, bs) + rec(0x00FC, sst) + rec(0x003C, cont) + rec(0x000A, b""))])
+
+    # PowerPoint: a container with a UTF-16 and an 8-bit text atom.
+    def atom(ty, b):
+        return struct.pack("<HHI", 0, ty, len(b)) + b
+    inner = atom(0x0FA0, "Q3 plan".encode("utf-16-le")) + atom(0x0FA8, b"move servers\rtonight")
+    out["legacy.ppt"] = cfb([("PowerPoint Document", struct.pack("<HHI", 0x000F, 0x03E8, len(inner)) + inner)])
+
+    # Outlook message: subject (UTF-16) and body (8-bit).
+    out["legacy.msg"] = cfb([("__substg1.0_0037001F", "Invoice 4471".encode("utf-16-le")), ("__substg1.0_1000001E", b"Pay today.\0")])
+
+    # RTF with escapes, a skipped font table, a field and a picture.
+    bs_ = "\\"
+    rtf = ("{" + bs_ + "rtf1" + bs_ + "ansi{" + bs_ + "fonttbl{" + bs_ + "f0 Times;}}"
+           + bs_ + "pard Transfer to the caf" + bs_ + "'e9" + bs_ + "par Na" + bs_ + "u239?ve" + bs_ + "tab 500" + bs_ + "par"
+           + "{" + bs_ + "field{" + bs_ + "*" + bs_ + "fldinst HYPERLINK http://x.test}{" + bs_ + "fldrslt link text}}"
+           + "{" + bs_ + "pict" + bs_ + "wmetafile8 0123abcd}}")
+    out["legacy.rtf"] = rtf.encode("ascii")
+    return out
+
 def docs():
     put("doc", "plain.zip", zipped([("notes.txt", "meeting at the lab, invoice 4471\n" * 3)]))
     put("doc", "stored.zip", zipped([("a.txt", "stored entry text")], zipfile.ZIP_STORED))
@@ -65,6 +115,9 @@ def docs():
         ("meta.xml", '<office:document-meta xmlns:office="o" xmlns:meta="m"><meta:initial-creator>bob</meta:initial-creator></office:document-meta>'),
     ], zipfile.ZIP_STORED))
     put("doc", "text.gz", gzip.compress(b"compressed log line 10.0.0.1\n" * 20))
+    # Legacy Office, Outlook and RTF (oletext.rs).
+    for name, data in legacy_office().items():
+        put("doc", name, data)
     put("doc", "tar-like.gz", gzip.compress(zipped([("x.txt", "zip in gzip")])))
 
     def pdf(objs):

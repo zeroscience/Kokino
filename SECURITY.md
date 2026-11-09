@@ -129,7 +129,14 @@ Deleted registry keys (1.2.9):
 |---|---|---|--:|---|
 | `registry` | again, now also searching every hive bin's free space for deleted keys and values, rebuilding their paths and reading their value lists (the seed hives hold deleted keys) | 10 min | 18,700,883 | none |
 
-In all: 379,588,593 inputs over 27 targets, and 29 distinct problems
+Exports, legacy Office text and registry logs (unreleased):
+
+| Target | What it covers | Rounds | Inputs in all | Distinct problems found |
+|---|---|---|--:|---|
+| `doc` | again, now with Word, Excel and PowerPoint 97-2003, Outlook .msg and RTF seeds (piece tables, shared strings split over CONTINUE records, text atoms, property sets, RTF groups and escapes) | 10 min | 37,498,697 | none |
+| `reglog` | registry transaction logs: base blocks, new-format log entries (Marvin32 checksums, dirty page lists, sequence order across two logs) and old-format dirty sector maps, applied to a dirty hive, then the hive read | 10 min | 58,565,421 | none |
+
+In all: 475,652,711 inputs over 28 targets, and 29 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed

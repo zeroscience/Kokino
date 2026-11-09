@@ -684,7 +684,8 @@ function summaryTab(ctx) {
   const maxExt = Math.max(1, ...st.top_ext.map((c) => c[1]));
   render(h("div.stack",
     h("div.hd", h("div", h("h1", ev.record.name), h("div.muted", `${fs.volume.fs_label} "${fs.info.label}", ${isOptical(fs.volume.fs_label) ? `${fs.info.version}, created ${ts(fs.info.serial, 19)}, sector` : isExt(fs.volume.fs_label) || isMac(fs.volume.fs_label) ? `${fs.info.version}, UUID ${fs.info.serial}, block` : `serial ${fs.info.serial}, ${isFat(fs.volume.fs_label) ? "" : `NTFS ${fs.info.version}, `}cluster`} ${fs.info.cluster_size} B, analyzed ${ts(s.analyzed_at, 19, { label: true })} by Kokino ${s.tool_version}`)), h("span.sp"), fsPicker(ctx, "summary"),
-      h("a.btn", { href: apiUrl(`/cases/${ctx.cid}/evidence/${ctx.eid}/report`), target: "_blank", rel: "noopener" }, "HTML report")),
+      h("a.btn", { href: apiUrl(`/cases/${ctx.cid}/evidence/${ctx.eid}/report`), target: "_blank", rel: "noopener" }, "HTML report"),
+      canWrite() ? h("button", { onclick: () => exportDialog(ctx) }, "Export lists") : null),
     h("div.card.flat", h("div.hd", h("h3", "Disk layout"), h("span.sp"), h("span.muted", `${s.image_format}, ${bytes(s.image_size)}`)), volumeMap(s)),
     h("div.grid.g4.stagger",
       tile("Files", st.files, bytes(st.bytes)),
@@ -1013,7 +1014,7 @@ ${e.detail}` : e.path }, e.flags.length ? h("span.flag", { title: e.flags.join("
   to.addEventListener("change", reload);
   more.onclick = () => load(true);
   render(h("div.stack",
-    h("div.hd", h("h1", "Timeline"), h("span.sp"), fsPicker(ctx, "timeline")),
+    h("div.hd", h("h1", "Timeline"), h("span.sp"), exportButtons(ctx, ctx.fi, "timeline"), fsPicker(ctx, "timeline")),
     h("p.muted", ntfs ? "MACB events from $STANDARD_INFORMATION and $FILE_NAME, interleaved with browser visits (VISIT), downloads (DL) and searches (SEARCH). $FN times are set by the kernel and are much harder to forge, so compare the two sources when something looks off."
       : isExt(ctx.fs && ctx.fs.volume.fs_label) ? "MACB events from each inode (M modified, A accessed, C inode changed, B born; born times exist on ext4 only), deletion times (DEL), interleaved with browser visits (VISIT), downloads (DL) and searches (SEARCH). touch can set M and A to anything, but not C: the kernel sets C to the time of the change."
       : "MACB events from the directory entries, interleaved with browser visits (VISIT), downloads (DL) and searches (SEARCH)."),
@@ -1026,6 +1027,28 @@ ${e.detail}` : e.path }, e.flags.length ? h("span.flag", { title: e.flags.join("
 
 // ---------------------------------------------------------------- web activity
 const srcName = (s) => s ? `${s.browser}: ${s.user || "unknown user"} / ${s.profile || "?"}` : "";
+
+// One list as CSV or JSON; the server saves it in the case's exports folder
+// and records its SHA-256 in the audit log.
+const listUrl = (ctx, fi, id, fmt) => apiUrl(`/cases/${ctx.cid}/evidence/${ctx.eid}/fs/${fi}/list/${id}/export?format=${fmt}`);
+function exportButtons(ctx, fi, id) {
+  if (!canWrite()) return null;
+  return h("span.row", { style: { gap: "4px" } }, h("span.muted", { style: { fontSize: "12px" } }, "Export"),
+    ["csv", "json"].map((f) => h("a.btn.sm", { href: listUrl(ctx, fi, id, f), download: "", title: `Download as ${f.toUpperCase()}; a copy is saved in the case's exports folder and recorded in the audit log` }, f.toUpperCase())));
+}
+async function exportDialog(ctx) {
+  const r = await api(`/cases/${ctx.cid}/evidence/${ctx.eid}/lists`);
+  const row = (fi, x) => h("tr", h("td", x.label), h("td.num", num(x.count)), h("td", ["csv", "json"].map((f) => h("a.btn.sm", { href: listUrl(ctx, fi, x.id, f), download: "", style: { marginRight: "4px" } }, f.toUpperCase()))));
+  const blocks = r.filesystems.filter((f) => f.lists.length).map((f) => h("div.stack",
+    r.filesystems.length > 1 ? h("h4", `Volume ${f.volume} (${f.fs})`) : null,
+    h("table.tbl.sys", h("tbody", f.lists.map((x) => row(f.fi, x))))));
+  if (r.carving.length) blocks.push(h("div.stack", h("h4", "Carving"), h("table.tbl.sys", h("tbody", r.carving.map((x) => row(0, x))))));
+  modal([
+    h("div.hd", h("h2", "Export lists"), h("span.sp"), h("button.ghost.sm", { onclick: closeModal }, "Close")),
+    h("p.muted", { style: { margin: 0 } }, "Each list is written in full, with times in UTC (ISO 8601). CSV opens in a spreadsheet (cells that start like a formula get a leading apostrophe so they are not run); JSON keeps every value exactly. Every export is saved in the case's exports folder and its SHA-256 recorded in the audit log. The command line does the same: kokino export <case folder>."),
+    ...blocks,
+  ]);
+}
 
 function webDetail(title, rows, target) {
   modal([
@@ -1827,7 +1850,9 @@ async function carvedTab(ctx) {
       h("button", { onclick: () => bytesDialog(`Carved ${f.label} #${f.id}`, `/cases/${cid}/evidence/${eid}/carved/${f.id}`, (off) => go(`/c/${cid}/e/${eid}/hex?off=${f.offset + off}`)) }, icon("hex", 14), "Byte map and strings"))],
     ["", canWrite() ? h("a.btn.primary", { href: apiUrl(`${base}/${f.id}/export`) }, "Export (hashed + audited)") : h("span.muted", "Read-only access: export not available")],
   ], { cid, eid, kind: "carved", key: `carved:${eid}:${f.offset}`, carved: f.id, title: `Carved ${f.label} #${f.id}`, path: `${f.region} at offset ${f.offset}` });
+  const expC = h("span");
   const draw = () => {
+    expC.replaceChildren(exportButtons(ctx, 0, kind === "ie-records" ? "ie-records" : "carved") || "");
     seg.replaceChildren(...[["", `All (${num(r.files.length)})`], ...Object.entries(kinds).sort((a, b) => b[1] - a[1]).map(([k, n]) => [k, `${k} (${num(n)})`])].map(([k, l]) =>
       h("button", { class: kind === k ? "on" : null, onclick: () => { kind = k; draw(); } }, l)));
     viewSeg.replaceChildren(...[["gallery", "Gallery"], ["table", "Table"]].map(([k, l]) => h("button", { class: view === k ? "on" : null, onclick: () => { view = k; draw(); } }, l)));
@@ -1862,7 +1887,7 @@ async function carvedTab(ctx) {
   draw();
   render(h("div.stack", intro,
     r.schema < 2 ? h("p", { style: { margin: 0, color: "var(--warn)" } }, "Carved by an earlier Kokino version, before Internet Explorer history records were recovered from free space. Carve again to look for them.") : null,
-    h("div.row.wrap", seg, h("span.sp"), viewSeg),
+    h("div.row.wrap", seg, h("span.sp"), expC, viewSeg),
     h("p.muted", { style: { fontSize: "12.5px" } }, "Each file is found by its header and ends where its own structure says, so only whole files are listed; broken or cut-off ones are marked incomplete. Nothing is copied until you export, and every export is hashed and written to the audit log."),
     out));
   if (ctx.q.id != null) { const f = r.files.find((x) => String(x.id) === String(ctx.q.id)); if (f) detail(f); }
@@ -1908,7 +1933,8 @@ async function webTab(ctx) {
   drawCards();
 
   const seg = h("div.seg");
-  const drawSeg = () => seg.replaceChildren(...[["visits", "Visits"], ["downloads", "Downloads"], ["searches", "Searches"], ["cache", "IE cache"]].filter(([k]) => k !== "cache" || head.counts.cache || kind === "cache").map(([k, l]) => h("button", { class: kind === k ? "on" : null, onclick: () => { kind = k; drawSeg(); reload(); } }, `${l} (${num(head.counts[k])})`)));
+  const exp = h("span");
+  const drawSeg = () => (exp.replaceChildren(exportButtons(ctx, ctx.fi, kind === "cache" ? "iecache" : kind) || ""), seg.replaceChildren(...[["visits", "Visits"], ["downloads", "Downloads"], ["searches", "Searches"], ["cache", "IE cache"]].filter(([k]) => k !== "cache" || head.counts.cache || kind === "cache").map(([k, l]) => h("button", { class: kind === k ? "on" : null, onclick: () => { kind = k; drawSeg(); reload(); } }, `${l} (${num(head.counts[k])})`))));
   drawSeg();
   const q = h("input", { placeholder: "Filter by URL, title, file or search term...", value: ctx.q.q || "", style: { flex: 1 } });
   const thead = h("thead");
@@ -1959,7 +1985,7 @@ async function webTab(ctx) {
     ieStale,
     h("p.muted", "History read from each browser profile's database, including changes still in its -wal file, and from Internet Explorer's index.dat files. Click a profile to filter by it. " + zoneSentence() + " Pages marked \"URL table only\" lost their visit rows: expired by the browser or deleted selectively. \"Deleted entry\" marks Internet Explorer entries recovered from free blocks inside index.dat."),
     cards,
-    h("div.row.wrap", seg, q, count),
+    h("div.row.wrap", seg, q, count, h("span.sp"), exp),
     h("div.scroll", { style: { maxHeight: "calc(100vh - 260px)" } }, h("table.tbl.web", thead, tbody)),
     h("div.row", h("span.sp"), more),
   ));

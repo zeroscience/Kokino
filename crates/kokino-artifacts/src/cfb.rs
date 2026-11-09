@@ -124,8 +124,10 @@ pub fn streams(d: &[u8], max_stream: usize) -> anyhow::Result<Vec<Stream>> {
     Ok(out)
 }
 
-#[cfg(test)]
-pub(crate) mod tests {
+/// Test helpers (a small compound file writer), public so other crates
+/// can build fixtures with them.
+#[doc(hidden)]
+pub mod tests {
     use super::*;
 
     /// Writes a version 3 compound file (512-byte sectors) with flat streams.

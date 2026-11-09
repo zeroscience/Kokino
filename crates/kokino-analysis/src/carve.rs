@@ -1091,9 +1091,9 @@ pub(crate) mod tests {
         let got: Vec<(&str, u64, bool)> = r.files.iter().map(|f| (f.kind.as_str(), f.len, f.complete)).collect();
         let want = [
             ("png", 720, true),
-            ("sqlite", 2048, true),
             ("jpeg", 237, true),
             ("docx", 346, true),
+            ("sqlite", 2048, true),
             ("gif", 43, true),
             ("bmp", 198, true),
             ("pdf", 460, true),

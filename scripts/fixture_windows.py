@@ -992,6 +992,70 @@ def ie_free_space():
     return whole, loose
 
 
+# ---------------------------------------------------------------- registry transaction logs
+MARVIN_SEED = 0x82EF4D887A4E55C5
+
+
+def marvin(data, seed=MARVIN_SEED):
+    """Marvin32 as the registry keeps it: the whole 64-bit state."""
+    m = 0xFFFFFFFF
+    rotl = lambda x, n: ((x << n) | (x >> (32 - n))) & m
+    lo, hi = seed & m, seed >> 32
+
+    def block(lo, hi):
+        hi ^= lo
+        lo = (rotl(lo, 20) + hi) & m
+        hi = rotl(hi, 9) ^ lo
+        lo = (rotl(lo, 27) + hi) & m
+        hi = rotl(hi, 19)
+        return lo, hi
+    n = len(data) // 4
+    for i in range(n):
+        lo = (lo + struct.unpack_from("<I", data, 4 * i)[0]) & m
+        lo, hi = block(lo, hi)
+    r = data[4 * n:]
+    tail = [0x80, 0x8000 | (r[0] if len(r) > 0 else 0), 0x800000 | ((r[0] | r[1] << 8) if len(r) > 1 else 0), 0x80000000 | ((r[0] | r[1] << 8 | r[2] << 16) if len(r) > 2 else 0)][len(r)]
+    lo = (lo + tail) & m
+    lo, hi = block(lo, hi)
+    lo, hi = block(lo, hi)
+    return hi << 32 | lo
+
+
+def base_checksum(b):
+    x = 0
+    for i in range(127):
+        x ^= struct.unpack_from("<I", b, 4 * i)[0]
+    return 0xFFFFFFFE if x == 0xFFFFFFFF else (1 if x == 0 else x)
+
+
+def dirty_with_log(hive, needle):
+    """The hive as Windows leaves it when it has not flushed yet: the
+    512-byte sector holding `needle` is stale on disk (zeroed) and the
+    current one is in a new-format .LOG1 entry; the sequence numbers differ."""
+    hive = bytearray(hive)
+    at = hive.index(needle, 4096)
+    sec = (at - 4096) // 512 * 512
+    page = bytes(hive[4096 + sec:4096 + sec + 512])
+    hive[4096 + sec:4096 + sec + 512] = b"\0" * 512
+    seq = struct.unpack_from("<I", hive, 4)[0]
+    struct.pack_into("<II", hive, 4, seq + 1, seq)
+    struct.pack_into("<I", hive, 508, base_checksum(hive))
+    bins = struct.unpack_from("<I", hive, 40)[0]
+    log_base = bytearray(hive[:512])
+    struct.pack_into("<II", log_base, 4, seq, seq)
+    struct.pack_into("<I", log_base, 28, 6)  # file type: new-format log
+    struct.pack_into("<I", log_base, 508, base_checksum(log_base))
+    body = struct.pack("<II", sec, 512) + page
+    size = (40 + len(body) + 511) // 512 * 512
+    e = bytearray(size)
+    e[0:4] = b"HvLE"
+    struct.pack_into("<IIIII", e, 4, size, 0, seq, bins, 1)
+    e[40:40 + len(body)] = body
+    struct.pack_into("<Q", e, 24, marvin(bytes(e[40:])))
+    struct.pack_into("<Q", e, 32, marvin(bytes(e[:32])))
+    return bytes(hive), bytes(log_base) + bytes(e)
+
+
 def build():
     out = {
         "Windows/System32/config/SYSTEM": hive_system(),
@@ -999,7 +1063,7 @@ def build():
         "Windows/System32/config/SAM": hive_sam(),
         "Windows/AppCompat/Programs/Amcache.hve": hive_amcache(),
         "Users/alice/NTUSER.DAT": hive_ntuser(),
-        "Users/alice/AppData/Local/Microsoft/Windows/UsrClass.dat": hive_usrclass(),
+
         "ProgramData/Microsoft/Wlansvc/Profiles/Interfaces/" + WLAN_IF + "/" + WLAN_PROFILE + ".xml": wlan_profile_xml(),
         "Windows/System32/winevt/Logs/Security.evtx": log_security(),
         "Windows/System32/winevt/Logs/System.evtx": log_system(),
@@ -1009,6 +1073,11 @@ def build():
     for name, data in prefetch_files().items():
         out["Windows/Prefetch/" + name] = data
     out.update(task_files())
+    # UsrClass.dat was not flushed: the sector with the ShellBags root key is
+    # only in its .LOG1 (tests: finds_windows_artifacts, reglog).
+    usr, usr_log = dirty_with_log(hive_usrclass(), "BagMRU".encode("ascii"))
+    out["Users/alice/AppData/Local/Microsoft/Windows/UsrClass.dat"] = usr
+    out["Users/alice/AppData/Local/Microsoft/Windows/UsrClass.dat.LOG1"] = usr_log
     out.update(ie_files())
     # SRUM: the small-page database from make_srum_fixture.py (written by esent.dll).
     srum = os.path.join(OUT, "SRUDB-4k.dat")

@@ -133,6 +133,23 @@ enum Cmd {
         #[arg(long)]
         utc: bool,
     },
+    /// Export lists of an analyzed evidence item (files, timeline, web
+    /// activity, Windows and Linux artifacts, indicators, carved files) as
+    /// CSV or JSON into the case's exports folder, with each file's SHA-256
+    /// in the case audit log. Without a list name, prints the lists there are
+    Export {
+        case_dir: PathBuf,
+        /// Evidence id (shown by running this command with only the case folder)
+        evidence: Option<String>,
+        /// List to export, or "all"
+        list: Option<String>,
+        /// File system number on the evidence (from the listing)
+        #[arg(long, default_value_t = 0)]
+        fs: usize,
+        /// csv or json
+        #[arg(long, default_value = "csv")]
+        format: String,
+    },
     /// Parse one exported artifact file (registry hive, EVTX, Prefetch, LNK,
     /// Jump List, Internet Explorer index.dat) and print what it holds as JSON
     Artifact {
@@ -638,10 +655,72 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Cmd::Export { case_dir, evidence, list, fs, format } => {
+            if !case_dir.join("case.json").is_file() {
+                anyhow::bail!("{} is not a case folder (no case.json)", case_dir.display());
+            }
+            let case_dir = std::path::absolute(&case_dir)?;
+            let (Some(root), Some(cid)) = (case_dir.parent(), case_dir.file_name().and_then(|n| n.to_str())) else { anyhow::bail!("give the case folder, e.g. KokinoCases/my-case-1a2b3c4d") };
+            let json_out = match format.as_str() {
+                "csv" => false,
+                "json" => true,
+                f => anyhow::bail!("unknown format {}: csv or json", f),
+            };
+            let st = kokino_server::AppState::new(root.to_path_buf(), 0, false, vec![])?;
+            let case = st.case(cid)?;
+            let Some(eid) = evidence else {
+                println!("Evidence in {}:", cid);
+                for e in case.evidence() {
+                    println!("  {}  {}", e.id, e.name);
+                }
+                println!("Then: kokino export <case folder> <evidence id> to see its lists.");
+                return Ok(());
+            };
+            let l = st.loaded(cid, &eid)?;
+            let names: Vec<&str> = kokino_server::exports::LISTS.iter().map(|x| x.0).collect();
+            let Some(list) = list else {
+                println!("Lists of {} (export one with: kokino export <case folder> {} <list> [--fs N] [--format csv|json]; \"all\" exports every list):", eid, eid);
+                for (fi, f) in l.analysis.filesystems.iter().enumerate() {
+                    println!("  --fs {}  volume {} ({})", fi, f.volume.index, f.volume.fs_label);
+                }
+                println!("  {}", names.join(", "));
+                return Ok(());
+            };
+            let actor = format!("cli:{}", std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_default());
+            let todo: Vec<&str> = if list == "all" { names.clone() } else { vec![list.as_str()] };
+            for what in todo {
+                match kokino_server::exports::export_list(&st, cid, &eid, fs, what, json_out, &actor, list == "all") {
+                    Ok(None) => {}
+                    Ok(Some((name, data))) => {
+                        let (h, _) = kokino_core::hashing::hash_reader(&data[..], |_| true)?;
+                        println!("{}\n    SHA-256 {}", case_dir.join("exports").join(&name).display(), h.sha256);
+                    }
+                    Err(e) if list == "all" => eprintln!("{}: skipped ({:#})", what, e),
+                    Err(e) => return Err(e),
+                }
+            }
+        }
         Cmd::Artifact { file, full } => {
-            let data = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
+            let mut data = std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
             let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let v = kokino_analysis::windows::inspect(&name, &data, full)?;
+            // A hive that was not cleanly saved: apply the logs next to it.
+            let mut recovery = None;
+            if data.starts_with(b"regf") && kokino_artifacts::reglog::dirty(&data) {
+                let log = |ext: &str| std::fs::read(format!("{}.{}", file.display(), ext)).ok().filter(|d| !d.is_empty());
+                let (l1, l2) = (log("LOG1").or_else(|| log("LOG")), log("LOG2"));
+                recovery = Some(match kokino_artifacts::reglog::recover(&data, l1.as_deref(), l2.as_deref()) {
+                    Ok(Some((fixed, r))) => {
+                        data = fixed;
+                        serde_json::json!({"applied": true, "format": r.format, "entries": r.applied, "pages": r.pages, "from": r.from, "last_sequence": r.last_sequence, "stopped": r.stopped})
+                    }
+                    Ok(None) => serde_json::json!({"applied": false}),
+                    Err(e) => serde_json::json!({"applied": false, "error": format!("{:#}", e)}),
+                });
+            }
+            let mut v = kokino_analysis::windows::inspect(&name, &data, full)?;
+            if let Some(r) = recovery {
+                v["log_recovery"] = r;
+            }
             println!("{}", serde_json::to_string_pretty(&v)?);
         }
         Cmd::Image { file } => {

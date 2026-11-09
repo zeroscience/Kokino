@@ -10,6 +10,7 @@
 
 mod api;
 mod auth;
+pub mod exports;
 pub mod casereport;
 mod jobs;
 mod state;

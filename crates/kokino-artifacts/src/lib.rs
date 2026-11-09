@@ -12,6 +12,7 @@ pub mod iecache;
 pub mod jumplist;
 pub mod lnk;
 pub mod prefetch;
+pub mod reglog;
 pub mod registry;
 pub mod shellbags;
 pub mod sqlite;

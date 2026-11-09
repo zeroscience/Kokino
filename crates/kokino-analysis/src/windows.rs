@@ -14,7 +14,7 @@
 
 use crate::FileRow;
 use kokino_artifacts::registry::{Hive, Key};
-use kokino_artifacts::{ese, evtx, jumplist, lnk, prefetch, registry, shellbags, task, usn};
+use kokino_artifacts::{ese, evtx, jumplist, lnk, prefetch, reglog, registry, shellbags, task, usn};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -551,6 +551,13 @@ fn user_of(path: &str) -> String {
 pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow], progress: crate::Progress) -> WindowsArtifacts {
     let mut w = WindowsArtifacts::default();
     // Live copies first, so deleted ones never shadow them.
+    // Live files by (parent, lowercase name): transaction logs next to hives.
+    let log_files: HashMap<(u64, String), usize> = files
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| !f.e.is_dir && !f.e.deleted && f.e.name.to_ascii_lowercase().contains(".log"))
+        .map(|(i, f)| ((f.e.parent, f.e.name.to_ascii_lowercase()), i))
+        .collect();
     let mut found: Vec<(usize, Kind)> = files.iter().enumerate().filter(|(_, f)| !f.e.is_dir && f.e.size > 0).filter_map(|(i, f)| classify(&f.e.path).map(|k| (i, k))).collect();
     found.sort_by_key(|(i, _)| (files[*i].e.deleted, *i));
     let total = found.len() as u64;
@@ -575,6 +582,22 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
         } else {
             fs.read(r, &f.e, "", 0, f.e.size as usize)
         };
+        // A hive that was not cleanly saved: its transaction logs, from the
+        // same folder (.LOG1 and .LOG2; .LOG on Windows XP).
+        let hive_kind = matches!(kind, Kind::System | Kind::Software | Kind::Sam | Kind::NtUser | Kind::UsrClass | Kind::Amcache);
+        let mut logs: [Option<Vec<u8>>; 2] = [None, None];
+        if hive_kind && data.as_ref().is_ok_and(|d| reglog::dirty(d)) {
+            let lname = f.e.name.to_ascii_lowercase();
+            for (slot, exts) in [(0usize, ["log1", "log"]), (1, ["log2", "log2"])] {
+                let j = exts.iter().find_map(|x| log_files.get(&(f.e.parent, format!("{}.{}", lname, x))).copied());
+                if let Some(j) = j {
+                    let e = &files[j].e;
+                    if e.size > 0 && e.size <= MAX_HIVE {
+                        logs[slot] = fs.read(r, e, "", 0, e.size as usize).ok();
+                    }
+                }
+            }
+        }
         let res = data.and_then(|d| match kind {
             Kind::System | Kind::Software | Kind::Sam | Kind::NtUser | Kind::UsrClass | Kind::Amcache => {
                 // A deleted hive is reported but not used when a live one exists.
@@ -583,10 +606,28 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
                     src.note = Some("older deleted copy; the live hive is used".into());
                     return Ok(());
                 }
-                let h = Hive::parse(d)?;
-                if h.dirty {
-                    src.note = Some("hive was not cleanly saved: recent changes may still be in its .LOG1/.LOG2 files, which are not applied".into());
+                let mut d = d;
+                if reglog::dirty(&d) {
+                    match reglog::recover(&d, logs[0].as_deref(), logs[1].as_deref()) {
+                        Ok(Some((fixed, rec))) => {
+                            d = fixed;
+                            let mut note = format!(
+                                "hive was not cleanly saved; recent changes were applied from {} ({} {}, {} pages) as Windows would on its next start",
+                                rec.from.join(" and "),
+                                rec.applied,
+                                if rec.format == "new" { if rec.applied == 1 { "log entry" } else { "log entries" } } else { "log" },
+                                rec.pages
+                            );
+                            if let Some(s) = rec.stopped {
+                                note.push_str(&format!("; the replay stopped early: {}", s));
+                            }
+                            src.note = Some(note);
+                        }
+                        Ok(None) => {}
+                        Err(e) => src.note = Some(format!("hive was not cleanly saved; recent changes may be missing: {:#}", e)),
+                    }
                 }
+                let h = Hive::parse(d)?;
                 hives.push((kind, i, h));
                 Ok(())
             }

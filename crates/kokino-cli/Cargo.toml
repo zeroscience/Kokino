@@ -15,6 +15,7 @@ kokino-core.workspace = true
 kokino-image.workspace = true
 kokino-ntfs.workspace = true
 kokino-analysis.workspace = true
+kokino-artifacts.workspace = true
 kokino-server.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true

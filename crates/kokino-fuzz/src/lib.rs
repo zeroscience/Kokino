@@ -28,6 +28,7 @@ pub const TARGETS: &[Target] = &[
     Target { name: "usn", run: usn, seeds: &["crates/kokino-fuzz/seeds/usn"] },
     Target { name: "shellbags", run: shellbags, seeds: &["crates/kokino-fuzz/seeds/shellbags"] },
     Target { name: "task", run: task, seeds: &["tests/fixtures/win/Windows_System32_Tasks_Updater Check", "tests/fixtures/win/Windows_System32_Tasks_Microsoft_Windows_WinUpdate_Sync", "tests/fixtures/win/Windows_System32_Tasks_Microsoft_Windows_Defrag_ScheduledDefrag", "tests/fixtures/win/Windows_System32_config_SOFTWARE"] },
+    Target { name: "reglog", run: reglog, seeds: &["tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_UsrClass.dat.LOG1", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_UsrClass.dat"] },
     Target { name: "iecache", run: iecache, seeds: &["tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_History_History.IE5_MSHist012025031020250311_index.dat", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_History_History.IE5_index.dat", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_Temporary Internet Files_Content.IE5_index.dat", "tests/fixtures/win/Users_alice_AppData_Roaming_Microsoft_Windows_IEDownloadHistory_index.dat"] },
     Target { name: "ese", run: ese, seeds: &["tests/fixtures/win/SRUDB-4k.dat", "tests/fixtures/win/SRUDB.dat", "tests/fixtures/win/ese-deep.dat"] },
     Target { name: "registry", run: registry, seeds: &["tests/fixtures/win/Users_alice_NTUSER.DAT", "tests/fixtures/win/Windows_System32_config_SAM", "tests/fixtures/win/Windows_System32_config_SOFTWARE", "tests/fixtures/win/Windows_System32_config_SYSTEM", "tests/fixtures/win/Windows_AppCompat_Programs_Amcache.hve"] },
@@ -273,6 +274,22 @@ fn task(d: &[u8]) {
     let _ = kokino_artifacts::task::dynamic_info(d);
     // A SOFTWARE hive: TaskCache joined with no task files.
     kokino_analysis::windows::fuzz_tasks(d);
+}
+
+/// Registry transaction logs: the input as a log for the test image's
+/// dirty UsrClass.dat (both formats are tried by the reader), and as a
+/// hive with itself as its log.
+fn reglog(d: &[u8]) {
+    use kokino_artifacts::reglog::recover;
+    static HIVE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    let hive = HIVE.get_or_init(|| std::fs::read(workspace_root().join("tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_UsrClass.dat")).unwrap_or_default());
+    if let Ok(Some((h, _))) = recover(hive, Some(d), None) {
+        if let Ok(h) = kokino_artifacts::registry::Hive::parse(h) {
+            let _ = h.root().subkeys();
+        }
+    }
+    let _ = recover(hive, None, Some(d));
+    let _ = recover(d, Some(d), Some(d));
 }
 
 fn iecache(d: &[u8]) {

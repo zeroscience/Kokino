@@ -10,6 +10,8 @@
 //!   Package plumbing (relationships, content types, styles, themes) is
 //!   skipped. Encrypted entries are reported, not guessed.
 //! - GZIP: inflated and handled like any other content.
+//! - Word, Excel and PowerPoint 97-2003, Outlook .msg and RTF: see
+//!   `oletext`.
 //! - PDF: objects are found by scanning (not by trusting the xref table, so
 //!   damaged and incrementally updated files work), Flate streams and object
 //!   streams are decoded, page text is read from the content streams with
@@ -54,6 +56,9 @@ pub enum Kind {
     Zip,
     Pdf,
     Gzip,
+    /// OLE compound file: Word, Excel and PowerPoint 97-2003, Outlook .msg.
+    Ole,
+    Rtf,
 }
 
 /// Container kind from the first bytes, if this module can decode it.
@@ -64,6 +69,10 @@ pub fn detect(head: &[u8]) -> Option<Kind> {
         Some(Kind::Pdf)
     } else if head.starts_with(b"\x1f\x8b\x08") {
         Some(Kind::Gzip)
+    } else if kokino_artifacts::cfb::is_cfb(head) {
+        Some(Kind::Ole)
+    } else if head.starts_with(b"{\\rtf") {
+        Some(Kind::Rtf)
     } else {
         None
     }
@@ -120,6 +129,19 @@ impl Cx {
                 }
                 let name = format!("{}(gunzipped)", prefix);
                 self.content(&inner, &name, depth + 1);
+            }
+            Some(Kind::Ole) => {
+                let o = crate::oletext::ole(data);
+                for n in o.notes {
+                    self.note(format!("{}: {}", label(prefix, "OLE file"), n));
+                }
+                for (name, text) in o.parts {
+                    self.push(&format!("{}{}", prefix, name), text);
+                }
+            }
+            Some(Kind::Rtf) => {
+                let text = crate::oletext::rtf(data);
+                self.push(&format!("{}text", prefix), text);
             }
             None => {}
         }

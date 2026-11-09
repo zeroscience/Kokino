@@ -11,6 +11,7 @@ pub mod binview;
 pub mod signatures;
 pub mod carve;
 pub mod doctext;
+pub mod oletext;
 pub mod fs;
 pub mod hashsets;
 pub mod linux;
@@ -521,6 +522,10 @@ mod tests {
         assert!(afw.records.contains(&ie[0].1.record) && afw.records.contains(&ie[3].1.record), "{:?}", afw);
         assert!(fs.stats.impact.iter().any(|l| l.starts_with("Internet Explorer history, day 2025-03-10 of user alice: 3 visits, 1 search") && l.contains("1 deleted entry recovered")), "{:?}", fs.stats.impact);
 
+        // UsrClass.dat was not flushed: the sector with BagMRU is only in its
+        // .LOG1, so the ShellBags checked above prove the replay.
+        let usr = w.sources.iter().find(|s| s.path.ends_with("/UsrClass.dat")).unwrap();
+        assert!(usr.error.is_none() && usr.note.as_deref().is_some_and(|n| n.contains("applied from LOG1 (1 log entry, 1 pages)")), "{:?}", usr);
         // Deleted registry keys and values (fixture_windows.py, hive_ntuser and hive_usrclass).
         let keys: Vec<(&str, &str, bool)> = w.reg_deleted_keys.iter().map(|k| (k.hive.as_str(), k.path.as_str(), k.complete_path)).collect();
         assert_eq!(keys, [

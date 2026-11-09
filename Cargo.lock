@@ -1024,6 +1024,7 @@ dependencies = [
  "anyhow",
  "clap",
  "kokino-analysis",
+ "kokino-artifacts",
  "kokino-core",
  "kokino-image",
  "kokino-ntfs",

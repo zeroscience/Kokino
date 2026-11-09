@@ -20,6 +20,8 @@ Thanks to the people behind these collections:
   Sets of the U.S. National Institute of Standards and Technology, Computer
   Forensics Tool Testing (CFTT) program: here the Deleted File Recovery
   (DFR) test images and their layout document.
+- **Maxim Suhanov**, author of the yarp registry library: the dirty hives
+  with their transaction logs and the hives Windows recovered from them.
 
 Kokino version: 1.2.5 plus the fixes listed in the changelog for the FAT,
 exFAT and NTFS images; 1.2.6 for the ext images; 1.2.8 for NTFS names
@@ -35,6 +37,7 @@ Internet Explorer and deleted registry keys. Run on Windows 10.
 | NIST CFReDS DFR, 22 ext images (ext2, ext3, ext4) | Every deleted file with content, block by block; deleted names against NIST's layout | 962 of 965 tagged files complete, 99.9996% of blocks right; 302 files recovered through the ext3/ext4 journal; 2,782 deleted names listed; wrong content without a warning in 1 file |
 | A real Windows 10 22H2 SRUM database (SRUDB.dat, 70 MB, 1.2.8) | Every row and value of every table against Windows' own esent.dll | All 310,255 rows and 2,800,979 values the same, after two fixes (below) |
 | Digital Detective practice files: SOFTWARE hive of a Windows 7 laptop (1.2.9) | Scheduled tasks in TaskCache | 83 tasks read, none falsely flagged as hidden, after one fix (below) |
+| yarp test hives (dirty hives with their transaction logs, unreleased) | Hives after log replay against the hives Windows 10 and Windows 7 recovered | New format identical; old format identical apart from two fields Windows rewrites on load; damaged logs refused |
 | Digital Detective practice files: SOFTWARE and SYSTEM hives (1.2.9) | Deleted keys and values in the hives' free space | 181 deleted keys (176 with full paths) and 627 values without a key recovered: Windows Installer and servicing entries removed at setup, a removed shadow copy device |
 | Digital Detective practice files: Internet Explorer 9 index.dat files and the formatted E01 (1.2.9) | History, cache and downloads read live; records carved from free space against the live counts | All 16 files read; all 15 index.dat files and all 5,920 records recovered from the formatted volume, the same counts as live, after two fixes (below) |
 | NIST CFReDS DFR, 61 images (FAT12/16/32, exFAT, NTFS) | Every deleted file Kokino lists, block by block, against the files' own tags; counts against NIST's layout | 3,048 of 3,323 deleted test files complete, 1,367,020 of 1,370,338 blocks right (99.8%); exFAT 100%, NTFS 100% of blocks; wrong content without a warning in 4 files |
@@ -333,6 +336,24 @@ cache entries (5 LEAK), 89 cookies, 5 downloads and 35 redirects, all inside
 the carved files. Before the fix, records inside a carved file longer than
 the 1 MiB read window were skipped (only 1,539 of the cache's records were
 listed), and the clock offset was truncated to UTC+02:45 instead of rounded.
+
+## Registry transaction logs: public test hives (unreleased)
+
+Maxim Suhanov's yarp project publishes registry hives for testing
+(`hives_for_tests`, GPL-3.0; used here only as local test data, not
+included in Kokino): dirty hives with their logs, and for two of them the
+hive that Windows itself produced when it applied the logs.
+
+| Test hive | Logs | Kokino | Compared with Windows' recovery |
+|---|---|---|---|
+| NewDirtyHive1 | new format, LOG1 and LOG2 | 4 log entries applied (sequence 2 to 5, from both logs) | The 20,480 bytes of hive bins identical to `RecoveredHive_Windows10` |
+| NewDirtyHive2 | new format | 3 entries applied, from LOG2 only (LOG1 is older than the hive) | No Windows result published; matches yarp's expectation (LOG2 only, last sequence 5) |
+| OldDirtyHive | old format, LOG1 | 64 dirty sectors applied | The 487,424 bytes of hive bins identical to `RecoveredHive_Windows7` except two fields Windows rewrites whenever it loads a hive: the first bin's timestamp (5 bytes) and one key's cached longest value name length (1 byte) |
+| BadLogHive1, 2, 3 | damaged on purpose | Refused, with the reason (base block checksum, unknown log, entry checksums); the hive is read as it is | yarp also refuses all three |
+
+The new-format checksums turned out to be the whole 64-bit Marvin32
+state, not the usual 32-bit result; the first version of the reader
+rejected every real log entry until that was fixed.
 
 ## Deleted registry keys: the Digital Detective hives (1.2.9)
 

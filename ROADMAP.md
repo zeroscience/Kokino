@@ -65,17 +65,17 @@ checked against public test images with known answers where they exist
 - [ ] Internet Explorer cookies (index.dat and the cookie text files)
 - [x] Scheduled tasks (task files and TaskCache, hidden tasks flagged) (1.2.9)
 - [x] Deleted registry keys and values from free cells in the hives (1.2.9)
-- [ ] Registry transaction logs (.LOG1/.LOG2) applied to hives that were not cleanly saved
+- [x] Registry transaction logs (.LOG1/.LOG2) applied to hives that were not cleanly saved (unreleased)
 - [ ] Legacy .evt event logs
 
 ### Content
 - [ ] Email stores: PST/OST and MBOX
-- [ ] Text from legacy Office files (DOC, XLS, PPT) and RTF
+- [x] Text from legacy Office files (DOC, XLS, PPT), Outlook .msg and RTF (unreleased)
 - [ ] Carving of fragmented files
 
 ### Workflow
 - [ ] Import of triage collections (KAPE, Velociraptor, UAC)
-- [ ] JSON and CSV exports
+- [x] JSON and CSV exports of every list, in the GUI and with `kokino export` (unreleased)
 - [ ] Validation suite run automatically on every release
 - [ ] Signed release builds with an SBOM
 - [ ] Plugin interface
