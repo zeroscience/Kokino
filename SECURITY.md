@@ -159,6 +159,7 @@ Shadow copies, BitLocker, triage collections, VHDX logs, Outlook and macOS (unre
 | `plist` | Apple property lists, binary (offset tables, object references, counts, every object type) and XML, every value walked | 10 + 5 min | 1,229,272 | 1: an integer overflow converting a huge date; fixed (found in a first round stopped to fix it and not counted) |
 | `fsevents` | macOS FSEvents files: gzip, pages of versions 1 to 3, records, flags | 10 min | 50,215,572 | none |
 | `webcache` | WebCache (Internet Explorer 10 and 11, old Edge): the ESE database, its Containers table and every container read into web activity | 10 min | 743,157 | none |
+| `mail` | again, with Apple Mail .emlx (byte count, message, flags property list) | 5 min | 4,982,274 | none |
 
 The first `vss` round ran an optimized build without overflow checks and
 found nothing; the same inputs on the `fuzz` profile (overflow checks on)
@@ -169,7 +170,7 @@ not counted in the inputs; the rounds after the fixes found nothing.
 The `vdisk` target writes each input to a file (virtual disks are opened
 by path), so it runs far fewer inputs than the others.
 
-In all: 651,384,954 inputs over 39 targets, and 37 distinct problems
+In all: 656,367,228 inputs over 39 targets, and 37 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed
@@ -250,6 +251,16 @@ Checked and found sound: the server folder browser (examiners and admins
 only), export file names (no path separators survive),
 report file names (a fixed pattern), downloads (`nosniff`, attachment
 names from sanitized parts), session cookies and the CSRF and Host checks.
+
+## Release integrity
+
+Each release carries `SHA256SUMS.txt`, a CycloneDX SBOM listing every
+third-party crate in the build (version, package URL, the checksum
+Cargo.lock pins, license), and a build provenance attestation for every
+file, signed through GitHub's Sigstore integration: it ties the file to
+the workflow run and commit that built it. Check a download with
+`gh attestation verify <file> --repo zeroscience/Kokino`. The Windows and
+macOS packages are not yet code-signed with a publisher certificate.
 
 ## Limits of this testing
 

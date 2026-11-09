@@ -91,7 +91,7 @@ Every finding links to the exact bytes it came from, every indicator of anti-for
 - **Windows system summary:** registry (SYSTEM, SOFTWARE, SAM, NTUSER.DAT, UsrClass.dat, Amcache), event logs, Prefetch (including Windows 10/11 compressed files), LNK shortcuts, Jump Lists, scheduled tasks, the NTFS change journal and SRUM, deleted copies included: computer and accounts, USB devices with serials and connect times, networks, installed programs and autostart entries, scheduled tasks with when they were created and last ran (hidden ones flagged), programs run (Prefetch, UserAssist, BAM/DAM, Amcache, ShimCache, 4688), how much each program sent over which network and read and wrote to disk, hour by hour (SRUM, read with Kokino's own ESE database reader), files and folders opened, every folder a user browsed to in Explorer (ShellBags, including USB sticks, network shares and ZIP files long gone), every file created, renamed or deleted per the change journal, deleted registry keys and values recovered from the hives' free space (with the keys that record user activity named), and notable events in plain language (log clearing, logons, account and service creation, remote desktop, PowerShell).
 - **File carving:** recovers files from free clusters, unpartitioned space and unparsed volumes by content, with format-aware end detection (JPEG, PNG, GIF, BMP, WebP, PDF, Office old and new, OpenDocument, ZIP, SQLite, executables, GZIP, 7-Zip, WAV, AVI, MP4, Jump Lists, event log chunks, Internet Explorer index.dat). Internet Explorer history, cache and download records are recovered one by one from free space, as HstEx does. Picture gallery, hashes, audited export, and carved documents in the search index.
 - **Pictures (photo forensics):** every JPEG, PNG and BMP (live, deleted, carved) checked for editing software, an EXIF thumbnail that no longer matches, double JPEG compression, camera EXIF with software compression tables, tables that differ from the same camera's other photos, data appended after the image, and LSB embedding in lossless pictures; each finding states what it does not prove, and the detectors are calibrated on real camera photos. A viewer with magnifier, error level, noise, level sweep, gradient, bit planes and copy-move (clone) detection, region bookmarks, and `kokino image <file>` on the command line.
-- **Email:** messages in Outlook PST and OST files (any size, every folder, compressed OST 2013+), mbox mailboxes (Thunderbird, /var/mail) and .eml files, with text, headers and attachments (exported with an audit record), messages Thunderbird deleted but still holds, email on the timeline, and message text and document attachments in the full-text search.
+- **Email:** messages in Outlook PST and OST files (any size, every folder, compressed OST 2013+), Apple Mail (.emlx), mbox mailboxes (Thunderbird, /var/mail) and .eml files, with text, headers and attachments (exported with an audit record), messages Thunderbird deleted but still holds, email on the timeline, and message text and document attachments in the full-text search.
 - **Exports:** every list (files with hashes, timeline, web activity, Windows and Linux artifacts, indicators, carved files) as CSV or JSON, from the GUI or with `kokino export`; each export is saved in the case and its SHA-256 recorded in the audit log.
 - **Bookmarks and tags:** bookmark files (hashed at bookmark time), events, carved files, search hits, browser history and byte ranges; tag and annotate them, filter by tag, and build a case report from them. Reviewers can tag too. All changes are audit-logged.
 - **Hash sets and hash analysis:** import NIST NSRL (RDS v3 SQLite or SQL releases, or 2.x NSRLFile.txt), CSV or plain hash lists as known good or known bad; MD5, SHA-1 and SHA-256 of every file, matched against the enabled sets. Hide known-good files and flag known-bad ones in the explorer, file details and reports.
@@ -103,6 +103,7 @@ Every finding links to the exact bytes it came from, every indicator of anti-for
 - **Export and report:** file and stream export (hashed and audited) and a self-contained HTML report.
 - **Updates:** Kokino never contacts anything on its own. "Check for updates" on the About page (or `kokino version --check`) asks GitHub for the latest release when you click it, shows its notes and checksums and links to the download; the check is recorded in the system audit log.
 - **Built-in help:** a searchable Wiki (getting started, roles, evidence, every view, browser history, hex, reports, LAN mode, command line, troubleshooting) and an About page with version and contact.
+- **Correlation:** a case page listing what its evidence items have in common: users, computer names, email addresses, IP addresses, USB serials, wireless networks, web domains and identical files.
 - **Cases and accounts:** cases can be renamed, handed to another lead examiner, deleted and restored, all audit-logged. Every examiner signs in. Admins manage accounts and assign people to cases as examiner or reviewer (read-only). Every case action is attributed to the account in the audit log, and sign-ins are recorded in a hash-chained system audit log. Optional LAN mode serves HTTPS to a whole lab.
 
 ## What's next
@@ -150,7 +151,9 @@ Suggestions are welcome as GitHub issues.
 
 Download the package for your system from
 [Releases](https://github.com/zeroscience/Kokino/releases) and check it
-against `SHA256SUMS.txt` there.
+against `SHA256SUMS.txt` there. Each release also has a CycloneDX SBOM
+(`kokino-<version>-sbom.cdx.json`) and a signed build provenance
+attestation for every file (`gh attestation verify <file> --repo zeroscience/Kokino`).
 
 | System | Package | Start |
 |---|---|---|
@@ -213,7 +216,7 @@ Headless, using the same engine:
 - Every action is logged to `<case>/audit.jsonl` under the examiner's account, with the SHA-256 of the previous entry.
 - Analysis is deterministic for a given image and Kokino version, and the version is stored with the results.
 - Results are checked against public test images with ground truth, NIST CFReDS (61 deleted-file recovery images) and Digital Corpora: 99.8% of deleted-file blocks recovered correctly, image hashes matching the published values. See [VALIDATION.md](VALIDATION.md).
-- Every parser that reads evidence is fuzzed (651 million inputs so far, 37 problems found and fixed) and `unsafe` Rust is forbidden in every crate. See [SECURITY.md](SECURITY.md), which is also where to report a vulnerability.
+- Every parser that reads evidence is fuzzed (656 million inputs so far, 37 problems found and fixed) and `unsafe` Rust is forbidden in every crate. See [SECURITY.md](SECURITY.md), which is also where to report a vulnerability.
 - The GUI needs a signed-in session (Argon2id passwords, HttpOnly SameSite=Strict cookies, login backoff), a CSRF header on every change and a known Host, which blocks other browser tabs and DNS rebinding. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#3-accounts-and-access).
 
 ## Development

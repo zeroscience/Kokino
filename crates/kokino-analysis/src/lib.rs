@@ -812,6 +812,36 @@ mod tests {
         assert!(!l.timeline.iter().any(|t| t.what.contains("plan.txt: Removed")), "FSEvents stay off the timeline");
     }
 
+    /// Apple Mail: .emlx files grouped by their .mbox folder, the deleted
+    /// flag read from the property list after the message.
+    #[test]
+    fn apple_mail() {
+        let msg = |subj: &str, flags: u32| {
+            let m = format!("From: Alice Lab <alice@lab.test>\r\nTo: bob@lab.test\r\nSubject: {}\r\nDate: Tue, 20 Oct 2026 10:05:30 +0200\r\nMessage-ID: <{}@lab.test>\r\n\r\nBody of {}.\r\n", subj, subj.len(), subj);
+            let p = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\">\n<dict>\n\t<key>flags</key>\n\t<integer>{}</integer>\n</dict>\n</plist>\n", flags);
+            format!("{}\n{}{}", m.len(), m, p).into_bytes()
+        };
+        let (a, b, c) = (msg("plan", 1), msg("wipe it", 3), msg("lunch", 1));
+        let base = "Users/alice/Library/Mail/V10/0C1D2E3F-0000-4000-8000-000000000001";
+        let t = crate::tarfs::tests::tar(&[
+            (&format!("{}/INBOX.mbox/2A3B4C5D-0000-4000-8000-000000000002/Data/Messages/1.emlx", base), b'0', &a, ""),
+            (&format!("{}/INBOX.mbox/2A3B4C5D-0000-4000-8000-000000000002/Data/Messages/2.emlx", base), b'0', &b, ""),
+            (&format!("{}/Archive.mbox/2A3B4C5D-0000-4000-8000-000000000003/Data/Messages/7.emlx", base), b'0', &c, ""),
+        ]);
+        let dir = std::env::temp_dir().join(format!("kokino-emlx-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("m.tar");
+        std::fs::write(&p, &t).unwrap();
+        let a = analyze(&Evidence::open(&p).unwrap(), &mut |_, _, _| true).unwrap();
+        let m = &a.filesystems[0].mail;
+        let boxes: Vec<(&str, &str, u64)> = m.mailboxes.iter().map(|b| (b.path.rsplit('/').next().unwrap(), b.kind.as_str(), b.messages)).collect();
+        assert_eq!(boxes, [("INBOX.mbox", "emlx", 2), ("Archive.mbox", "emlx", 1)]);
+        let got: Vec<(&str, bool)> = m.messages.iter().map(|x| (x.subject.as_str(), x.expunged)).collect();
+        assert!(got.contains(&("wipe it", true)) && got.contains(&("plan", false)) && got.len() == 3, "{:?}", got);
+        assert!(m.messages.iter().all(|x| x.folder.ends_with(".mbox") && x.len > 0));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// WebCache (IE 10/11, old Edge) on a volume (here in a tar collection):
     /// with the other browsers and in the summary.
     #[test]

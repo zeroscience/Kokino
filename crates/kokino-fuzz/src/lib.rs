@@ -439,6 +439,7 @@ fn mail(d: &[u8]) {
     use kokino_analysis::mail;
     let _ = mail::detect(d);
     let _ = mail::messages(d, "mbox", 0, false);
+    let _ = mail::emlx(d);
     let p = mail::parse(d);
     let _ = mail::decode_words(&p.header("Subject"));
     let _ = kokino_analysis::doctext::extract(d);

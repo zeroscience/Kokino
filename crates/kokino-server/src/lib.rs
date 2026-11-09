@@ -10,6 +10,7 @@
 
 mod api;
 mod auth;
+mod correlate;
 pub mod exports;
 pub mod casereport;
 mod jobs;

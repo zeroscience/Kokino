@@ -13,6 +13,10 @@
 //!
 //! Outlook PST and OST files (see `pst`) are mailboxes too: each message
 //! is listed with its folder, and read on demand as an RFC 822 message.
+//!
+//! Apple Mail keeps one message per .emlx file (a byte count, the message,
+//! then a property list of flags) in .mbox folders; each folder is listed
+//! as one mailbox. Flag bit 1 marks a message deleted in Apple Mail.
 
 use crate::FileRow;
 use serde::{Deserialize, Serialize};
@@ -47,7 +51,8 @@ pub struct Message {
     pub attachments: Vec<Attachment>,
     /// The first words of the text.
     pub snippet: String,
-    /// Deleted in Thunderbird but still in the file (not yet compacted).
+    /// Marked deleted by the mail program but still in the file (Thunderbird:
+    /// not yet compacted; Apple Mail: the deleted flag).
     pub expunged: bool,
     /// The mailbox file itself is deleted.
     pub deleted: bool,
@@ -60,7 +65,7 @@ pub struct Message {
 pub struct Mailbox {
     pub file: u32,
     pub path: String,
-    /// "mbox", "eml", "pst" or "ost"
+    /// "mbox", "eml", "pst", "ost" or "emlx" (an Apple Mail folder)
     pub kind: String,
     /// "Thunderbird", "Linux mail spool" or "".
     pub client: String,
@@ -104,6 +109,9 @@ pub fn classify(path: &str) -> Option<(&'static str, &'static str)> {
     }
     if name.ends_with(".pst") || name.ends_with(".ost") {
         return Some(("pst", "Outlook"));
+    }
+    if name.ends_with(".emlx") {
+        return Some(("emlx", "Apple Mail"));
     }
     if name.ends_with(".mbox") || name.ends_with(".mbx") {
         return Some(("mbox", if p.contains("/thunderbird/") { "Thunderbird" } else { "" }));
@@ -484,6 +492,23 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
         progress("Email", n as u64, total);
         let f = &files[i];
         let mut mb = Mailbox { file: i as u32, path: f.e.path.clone(), kind: kind.into(), client: client.into(), deleted: f.e.deleted, ..Default::default() };
+        if kind == "emlx" {
+            // One message per file; the folder (INBOX.mbox) is the mailbox.
+            let Ok(d) = fs.read(r, &f.e, "", 0, f.e.size.min(MAX_MAILBOX) as usize) else { continue };
+            let Some((offset, len, flags)) = emlx(&d) else { continue };
+            let folder = emlx_folder(&f.e.path);
+            let mut m = summary(&d[offset..offset + len], i as u32, offset as u64, f.e.deleted);
+            m.expunged = flags & 2 != 0;
+            m.folder = folder.clone();
+            match out.mailboxes.iter_mut().find(|b| b.kind == "emlx" && b.path == folder) {
+                Some(b) => b.messages += 1,
+                None => out.mailboxes.push(Mailbox { file: i as u32, path: folder, kind: "emlx".into(), client: "Apple Mail".into(), messages: 1, deleted: false, error: None }),
+            }
+            if out.messages.len() < MAX_MESSAGES {
+                out.messages.push(m);
+            }
+            continue;
+        }
         if kind == "pst" {
             // Read in place, block by block: PST files are often large.
             let left = MAX_MESSAGES.saturating_sub(out.messages.len());
@@ -531,6 +556,25 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
     out
 }
 
+/// An Apple Mail .emlx file: (message offset, length, flags).
+pub fn emlx(d: &[u8]) -> Option<(usize, usize, u64)> {
+    let nl = d.iter().take(16).position(|&c| c == b'\n')?;
+    let len: usize = std::str::from_utf8(&d[..nl]).ok()?.trim().parse().ok()?;
+    let start = nl + 1;
+    let end = start.checked_add(len)?.min(d.len());
+    let flags = kokino_artifacts::plist::parse(&d[end..]).and_then(|v| v.get("flags").and_then(|x| x.int())).unwrap_or(0) as u64;
+    Some((start, end - start, flags))
+}
+
+/// The Apple Mail folder an .emlx file belongs to: the path up to its
+/// ".mbox" folder (the Messages folders below it are Mail's own).
+fn emlx_folder(path: &str) -> String {
+    match path.find(".mbox/") {
+        Some(i) => path[..i + 5].to_string(),
+        None => path.rsplit_once('/').map(|x| x.0.to_string()).unwrap_or_default(),
+    }
+}
+
 /// The messages of a PST or OST file, read through the file system.
 fn pst_messages<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, f: &FileRow, file: u32, max: usize) -> anyhow::Result<(&'static str, Vec<Message>)> {
     let mut p = crate::pst::Pst::open(crate::fs::stream(fs, r, &f.e), f.e.size)?;
@@ -569,7 +613,7 @@ pub fn timeline(m: &Mail) -> Vec<crate::windows::WinTime> {
             t: x.date,
             kind: "MAIL".into(),
             what: if x.subject.is_empty() { "(no subject)".into() } else { x.subject.clone() },
-            detail: format!("email from {} to {}{}{}", x.from, x.to, if x.attachments.is_empty() { String::new() } else { format!(", {} attachment(s)", x.attachments.len()) }, if x.expunged { ", deleted in Thunderbird" } else { "" }),
+            detail: format!("email from {} to {}{}{}", x.from, x.to, if x.attachments.is_empty() { String::new() } else { format!(", {} attachment(s)", x.attachments.len()) }, if x.expunged { ", marked deleted in the mail program" } else { "" }),
         })
         .collect()
 }
@@ -593,7 +637,7 @@ pub fn impact(m: &Mail) -> Vec<String> {
         att
     );
     if exp > 0 {
-        s.push_str(&format!("; {} deleted in Thunderbird but still in the mailbox file", exp));
+        s.push_str(&format!("; {} marked deleted by the mail program (Thunderbird, Apple Mail) but still in the mailbox", exp));
     }
     vec![s + "."]
 }

@@ -314,6 +314,7 @@ function caseNav(c, active, eid, helpActive = null) {
     { href: `/c/${c.info.id}`, label: "Evidence", icon: "disk", on: active === "evidence", n: c.evidence.length },
     { href: `/c/${c.info.id}/members`, label: "Members", icon: "users", on: active === "members", n: Object.keys(c.info.members || {}).length },
     { href: `/c/${c.info.id}/bookmarks`, label: "Bookmarks", icon: "star", on: active === "bookmarks", n: state.bm && state.bm.cid === c.info.id ? state.bm.list.length : null },
+    { href: `/c/${c.info.id}/correlate`, label: "Correlation", icon: "layers", on: active === "correlate" },
     { href: `/c/${c.info.id}/audit`, label: "Audit log", icon: "chain", on: active === "audit" },
   ];
   // Only the evidence being worked on expands; the rest stay one line each.
@@ -348,6 +349,7 @@ async function caseView(cid, tab) {
   caseNav(c, tab);
   setCrumbs([{ label: "Cases", href: "/" }, { label: c.info.name }]);
   if (tab === "audit") return auditView(c);
+  if (tab === "correlate") return correlateView(c);
   if (tab === "bookmarks") return bookmarksView(c);
   if (tab === "members") return membersView(c);
   const jobFor = (eid) => state.jobs.find((j) => j.evidence === eid && j.state === "running") || c.jobs.find((j) => j.evidence === eid && j.state === "running");
@@ -528,6 +530,33 @@ function addEvidence(cid) {
       h("div.row", h("span.sp"), h("button.primary", { onclick: submit }, "Add and analyze")),
     ),
   ]);
+}
+
+// What the evidence items of a case have in common.
+async function correlateView(c) {
+  setCrumbs([{ label: "Cases", href: "/" }, { label: c.info.name, href: "/c/" + c.info.id }, { label: "Correlation" }]);
+  render(h("div.card.empty", h("div.spin"), h("p", "Comparing the evidence items...")));
+  const r = await api(`/cases/${c.info.id}/correlate`);
+  const kinds = ["", ...new Set(r.items.map((x) => x.kind))];
+  let kind = "", q = "";
+  const out = h("div");
+  const draw = () => {
+    const list = r.items.filter((x) => (!kind || x.kind === kind) && (!q || x.value.toLowerCase().includes(q)));
+    out.replaceChildren(list.length
+      ? h("div.scroll", { style: { maxHeight: "calc(100vh - 300px)" } }, h("table.tbl.sys", h("thead", h("tr", ["What", "Value", "Found in"].map((t) => h("th", t)))),
+        h("tbody", list.slice(0, 3000).map((x) => h("tr", h("td", h("span.pill", x.kind)), h("td.mono.wrap", x.value),
+          h("td", x.found.map((f) => h("div", h("a", { href: `#/c/${c.info.id}/e/${f.evidence}/summary` }, f.name), h("span.muted", ` (${num(f.count)})`)))))))))
+      : h("div.card.empty", r.compared.length < 2 ? "Correlation needs two or more analyzed evidence items." : "Nothing in common found."));
+  };
+  const seg = h("div.seg.wrap", kinds.map((k) => h("button", { class: k === kind ? "on" : null, onclick: (e) => { kind = k; seg.querySelectorAll("button").forEach((b) => b.classList.remove("on")); e.target.classList.add("on"); draw(); } }, k ? `${k} (${num(r.items.filter((x) => x.kind === k).length)})` : `All (${num(r.items.length)})`)));
+  const filter = h("input", { placeholder: "Filter values...", style: { flex: 1 } });
+  filter.addEventListener("input", debounce(() => { q = filter.value.toLowerCase(); draw(); }, 150));
+  draw();
+  render(h("div.stack",
+    h("div.hd", h("div", h("h1", "Correlation"), h("div.muted", "Values found in two or more evidence items of this case: user names, computer names, email addresses, IP addresses, USB serial numbers, wireless networks, web domains and, where hash analysis was run, identical files (1 KiB or more).")), h("span.sp")),
+    h("p.muted", { style: { margin: 0 } }, `Compared: ${r.compared.join(", ") || "none"}.` + (r.not_analyzed.length ? ` Not analyzed yet: ${r.not_analyzed.join(", ")}.` : "") + (r.hashed.length ? ` File contents compared for: ${r.hashed.join(", ")}.` : " Run Hash analysis on each item to compare file contents too.") + (r.truncated ? " The list is cut at 5,000 values." : "")),
+    h("div.row.wrap", seg, filter),
+    out));
 }
 
 async function auditView(c) {
@@ -1985,14 +2014,14 @@ async function mailTab(ctx) {
       canWrite() ? h("button.primary", { onclick: () => reingest(ctx.cid, ctx.eid, false) }, "Re-analyze now") : h("p.muted", "Ask an examiner on this case to re-analyze it."))));
   }
   if (!head.mailboxes.length) {
-    return render(h("div.stack", intro, h("div.card.empty", "No mailboxes on this volume: no Outlook PST or OST files, Thunderbird mail folders, /var/mail spools, .mbox or .eml files.")));
+    return render(h("div.stack", intro, h("div.card.empty", "No mailboxes on this volume: no Outlook PST or OST files, Apple Mail folders, Thunderbird mail folders, /var/mail spools, .mbox or .eml files.")));
   }
   let box = ctx.q.box != null && ctx.q.box !== "" ? Number(ctx.q.box) : null;
   let offset = 0;
   const cards = h("div.grid.g3.stagger");
   const drawCards = () => cards.replaceChildren(...head.mailboxes.map((b, i) => h("div.card.web-src", { class: box === b.file ? "on" : null, style: { "--i": i }, title: b.path, onclick: () => { box = box === b.file ? null : b.file; drawCards(); reload(); } },
     h("div.row", h("span.bbadge", icon("mail", 14)), h("div", { style: { minWidth: 0 } }, h("b", b.path.split("/").pop()), h("div.muted.ell", b.client ? `${b.client}, ${b.path}` : b.path)), h("span.sp"),
-      b.deleted ? h("span.pill.bad", "deleted file") : null, b.kind === "eml" ? h("span.pill", ".eml") : null, b.kind === "pst" || b.kind === "ost" ? h("span.pill", "." + b.kind) : null),
+      b.deleted ? h("span.pill.bad", "deleted file") : null, b.kind === "eml" ? h("span.pill", ".eml") : null, b.kind === "pst" || b.kind === "ost" || b.kind === "emlx" ? h("span.pill", "." + b.kind) : null),
     b.error ? h("p.bad-text", b.error) : h("div.web-stats", h("div", h("b", num(b.messages)), h("small", "messages"))))));
   drawCards();
   const q = h("input", { placeholder: "Filter by sender, recipient, subject, text or attachment name...", value: ctx.q.q || "", style: { flex: 1 } });
@@ -2008,7 +2037,7 @@ async function mailTab(ctx) {
         bmButton({ cid: ctx.cid, eid: ctx.eid, kind: "web", fi: ctx.fi, key: `mail:${ctx.eid}:${ctx.fi}:${d.message.file}:${d.message.offset}`, title: `Email: ${d.message.subject || "(no subject)"}`, path: `${d.message.from} to ${d.message.to}`, time: d.date_iso || "" }),
         h("button.ghost.sm", { onclick: closeModal }, "Close")),
       h("div.kv", [["Date", ts(d.date_iso)], ["From", d.message.from], ["To", d.message.to], ["Cc", d.message.cc], ["Folder", d.message.folder], ["Message-ID", d.message.message_id],
-        ["Note", [d.message.expunged ? "Deleted in Thunderbird, still in the mailbox file (the folder was not compacted)." : "", d.message.deleted ? "The mailbox file is deleted." : ""].filter(Boolean).join(" ")]]
+        ["Note", [d.message.expunged ? "Marked deleted by the mail program (Thunderbird: the folder was not compacted; Apple Mail: the deleted flag), still in the mailbox." : "", d.message.deleted ? "The mailbox file is deleted." : ""].filter(Boolean).join(" ")]]
         .filter(([, v]) => v).map(([k, v]) => [h("span", k), h("span.mono.wrap", v)])),
       att.length ? h("div.stack", h("h4", `Attachments (${att.length})`), ...att) : null,
       h("h4", "Text"),
@@ -2035,7 +2064,7 @@ async function mailTab(ctx) {
   q.addEventListener("input", reload);
   more.onclick = () => load(true);
   render(h("div.stack", intro,
-    h("p.muted", "Messages in Outlook PST and OST files, mbox mailboxes (Thunderbird mail folders, /var/mail) and .eml files, live and deleted. " + zoneSentence() + " Messages Thunderbird deleted stay in the mailbox file until the folder is compacted; they are listed and marked. Message text and document attachments are in the full-text index."),
+    h("p.muted", "Messages in Outlook PST and OST files, Apple Mail folders (.emlx), mbox mailboxes (Thunderbird mail folders, /var/mail) and .eml files, live and deleted. " + zoneSentence() + " Messages Thunderbird deleted stay in the mailbox file until the folder is compacted; they are listed and marked. Message text and document attachments are in the full-text index."),
     cards,
     h("div.row.wrap", q, count),
     h("div.scroll", { style: { maxHeight: "calc(100vh - 300px)" } }, h("table.tbl.web", h("thead", h("tr", [`Date (${zoneName()})`, "From", "To", "Subject", ""].map((c) => h("th", c)))), tbody)),

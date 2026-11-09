@@ -78,7 +78,8 @@ checked against public test images with known answers where they exist
 - [x] Email: mbox mailboxes (Thunderbird, /var/mail) and .eml files (1.3.0)
 - [x] Email: Outlook PST and OST (unreleased)
 - [x] Email: RTF-only Outlook message bodies (unreleased)
-- [ ] Email: deleted PST items (recovered from the file's free blocks), Apple Mail .emlx
+- [x] Email: Apple Mail .emlx (unreleased)
+- [ ] Email: deleted PST items (recovered from the file's free blocks)
 - [x] Text from legacy Office files (DOC, XLS, PPT), Outlook .msg and RTF (1.3.0)
 - [ ] Carving of fragmented files
 
@@ -88,9 +89,10 @@ checked against public test images with known answers where they exist
 - [x] Triage collections as plain folders (unreleased)
 - [x] JSON and CSV exports of every list, in the GUI and with `kokino export` (1.3.0)
 - [ ] Validation suite run automatically on every release
-- [ ] Signed release builds with an SBOM
+- [x] Release SBOM (CycloneDX) and signed build provenance (unreleased; first used on the next release)
+- [ ] Code-signed Windows and macOS packages
 - [ ] Plugin interface
 
 ### Ideas
 - [ ] Optional AI summaries that only cite linked evidence
-- [ ] Cross-evidence correlation
+- [x] Cross-evidence correlation (unreleased)

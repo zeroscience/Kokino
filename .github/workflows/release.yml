@@ -12,6 +12,10 @@ name: Release
 #
 # The packages are not code-signed: Windows SmartScreen and macOS Gatekeeper
 # warn on first start (README and the DMG's "READ ME FIRST" say what to do).
+# Each release also carries a CycloneDX SBOM (kokino-<v>-sbom.cdx.json, every
+# crate with its version, checksum and license) and a build provenance
+# attestation for every file, signed through GitHub (Sigstore): check one with
+#   gh attestation verify <file> --repo zeroscience/Kokino
 
 on:
   release:
@@ -115,6 +119,9 @@ jobs:
           EOF
           dpkg-deb --build --root-owner-group $d "dist/kokino_${v}_amd64.deb"
           dpkg-deb --info "dist/kokino_${v}_amd64.deb"
+      - name: SBOM (CycloneDX)
+        shell: bash
+        run: python3 scripts/make_sbom.py --out "dist/kokino-${{ needs.version.outputs.version }}-sbom.cdx.json"
       - uses: actions/upload-artifact@v4
         with:
           name: linux
@@ -154,6 +161,10 @@ jobs:
   publish:
     needs: [version, windows, linux, macos]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -164,6 +175,10 @@ jobs:
         run: |
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
+      - name: Build provenance (signed attestation for every file)
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: dist/*
       - uses: actions/upload-artifact@v4
         with:
           name: kokino-${{ needs.version.outputs.version }}-all

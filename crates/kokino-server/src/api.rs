@@ -43,6 +43,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/cases", get(list_cases).post(create_case))
         .route("/cases/{cid}", get(get_case).patch(update_case).delete(delete_case))
         .route("/cases/{cid}/audit", get(audit))
+        .route("/cases/{cid}/correlate", get(correlate))
         .route("/cases/{cid}/members", axum::routing::put(set_members))
         .route("/cases/{cid}/bookmarks", get(bookmarks_list).post(bookmark_add))
         .route("/cases/{cid}/bookmarks/report", get(bookmarks_report))
@@ -596,6 +597,11 @@ async fn bitlocker_unlock(State(st): St, Extension(me): Me, Path((cid, eid, vi))
     let job = jobs::spawn_ingest(st.clone(), &me.username, cid, eid, false, true);
     let view = job.view.lock().unwrap().clone();
     Ok(Json(json!({"unlocked": done, "job": view})))
+}
+
+/// What the case's evidence items have in common (see `correlate`).
+async fn correlate(State(st): St, Path(cid): Path<String>) -> R {
+    Ok(Json(json!(tokio::task::spawn_blocking(move || crate::correlate::report(&st, &cid)).await??)))
 }
 
 /// Jobs on cases the user can see.
@@ -1186,7 +1192,14 @@ async fn mail_list(State(st): St, Path((cid, eid, fi)): Path<(String, String, us
         .messages
         .iter()
         .enumerate()
-        .filter(|(_, x)| q.mailbox.is_none_or(|b| b == x.file))
+        .filter(|(_, x)| match q.mailbox {
+            None => true,
+            // An Apple Mail folder: every message in it (one file each).
+            Some(b) => match m.mailboxes.iter().find(|mb| mb.file == b) {
+                Some(mb) if mb.kind == "emlx" => x.folder == mb.path,
+                _ => b == x.file,
+            },
+        })
         .filter(|(_, x)| needle.is_empty() || format!("{} {} {} {} {} {} {}", x.from, x.to, x.cc, x.subject, x.snippet, x.folder, x.attachments.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(" ")).to_lowercase().contains(&needle))
         .collect();
     let off = q.offset.unwrap_or(0);

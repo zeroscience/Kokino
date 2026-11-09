@@ -299,7 +299,7 @@ const WIKI = [
   {
     id: "mail", title: "Email", icon: "mail",
     body: [
-      p("Kokino lists the messages in Outlook PST and OST files, mbox mailboxes (Thunderbird and SeaMonkey mail folders, /var/mail and /var/spool/mail on Linux, .mbox files) and single .eml files, live and deleted: date, sender, recipients, subject, attachments and the first words of the text. Click a message for its text, every header and its attachments; Export saves an attachment in the case's exports folder with its hashes in the audit log."),
+      p("Kokino lists the messages in Outlook PST and OST files, Apple Mail folders (.emlx, one mailbox per .mbox folder), mbox mailboxes (Thunderbird and SeaMonkey mail folders, /var/mail and /var/spool/mail on Linux, .mbox files) and single .eml files, live and deleted: date, sender, recipients, subject, attachments and the first words of the text. Click a message for its text, every header and its attachments; Export saves an attachment in the case's exports folder with its hashes in the audit log."),
       ul(
         h("span", h("b", "Deleted in Thunderbird:"), " a message deleted in Thunderbird stays in the mailbox file, marked deleted, until the folder is compacted. Kokino lists it and marks it."),
         h("span", h("b", "Search:"), " message text (quoted-printable, base64 and character sets decoded, HTML without its markup) and document attachments (PDF, Office, ZIP...) are in the full-text index."),
@@ -330,6 +330,12 @@ const WIKI = [
       p("The same records join the Timeline (filter Windows) and feed anti-forensics indicators: an event log cleared, an anti-forensic tool in execution records, files renamed AAAA.AAA through ZZZZ.ZZZ in the change journal (SDelete's pattern; the journal keeps their original names), a change journal created long after Windows was installed (deleted and recreated), a scheduled task hidden from the Task Scheduler, and registry keys that record user activity found deleted."),
       p("A hive that was not cleanly saved has its newest changes only in its transaction logs (.LOG1 and .LOG2, or .LOG on Windows XP). Kokino applies them in memory before reading the hive, as Windows would on its next start, checking each log entry's checksums; Sources says what was applied, or why a log could not be used. The evidence is not changed."),
       p("Not yet read: SRUM's energy and app timeline tables, legacy .job task files (Windows XP) and Windows 7 ShimCache."),
+    ],
+  },
+  {
+    id: "correlation", title: "Correlation", icon: "layers",
+    body: [
+      p("The case page Correlation lists what two or more evidence items of the case have in common: user names, computer names, email addresses (senders and recipients), IP addresses (logons and events), USB serial numbers, wireless networks, web domains (visits and downloads) and identical files (the same SHA-256, files of 1 KiB or more, from the hashes taken at analysis). Each value shows the items it was found in and how often; click one to open it. Values are compared without regard to case. Items not analyzed yet are left out and named at the top."),
     ],
   },
   {
@@ -556,7 +562,7 @@ const WIKI = [
     body: [
       p("Evidence can be made to attack the tool that reads it: a disk image, registry hive or picture crafted to crash Kokino, hang an ingest, or use up the examiner's memory. Kokino is written in Rust with ", code("unsafe"), " code forbidden in every crate, and every parser that reads evidence has been fuzzed."),
       h("h3", "Fuzzing"),
-      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks, optical media, Mac disks, NTFS folder indexes and $LogFile, the change journal, ShellBags, ESE databases (SRUM), scheduled tasks, Internet Explorer index.dat, deleted registry keys, legacy Office files, registry logs, legacy event logs, email, journald compression, ZIP and tar collections, shadow copies, BitLocker, VHDX logs, Outlook PST, property lists, FSEvents and WebCache ran ", h("b", "651,384,954 inputs"), " and found ", h("b", "37 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
+      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks, optical media, Mac disks, NTFS folder indexes and $LogFile, the change journal, ShellBags, ESE databases (SRUM), scheduled tasks, Internet Explorer index.dat, deleted registry keys, legacy Office files, registry logs, legacy event logs, email, journald compression, ZIP and tar collections, shadow copies, BitLocker, VHDX logs, Outlook PST, property lists, FSEvents, WebCache and Apple Mail ran ", h("b", "656,367,228 inputs"), " and found ", h("b", "37 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
       h("div.scroll", h("table.tbl",
         h("thead", h("tr", h("th", "Target"), h("th", "Covers"), h("th", "Inputs"), h("th", "Found"))),
         h("tbody", [
@@ -582,7 +588,7 @@ const WIKI = [
         ["webcache", "WebCache (Internet Explorer 10 and 11, old Edge) read into web activity", "743,157", "none"],
         ["vss", "Volume Shadow Copies: catalog, block lists, overlays and forwarders, snapshot reads", "9,887,067", "2 (overflow, stack overflow; fixed)"],
         ["bde", "BitLocker: metadata, key protectors, key unwrapping, startup key files, the decrypting reader for every method", "4,459,482", "1 (overflow, fixed)"],
-        ["mail", "Mailboxes and messages: MIME, encodings, attachments", "7,542,816", "none"],
+        ["mail", "Mailboxes and messages: MIME, encodings, attachments, Apple Mail .emlx", "12,525,090", "none"],
         ["journalz", "journald compressed fields: XZ, LZ4, zstd", "45,374,291", "none"],
         ["reglog", "Registry transaction logs (both formats) applied to a dirty hive", "58,565,421", "none"],
         ["iecache", "Internet Explorer index.dat: records, history, cache, downloads, records in free space", "21,653,615", "1 (out-of-range slice, fixed)"],
