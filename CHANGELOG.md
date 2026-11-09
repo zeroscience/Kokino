@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-09
+
+Encrypted, shadowed, collected and Mac: BitLocker unlocking (password, recovery password, startup key) with carving of decrypted space, Volume Shadow Copies, disk images inside evidence, triage collections (Velociraptor, KAPE, UAC, plain folders), Outlook PST and OST, Apple Mail, macOS system artifacts with Safari and FSEvents, WebCache of Internet Explorer 10 and 11, VHDX log replay, cross-evidence correlation, and a signed SBOM with every release.
+
 ### Added
 - Disk images stored on the evidence (E01 with its segments, VHD, VHDX, VMDK with its extents, ISO, split and plain raw disks) are listed on the evidence summary; "Extract as evidence" copies all of an image's files into the case (checked against the bytes read), records them in the audit log with their hashes and where they came from, and adds and analyzes the image as evidence of its own.
 - Triage collections: a ZIP added as evidence is read as a file system (central directory, ZIP64, NTFS and Unix time fields, Velociraptor's escaped names), so Velociraptor offline collections and KAPE ZIP output can be examined as they are, their hash being the collector's. On any volume where a collected drive sits below a folder (KAPE's C, Velociraptor's uploads/auto/C:), Windows and Linux artifacts, browser history and email are read with the paths they had on the drive; checks that need a whole volume are not made from a collection.

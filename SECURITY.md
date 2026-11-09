@@ -146,7 +146,7 @@ Legacy event logs, email and journald compression (1.3.0):
 | `journalz` | journald's compressed fields: XZ, LZ4 (Kokino's own decoder) and zstd, from the input and from offsets inside it | 10 min | 45,374,291 | none |
 | `linuxlogs` | again, with a journal holding XZ and LZ4 fields | 10 min | 7,898,202 | none |
 
-Shadow copies, BitLocker, triage collections, VHDX logs, Outlook and macOS (unreleased):
+Shadow copies, BitLocker, triage collections, VHDX logs, Outlook and macOS (1.3.1):
 
 | Target | What it covers | Rounds | Inputs in all | Distinct problems found |
 |---|---|---|--:|---|

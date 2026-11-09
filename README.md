@@ -22,7 +22,7 @@
   <img src="https://img.shields.io/badge/rust-1.80%2B-orange?logo=rust&logoColor=white" alt="Rust 1.80+">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey" alt="Platforms: Windows, Linux, macOS">
   <img src="https://img.shields.io/badge/GUI-browser-1f6feb" alt="Browser GUI">
-  <img src="https://img.shields.io/badge/version-1.3.0-00bcd4" alt="Version 1.3.0">
+  <img src="https://img.shields.io/badge/version-1.3.1-00bcd4" alt="Version 1.3.1">
   <img src="https://img.shields.io/badge/evidence-read--only-2ea44f" alt="Evidence read-only">
   <img src="https://img.shields.io/badge/audit%20log-hash--chained-2ea44f" alt="Hash-chained audit log">
   <a href="SECURITY.md#fuzzing-the-parsers"><img src="https://img.shields.io/badge/parsers%20fuzzed-567M%20inputs-2ea44f" alt="Parsers fuzzed: 567 million inputs"></a>
@@ -70,7 +70,7 @@ Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workben
 
 Every finding links to the exact bytes it came from, every indicator of anti-forensic activity explains itself, and every examiner action lands in a hash-chained audit log, so the results hold up in a report and in court.
 
-> Status: 1.3.0 adds email (mbox and .eml, with attachments and messages Thunderbird deleted), CSV and JSON exports of every list, registry transaction logs applied as Windows would, text of legacy Office files and RTF in search, Windows XP event logs, Internet Explorer cookies and compressed journald fields, on top of 1.2.9's scheduled tasks, Internet Explorer history and deleted registry keys. Reads E01, raw and virtual disks, and NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF. Validated against NIST CFReDS and Digital Corpora test images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed ([SECURITY.md](SECURITY.md)). Coming in the next release: macOS system artifacts, Volume Shadow Copies, BitLocker unlocking (password, recovery password, startup key), disk images found inside evidence, triage collections (Velociraptor, KAPE, UAC, plain folders), Outlook PST and OST, and VHDX log replay (see [What's next](#whats-next)).
+> Status: 1.3.1 reads what is encrypted, shadowed and collected: BitLocker volumes unlocked with a password, recovery password or startup key (and their free space carved decrypted), Volume Shadow Copies, disk images found inside evidence, triage collections (Velociraptor, KAPE, UAC, plain folders), Outlook PST and OST, Apple Mail, macOS system artifacts with Safari and FSEvents, WebCache of Internet Explorer 10 and 11, and VHDX disks with their log replayed; a Correlation page shows what a case's evidence items have in common. Reads E01, raw and virtual disks, and NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF. Validated against NIST CFReDS, Digital Corpora and dfvfs test images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed with 656 million inputs ([SECURITY.md](SECURITY.md)). Releases carry an SBOM and signed build provenance. See [What's next](#whats-next).
 
 ## Features
 

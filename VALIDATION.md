@@ -27,7 +27,9 @@ Kokino version: 1.2.5 plus the fixes listed in the changelog for the FAT,
 exFAT and NTFS images; 1.2.6 for the ext images; 1.2.8 for NTFS names
 without an MFT record and the SRUM database; 1.2.9 for scheduled tasks,
 Internet Explorer and deleted registry keys; 1.3.0 for registry
-transaction logs and Internet Explorer cookies. Run on Windows 10.
+transaction logs and Internet Explorer cookies; 1.3.1 for shadow copies,
+BitLocker, Outlook PST and OST, WebCache, macOS artifacts and collections.
+Run on Windows 10.
 
 ## Summary
 
@@ -369,7 +371,7 @@ The new-format checksums turned out to be the whole 64-bit Marvin32
 state, not the usual 32-bit result; the first version of the reader
 rejected every real log entry until that was fixed.
 
-## Volume Shadow Copies: dfvfs test image (unreleased)
+## Volume Shadow Copies: dfvfs test image (1.3.1)
 
 The dfvfs project (log2timeline, Apache-2.0) publishes `vss.raw`, an NTFS
 volume of 82,771,968 bytes with two shadow copies, made by writing files
@@ -390,7 +392,7 @@ synthetic test in `crates/kokino-image/src/vss.rs` covers the cases this
 image does not: overlay blocks (single sectors copied), forwarded blocks and
 blocks taken from a later store.
 
-## BitLocker To Go: dfvfs test image (unreleased)
+## BitLocker To Go: dfvfs test image (1.3.1)
 
 dfvfs' `bdetogo.raw` (Apache-2.0, local test data only) is a 64 MiB
 removable drive encrypted with BitLocker To Go on Windows 7, password
@@ -411,7 +413,7 @@ checked yet. No recovery password was available for this image, so
 unlocking with one is checked only by unit tests (the 48-digit format and
 its key) and the shared key path the password also takes.
 
-## Outlook PST and OST: public sample files (unreleased)
+## Outlook PST and OST: public sample files (1.3.1)
 
 Four public files were read (local test data only, not included in
 Kokino): from java-libpst (Apache-2.0) `dist-list.pst` and
@@ -432,7 +434,7 @@ specification and are covered only by the fuzzer. The synthetic PST in
 `crates/kokino-analysis/src/pst.rs` (two-level B-trees, a recipient
 table, an attachment spread over three blocks) is checked byte for byte.
 
-## WebCache (unreleased)
+## WebCache (1.3.1)
 
 Checked on `tests/fixtures/win/WebCacheV01.dat`, written by Windows' own
 database engine (esent.dll) with the tables and columns Internet Explorer
@@ -442,7 +444,7 @@ database pages, B-trees and records are therefore real ESE; the column set
 follows published research on WebCache, not a database taken from a real
 Internet Explorer, which has not been checked yet.
 
-## macOS artifacts (unreleased)
+## macOS artifacts (1.3.1)
 
 Checked on `collection-uac-mac.tar.gz` only, whose property lists and
 databases Python wrote in the formats macOS uses (plistlib, binary and
@@ -455,7 +457,7 @@ reader is also checked against a plist built byte by byte. No image of a
 real Mac system volume has been checked yet: the Mac test images
 (`hfsplus.img`, `apfs.img`) hold user files only.
 
-## Folders as evidence (unreleased)
+## Folders as evidence (1.3.1)
 
 A KAPE collection copied out as files (the contents of
 `collection-kape.zip`) was added as a folder: 28 files packed, the drive
@@ -463,7 +465,7 @@ folder `/C` found, and the same Windows artifacts read as from the ZIP.
 The server test packs a folder, checks each file's SHA-256 in the
 manifest against the original, and analyzes the result.
 
-## BitLocker carving and startup keys, UAC collections, VHDX logs (unreleased)
+## BitLocker carving and startup keys, UAC collections, VHDX logs (1.3.1)
 
 These were checked on test images made for them; no public sample of a
 real dirty VHDX, a real UAC run or a real .BEK file was used yet.
