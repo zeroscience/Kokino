@@ -66,7 +66,7 @@
 
 ---
 
-Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workbench for disk images. Give it an E01, raw, VHD, VHDX or VMDK image, or a disc image, and it reads every NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF volume down to the last record, live and deleted, brings back what was erased, and rebuilds what happened on the machine: Windows registry (deleted keys included), event logs, execution traces and scheduled tasks, Linux logons, shell histories and persistence, browser history (Internet Explorer's included, even from a formatted disk), carved files and edited pictures.
+Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workbench for disk images. Give it an E01, raw, VHD, VHDX or VMDK image, a disc image or a triage collection (Velociraptor, KAPE, UAC, or a plain folder), and it reads every NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF volume down to the last record, live and deleted, BitLocker volumes once unlocked and every Volume Shadow Copy included, brings back what was erased, and rebuilds what happened on the machine: Windows registry (deleted keys included), event logs, execution traces and scheduled tasks, Linux and macOS accounts, logons, shell histories and persistence, browser history (Internet Explorer's included, even from a formatted disk), email (Outlook PST and OST, Apple Mail, mbox), carved files and edited pictures, and what a case's evidence items have in common.
 
 Every finding links to the exact bytes it came from, every indicator of anti-forensic activity explains itself, and every examiner action lands in a hash-chained audit log, so the results hold up in a report and in court.
 

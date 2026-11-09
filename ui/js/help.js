@@ -82,7 +82,7 @@ export function aboutPage(info) {
     h("div.grid.g2",
       h("div.card.stack",
         h("h3", "What it is"),
-        p("Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workbench for disk images. Give it an E01, raw, VHD, VHDX or VMDK image, or a disc image, and it reads every NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF volume down to the last record, live and deleted, brings back what was erased, and rebuilds what happened on the machine: Windows registry (deleted keys included), event logs, execution traces and scheduled tasks, Linux logons, shell histories and persistence, browser history (Internet Explorer's included, even from a formatted disk), carved files and edited pictures."),
+        p("Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workbench for disk images. Give it an E01, raw, VHD, VHDX or VMDK image, a disc image or a triage collection (Velociraptor, KAPE, UAC, or a plain folder), and it reads every NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF volume down to the last record, live and deleted, BitLocker volumes once unlocked and every Volume Shadow Copy included, brings back what was erased, and rebuilds what happened on the machine: Windows registry (deleted keys included), event logs, execution traces and scheduled tasks, Linux and macOS accounts, logons, shell histories and persistence, browser history (Internet Explorer's included, even from a formatted disk), email (Outlook PST and OST, Apple Mail, mbox), carved files and edited pictures, and what a case's evidence items have in common."),
         p("Every finding links to the exact bytes it came from, every indicator of anti-forensic activity explains itself, and every examiner action lands in a hash-chained audit log, so the results hold up in a report and in court."),
         p("One portable binary serves this browser interface on Windows, Linux and macOS, alone on a workstation or for a whole lab over HTTPS."),
         p("The name comes from the Kokino observatory, a Bronze Age megalithic site in North Macedonia (", link("https://en.wikipedia.org/wiki/Kokino", "Wikipedia"), "); the wiki has the story."),
@@ -242,8 +242,6 @@ const WIKI = [
         h("span", h("b", "Deleted content:"), " ext2 keeps a deleted file's block pointers, so its content is read as is. ext3 and ext4 clear them (and the size). Their journal often still holds an older copy of the inode; when it is the same file (same generation), Kokino reads the content through it and the file shows ", h("i", "Recovered from the journal"), ". Otherwise only the Carved files page can bring the content back, and the summary says how many deleted files that leaves."),
         h("span", h("b", "Orphans:"), " inodes no name points to (deleted files whose names are gone, or files unlinked while still open) are listed under $OrphanFiles as inode-N."),
       ),
-      h("h4", "macOS system summary"),
-      p("On a Mac disk (HFS+ or APFS) or a collection from a Mac, the same page shows the macOS version and build, the computer's name, when the Mac was set up, local accounts (dslocal records; admins from the admin group; Apple's _ service accounts left out), launchd agents and daemons outside /System with the program each runs, downloads from each user's quarantine database (Safari, Mail, browsers: when, from where) and application use from KnowledgeC (which app was in front, and for how long). Shell histories in /Users homes are read like Linux ones; rm -P (secure delete) is flagged. A launchd job is flagged when it runs a program from /tmp, /Users/Shared or a hidden folder, or pipes a download into a shell. FSEvents (/.fseventsd, also on USB drives a Mac used) list every path created, changed, renamed or removed, under Events as File change; they have no time of their own, so each shows when its batch file was written, and they stay off the timeline. Unified logs are not read yet."),
       h("h4", "Linux system summary"),
       p("The System summary page reads the machine's own files: os-release, hostname and time zone; accounts from passwd, shadow (only whether and how a password is set, never the hash), group and lastlog; logons, failures, reboots and shutdowns from wtmp, btmp, auth.log or secure and the systemd journal; shell histories; sudo and account changes; installed packages from dpkg, apt, dnf, yum, apk or pacman, with who installed them; persistence (cron, systemd units, rc.local, SSH authorized keys, sudoers, ld.so.preload, shell startup files); USB storage the kernel logged; networks from NetworkManager, DHCP leases, known_hosts and /etc/hosts."),
       ul(
@@ -263,8 +261,10 @@ const WIKI = [
         h("span", h("b", "Extended attributes:"), " including com.apple.quarantine, which macOS sets on files that came from the internet (the app that downloaded them and when)."),
         h("span", h("b", "Deleted files on HFS+:"), " removing a file compacts its catalog node, so the record survives only in older copies of that node: in the journal, or in catalog nodes no longer in use. Kokino reads them and lists the files the live catalog no longer has, with their content when the blocks are still free (it says when they are not)."),
         h("span", h("b", "Deleted files on APFS:"), " APFS never changes metadata in place; older copies of the file-system tree stay in free blocks until they are reused. Kokino reads every intact one and lists the names and inodes the current tree no longer has, with the content their old extents point to."),
-        h("span", h("b", "Not read yet:"), " encrypted (FileVault) APFS volumes (reported), APFS snapshots, APFS free space for carving, and macOS system artifacts (property lists, unified logs)."),
+        h("span", h("b", "Not read yet:"), " encrypted (FileVault) APFS volumes (reported), APFS snapshots, APFS free space for carving, LZFSE compression and macOS unified logs."),
       ),
+      h("h4", "macOS system summary"),
+      p("On a Mac disk (HFS+ or APFS) or a collection from a Mac, the same page shows the macOS version and build, the computer's name, when the Mac was set up, local accounts (dslocal records; admins from the admin group; Apple's _ service accounts left out), launchd agents and daemons outside /System with the program each runs, downloads from each user's quarantine database (Safari, Mail, browsers: when, from where) and application use from KnowledgeC (which app was in front, and for how long). Shell histories in /Users homes are read like Linux ones; rm -P (secure delete) is flagged. A launchd job is flagged when it runs a program from /tmp, /Users/Shared or a hidden folder, or pipes a download into a shell. FSEvents (/.fseventsd, also on USB drives a Mac used) list every path created, changed, renamed or removed, under Events as File change; they have no time of their own, so each shows when its batch file was written, and they stay off the timeline. Unified logs are not read yet."),
     ],
   },
   {
@@ -310,7 +310,7 @@ const WIKI = [
     ],
   },
   {
-    id: "system", title: "System summary (Windows; Linux is under Linux disks)", icon: "monitor",
+    id: "system", title: "System summary (Windows; Linux and macOS are under their disks)", icon: "monitor",
     body: [
       p("For a Windows volume, Kokino reads the registry hives (SYSTEM, SOFTWARE, SAM, each user's NTUSER.DAT and UsrClass.dat, Amcache.hve), the event logs, Prefetch files, Recent-folder shortcuts, Jump Lists, the NTFS change journal ($UsnJrnl), the SRUM database and the scheduled task files, deleted copies included, recovers deleted keys and values from the hives' free space, and shows them on the System summary page:"),
       ul(
@@ -386,6 +386,7 @@ const WIKI = [
         h("span", h("b", "Whole files:"), " each format's own structure says where the file ends (JPEG markers, PNG chunks, the ZIP central directory, the PE section table, the SQLite page count, the end of a GZIP stream...), so random bytes that only resemble a header are not listed. A file whose end is missing is kept and marked incomplete."),
         h("span", h("b", "Contiguous:"), " carving assumes a file's clusters were contiguous. One that runs past the end of its free region is marked: its tail may belong to another file."),
         h("span", h("b", "Deleted files:"), " when a carved file starts where a deleted file's data started, the deleted file's path is shown."),
+        h("span", h("b", "BitLocker:"), " the free space of an unlocked BitLocker volume is carved decrypted. Those files show their offset as \"vol N: offset\" (inside the decrypted volume N) instead of an image offset; preview, export and hashes read them decrypted. The encrypted bytes themselves are not carved once the volume is unlocked."),
       ),
       p("Pictures appear in a gallery. Every carved file shows its offset (a link to the hex view), size, MD5 and SHA-256. Export writes it to the case's exports folder, records the hashes in the audit log and checks them against the carve. Text inside carved PDFs and Office files is added to the search index (shown as Carved in search results)."),
     ],
@@ -537,6 +538,8 @@ const WIKI = [
       ul(
         h("span", h("b", "Digital Corpora"), " (", link("https://digitalcorpora.org", "digitalcorpora.org"), "), created by Simson Garfinkel and colleagues at the Naval Postgraduate School."),
         h("span", h("b", "NIST CFReDS"), " (", link("https://cfreds.nist.gov", "cfreds.nist.gov"), "), the Computer Forensic Reference Data Sets of NIST's Computer Forensics Tool Testing program: the Deleted File Recovery test images."),
+        h("span", h("b", "dfvfs and libyal"), " (Joachim Metz and the log2timeline project): the shadow copy and BitLocker To Go test images and the format documentation behind them."),
+        h("span", h("b", "java-libpst, Aspose.Email and pst-extractor"), ": the public Outlook PST and OST sample files."),
       ),
       h("div.scroll", h("table.tbl",
         h("thead", h("tr", h("th", "Data set"), h("th", "Checked"), h("th", "Result"))),
@@ -544,6 +547,9 @@ const WIKI = [
           ["Digital Corpora nps-2009-canon2 (FAT32 camera card)", "Image hashes; recovered pictures against the real files", "Hashes match the published SHA-1; 34 of 36 recoverable pictures byte for byte (33 from the file system, 1 carved); the 3 overwritten deleted pictures flagged"],
           ["Digital Corpora nps-2009-ntfs1 (NTFS)", "File list against DFXML; compressed and encrypted copies against the originals", "All files, names and sizes right; all 9 compressed copies identical to the originals; EFS files read as ciphertext and marked"],
           ["NIST CFReDS deleted file recovery, 22 ext images (ext2, ext3, ext4)", "Every deleted file with content, block by block; deleted names against NIST's layout", "962 of 965 tagged files complete (99.9996% of blocks); 302 recovered through the ext3/ext4 journal; 2,782 deleted names listed; wrong content without a warning in 1 file"],
+          ["dfvfs vss.raw (NTFS with two shadow copies)", "Shadow copy IDs and times against dfvfs; the files each snapshot holds", "Both stores found with dfvfs' IDs and times; each snapshot a complete NTFS volume with the files it should and should not have"],
+          ["dfvfs bdetogo.raw (BitLocker To Go, AES-128 with diffuser)", "Unlock with the published password; the decrypted files", "Wrong password refused; every file decrypts to the content dfvfs' tests expect"],
+          ["Public PST and OST samples (4 files, ANSI to OST 2013)", "Every folder and message; attachments rendered and read back", "89 folders and 95 messages in all, none unreadable; attachments at their stated sizes"],
           ["NIST CFReDS deleted file recovery, 61 images", "Every deleted file, block by block, against each file's own tags", "3,048 of 3,323 deleted test files complete; 99.8% of blocks right (exFAT and NTFS 100%); wrong content without a warning in 4 files"],
         ].map(([a, b, c]) => h("tr", h("td", h("b", a)), h("td", b), h("td", c)))))),
       p("The checks found and fixed real problems: NTFS compressed files are now decompressed (they were read as stored), fragmented deleted exFAT files are followed along their surviving chain, and deleted files whose space was reused, or claimed by another deleted file, are flagged on NTFS as on FAT."),
@@ -561,6 +567,8 @@ const WIKI = [
     id: "security", title: "Security and fuzzing", icon: "shield",
     body: [
       p("Evidence can be made to attack the tool that reads it: a disk image, registry hive or picture crafted to crash Kokino, hang an ingest, or use up the examiner's memory. Kokino is written in Rust with ", code("unsafe"), " code forbidden in every crate, and every parser that reads evidence has been fuzzed."),
+      h("h3", "Release integrity"),
+      p("Every release has ", code("SHA256SUMS.txt"), ", a CycloneDX SBOM (", code("kokino-<version>-sbom.cdx.json"), ": every third-party crate in the build with its version, checksum and license) and a build provenance attestation for every file, signed through GitHub (Sigstore), which ties the file to the workflow run and commit that built it. Check a download with ", code("gh attestation verify <file> --repo zeroscience/Kokino"), ". The Windows and macOS packages are not yet code-signed with a publisher certificate."),
       h("h3", "Fuzzing"),
       p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks, optical media, Mac disks, NTFS folder indexes and $LogFile, the change journal, ShellBags, ESE databases (SRUM), scheduled tasks, Internet Explorer index.dat, deleted registry keys, legacy Office files, registry logs, legacy event logs, email, journald compression, ZIP and tar collections, shadow copies, BitLocker, VHDX logs, Outlook PST, property lists, FSEvents, WebCache and Apple Mail ran ", h("b", "656,367,228 inputs"), " and found ", h("b", "37 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
       h("div.scroll", h("table.tbl",

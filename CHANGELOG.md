@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- Wiki brought up to date with 1.3.1: the macOS system summary is under Mac disks (it said macOS artifacts were not read), carving of decrypted BitLocker volumes, the new validation images (dfvfs shadow copies and BitLocker To Go, the PST and OST samples) with thanks to their authors, release integrity (SBOM and signed provenance) under Security, and the About page's description of what Kokino reads; the README's description likewise.
+
 ## [1.3.1] - 2026-11-09
 
 Encrypted, shadowed, collected and Mac: BitLocker unlocking (password, recovery password, startup key) with carving of decrypted space, Volume Shadow Copies, disk images inside evidence, triage collections (Velociraptor, KAPE, UAC, plain folders), Outlook PST and OST, Apple Mail, macOS system artifacts with Safari and FSEvents, WebCache of Internet Explorer 10 and 11, VHDX log replay, cross-evidence correlation, and a signed SBOM with every release.
