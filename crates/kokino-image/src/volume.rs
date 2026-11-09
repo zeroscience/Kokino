@@ -65,6 +65,40 @@ pub struct Volume {
     pub fs: FsKind,
     pub fs_label: String,
     pub supported: bool,
+    /// Set when this volume is a Volume Shadow Copy of another: it is read
+    /// through the snapshot, and its bytes have no single place in the image.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<ShadowRef>,
+    /// Set when this volume is the decrypted view of a BitLocker volume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bitlocker: Option<BitLockerRef>,
+}
+
+impl Volume {
+    /// Read through a transformation (shadow copy, decryption): its bytes
+    /// are not at one place in the image as they are shown.
+    pub fn is_virtual(&self) -> bool {
+        self.shadow.is_some() || self.bitlocker.is_some()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BitLockerRef {
+    /// The encrypted volume.
+    pub of_volume: usize,
+    pub method: String,
+    /// How it was unlocked ("Password", "Recovery password", "Clear key").
+    pub protector: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ShadowRef {
+    /// The volume the shadow copy belongs to.
+    pub of_volume: usize,
+    /// 1 is the oldest store.
+    pub store: usize,
+    pub id: String,
+    pub created: u64,
 }
 
 const SECTOR: u64 = 512;
@@ -82,7 +116,8 @@ pub fn detect_fs<R: Read + Seek>(r: &mut R, start: u64) -> FsKind {
     if start == 0 && (b.starts_with(b"PK\x03\x04") || b.starts_with(b"PK\x05\x06")) {
         return FsKind::Zip;
     }
-    if &b[3..11] == b"-FVE-FS-" {
+    // BitLocker To Go keeps a FAT32 boot record: the GUID tells it apart.
+    if crate::bde::is_bitlocker(&b) {
         return FsKind::BitLocker;
     }
     if &b[3..11] == b"EXFAT   " {
@@ -121,7 +156,7 @@ pub fn detect_fs<R: Read + Seek>(r: &mut R, start: u64) -> FsKind {
     FsKind::Unknown
 }
 
-fn mk(index: usize, kind: VolumeKind, start: u64, length: u64, description: String, fs: FsKind) -> Volume {
+pub(crate) fn mk(index: usize, kind: VolumeKind, start: u64, length: u64, description: String, fs: FsKind) -> Volume {
     Volume {
         index,
         kind,
@@ -131,10 +166,36 @@ fn mk(index: usize, kind: VolumeKind, start: u64, length: u64, description: Stri
         fs,
         fs_label: fs.label().to_string(),
         supported: matches!(fs, FsKind::Ntfs | FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat | FsKind::Ext | FsKind::Iso9660 | FsKind::Udf | FsKind::HfsPlus | FsKind::Apfs),
+        shadow: None,
+        bitlocker: None,
     }
 }
 
+/// Partitions (or a whole-disk file system) and gaps, then the Volume
+/// Shadow Copies of each NTFS volume as volumes of their own.
 pub fn detect_volumes<R: Read + Seek>(r: &mut R, size: u64) -> Vec<Volume> {
+    let mut vols = detect_partitions(r, size);
+    // Volume Shadow Copies of NTFS volumes, each as a volume of its own.
+    let mut shadows = vec![];
+    for v in vols.iter().filter(|v| v.fs == FsKind::Ntfs) {
+        let mut sub = crate::SubReader::new(&mut *r, v.start, v.length);
+        for s in crate::vss::stores(&mut sub, v.length) {
+            let day = chrono::DateTime::from_timestamp(((s.created / 10_000_000) as i64).saturating_sub(11_644_473_600), 0).map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or_default();
+            let mut sv = mk(0, v.kind, v.start, if s.volume_size > 0 { s.volume_size.min(v.length) } else { v.length }, format!("Shadow copy {} of volume {}, created {}", s.index, v.index, day), FsKind::Ntfs);
+            sv.fs_label = "NTFS (shadow copy)".into();
+            sv.shadow = Some(ShadowRef { of_volume: v.index, store: s.index, id: s.id.clone(), created: s.created });
+            shadows.push(sv);
+        }
+    }
+    let n = vols.len();
+    for (k, mut sv) in shadows.into_iter().enumerate() {
+        sv.index = n + k;
+        vols.push(sv);
+    }
+    vols
+}
+
+fn detect_partitions<R: Read + Seek>(r: &mut R, size: u64) -> Vec<Volume> {
     let mut found: Vec<Volume> = vec![];
 
     let whole_fs = detect_fs(r, 0);

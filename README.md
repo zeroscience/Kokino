@@ -70,13 +70,14 @@ Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workben
 
 Every finding links to the exact bytes it came from, every indicator of anti-forensic activity explains itself, and every examiner action lands in a hash-chained audit log, so the results hold up in a report and in court.
 
-> Status: 1.3.0 adds email (mbox and .eml, with attachments and messages Thunderbird deleted), CSV and JSON exports of every list, registry transaction logs applied as Windows would, text of legacy Office files and RTF in search, Windows XP event logs, Internet Explorer cookies and compressed journald fields, on top of 1.2.9's scheduled tasks, Internet Explorer history and deleted registry keys. Reads E01, raw and virtual disks, and NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF. Validated against NIST CFReDS and Digital Corpora test images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed ([SECURITY.md](SECURITY.md)). Next: Volume Shadow Copies, BitLocker with a recovery key and triage collection import (see [What's next](#whats-next)).
+> Status: 1.3.0 adds email (mbox and .eml, with attachments and messages Thunderbird deleted), CSV and JSON exports of every list, registry transaction logs applied as Windows would, text of legacy Office files and RTF in search, Windows XP event logs, Internet Explorer cookies and compressed journald fields, on top of 1.2.9's scheduled tasks, Internet Explorer history and deleted registry keys. Reads E01, raw and virtual disks, and NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF. Validated against NIST CFReDS and Digital Corpora test images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed ([SECURITY.md](SECURITY.md)). Coming in the next release: Volume Shadow Copies, BitLocker unlocking, disk images found inside evidence and triage collections (see [What's next](#whats-next)).
 
 ## Features
 
 - **Cases and integrity:** case store, evidence registration, single-pass MD5 / SHA-1 / SHA-256, verification against the acquisition hash, and a hash-chained audit log of every examiner action (`kokino verify-audit`).
 - **Images:** E01 (EWF, all segments, compressed or not), raw / dd, split raw (`.001`, `.002`, ...), and virtual disks: VHD (fixed, dynamic, differencing), VHDX (dynamic, fixed, differencing) and VMDK (flat, sparse, streamOptimized, split, snapshots), with parent disks found and checked automatically. For E01, Kokino checks the media against the hash the imaging tool stored in the image, shows the acquisition details it recorded (case, examiner, dates, device, tool) and flags sectors the imager could not read. Ex01 is detected and reported.
-- **Volumes:** MBR (including extended partitions), GPT, unallocated gaps. Parses NTFS, FAT12/16/32, exFAT, ext2/3/4, ISO 9660, UDF, HFS+ and APFS; detects and reports BitLocker.
+- **Volumes:** MBR (including extended partitions), GPT, unallocated gaps. Parses NTFS, FAT12/16/32, exFAT, ext2/3/4, ISO 9660, UDF, HFS+ and APFS. Volume Shadow Copies are rebuilt and read as volumes of their own. BitLocker volumes (Windows 7 and later, To Go) are listed with their protectors and unlocked with the password or recovery password; volumes with protection suspended are read without asking.
+- **Images inside images and triage collections:** disk images stored on the evidence (E01, VHD, VHDX, VMDK, ISO, raw) are listed and can be extracted, verified and added as evidence of their own; Velociraptor and KAPE ZIP collections are read as file systems, with artifacts found at the paths they had on the collected drive.
 - **NTFS:** every MFT record including deleted ones, $SI and $FN times at full 100 ns precision, alternate data streams, orphans, resident data, data-run offsets. Records that cannot be parsed are reported, never dropped silently. Names of deleted files whose MFT record was reused are recovered from folder index slack ($I30) and the NTFS log ($LogFile), with their times and size, and old names of renamed files with them. The change journal ($UsnJrnl) tells what happened to each file and when: created, written, renamed, deleted.
 - **FAT12/16/32 and exFAT:** USB sticks, SD and camera cards. Live files follow the FAT chain; deleted files and folders are listed with their long names restored, their content read from the first cluster on, and a note when the clusters were reused or the first cluster no longer holds the file's header.
 - **ext2/3/4:** Linux servers and desktops. Every inode, extents and block maps, directories with the names of deleted files recovered from directory slack, orphaned inodes, owner, mode, inode change and deletion times (ext4 to the nanosecond, with creation time). ext3 and ext4 clear a deleted file's block map; Kokino reads it back from an older copy of the inode kept in the journal when there is one, and says when there is not (then only carving can help).
@@ -106,7 +107,7 @@ Every finding links to the exact bytes it came from, every indicator of anti-for
 ## What's next
 
 - **Ex01:** EWF version 2 (EnCase 7 and later)
-- **Next:** Volume Shadow Copies, BitLocker with a recovery key, disk images found inside evidence, triage collection import (KAPE, Velociraptor)
+- **Next:** BitLocker startup keys (.BEK) and Windows Vista volumes, triage collections as plain folders and UAC, Outlook PST and OST
 - **Later:** Outlook PST and OST, macOS artifacts (property lists, unified logs, KnowledgeC), APFS snapshots and encrypted volumes, XFS
 
 The full list, with what is already done, is in [ROADMAP.md](ROADMAP.md).
@@ -196,6 +197,7 @@ Headless, using the same engine:
 
 ```bash
 ./target/release/kokino analyze disk.img --json analysis.json
+./target/release/kokino analyze laptop.E01 --recovery-password -   # unlock BitLocker (asks for the 48 digits)
 ./target/release/kokino hash disk.img      # for E01 also verifies the stored MD5/SHA-1 (exit code 3 on mismatch)
 ./target/release/kokino artifact Security.evtx   # one exported hive, .evtx, .pf, .lnk or Jump List as JSON
 ./target/release/kokino files disk.E01 --extract out/   # every file (live and deleted) with hashes; writes them out
@@ -210,7 +212,7 @@ Headless, using the same engine:
 - Every action is logged to `<case>/audit.jsonl` under the examiner's account, with the SHA-256 of the previous entry.
 - Analysis is deterministic for a given image and Kokino version, and the version is stored with the results.
 - Results are checked against public test images with ground truth, NIST CFReDS (61 deleted-file recovery images) and Digital Corpora: 99.8% of deleted-file blocks recovered correctly, image hashes matching the published values. See [VALIDATION.md](VALIDATION.md).
-- Every parser that reads evidence is fuzzed (567 million inputs so far, 29 problems found and fixed) and `unsafe` Rust is forbidden in every crate. See [SECURITY.md](SECURITY.md), which is also where to report a vulnerability.
+- Every parser that reads evidence is fuzzed (584 million inputs so far, 34 problems found and fixed) and `unsafe` Rust is forbidden in every crate. See [SECURITY.md](SECURITY.md), which is also where to report a vulnerability.
 - The GUI needs a signed-in session (Argon2id passwords, HttpOnly SameSite=Strict cookies, login backoff), a CSRF header on every change and a known Host, which blocks other browser tabs and DNS rebinding. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#3-accounts-and-access).
 
 ## Development

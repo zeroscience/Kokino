@@ -165,6 +165,12 @@ impl Case {
         write_json(&self.dir.join("evidence").join(format!("{}.json", safe_id(&rec.id)?)), rec)
     }
 
+    /// BitLocker keys given for one evidence item. Kept out of case.json so
+    /// they are never sent to the browser.
+    pub fn keys_path(&self, eid: &str) -> anyhow::Result<PathBuf> {
+        Ok(self.dir.join("keys").join(format!("{}.json", safe_id(eid)?)))
+    }
+
     pub fn analysis_path(&self, eid: &str) -> anyhow::Result<PathBuf> {
         Ok(self.dir.join("analysis").join(format!("{}.json", safe_id(eid)?)))
     }

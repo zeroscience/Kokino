@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bde;
 pub mod ewf;
 pub mod source;
 pub mod vdisk;
@@ -13,7 +14,7 @@ pub mod volume;
 
 pub use ewf::EwfInfo;
 pub use source::{Evidence, EvidenceReader, ImageFormat};
-pub use volume::{detect_volumes, FsKind, Volume, VolumeKind};
+pub use volume::{detect_volumes, BitLockerRef, FsKind, ShadowRef, Volume, VolumeKind};
 
 use std::io::{self, Read, Seek, SeekFrom};
 
@@ -152,4 +153,103 @@ pub fn read_at<R: Read + Seek>(r: &mut R, offset: u64, buf: &mut [u8]) -> io::Re
         got += n;
     }
     Ok(got)
+}
+
+/// A volume as the file systems read it: a slice of the evidence, or a
+/// Volume Shadow Copy rebuilt from one.
+pub enum VolReader {
+    Plain(SubReader<EvidenceReader>),
+    Shadow(Box<vss::ShadowReader<SubReader<EvidenceReader>>>),
+    BitLocker(Box<bde::BdeReader<SubReader<EvidenceReader>>>),
+}
+
+impl Read for VolReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            VolReader::Plain(r) => r.read(buf),
+            VolReader::Shadow(r) => r.read(buf),
+            VolReader::BitLocker(r) => r.read(buf),
+        }
+    }
+}
+
+impl Seek for VolReader {
+    fn seek(&mut self, p: std::io::SeekFrom) -> std::io::Result<u64> {
+        match self {
+            VolReader::Plain(r) => r.seek(p),
+            VolReader::Shadow(r) => r.seek(p),
+            VolReader::BitLocker(r) => r.seek(p),
+        }
+    }
+}
+
+/// The reader for a detected volume (a shadow copy is read through its snapshot).
+pub fn volume_reader(ev: &Evidence, v: &Volume) -> std::io::Result<VolReader> {
+    if v.bitlocker.is_some() {
+        let mut sub = SubReader::new(ev.reader()?, v.start, v.length);
+        let key = bitlocker_key(ev, v, &mut sub).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::PermissionDenied, "BitLocker volume is locked"))?;
+        return Ok(VolReader::BitLocker(Box::new(bde::BdeReader::new(sub, v.length, &key)?)));
+    }
+    match &v.shadow {
+        None => Ok(VolReader::Plain(SubReader::new(ev.reader()?, v.start, v.length))),
+        Some(s) => {
+            // The base volume's full length: the stores live there.
+            let base = SubReader::new(ev.reader()?, v.start, ev.size.saturating_sub(v.start));
+            let base_len = ev.size.saturating_sub(v.start);
+            Ok(VolReader::Shadow(Box::new(vss::ShadowReader::new(base, base_len, s.store)?)))
+        }
+    }
+}
+
+/// The key for a BitLocker volume: given with the evidence, or the clear key
+/// stored on it when protection is suspended.
+fn bitlocker_key<R: Read + Seek>(ev: &Evidence, v: &Volume, r: &mut R) -> Option<bde::Key> {
+    if let Some(k) = ev.bitlocker_key(v.start) {
+        return Some(k.clone());
+    }
+    let info = bde::info(r, v.length).ok()?;
+    bde::unlock(&info, &bde::Secret::ClearKey).ok()
+}
+
+/// The decrypted views of the BitLocker volumes in `vols` that can be read
+/// (key given, or protection suspended), each a volume of its own numbered
+/// after the others.
+pub fn unlocked_volumes(ev: &Evidence, vols: &[Volume]) -> Vec<Volume> {
+    let mut out = vec![];
+    for v in vols.iter().filter(|v| v.fs == FsKind::BitLocker && !v.is_virtual()) {
+        let Ok(base) = ev.reader() else { continue };
+        let mut sub = SubReader::new(base, v.start, v.length);
+        let Some(key) = bitlocker_key(ev, v, &mut sub) else { continue };
+        let Ok(mut r) = bde::BdeReader::new(sub, v.length, &key) else { continue };
+        let fs = volume::detect_fs(&mut r, 0);
+        let mut u = volume::mk(vols.len() + out.len(), v.kind, v.start, v.length, format!("Volume {} decrypted ({}, unlocked with: {})", v.index, bde::method_label(key.method), key.protector.to_lowercase()), fs);
+        u.fs_label = format!("{} (BitLocker, unlocked)", fs.label());
+        u.bitlocker = Some(BitLockerRef { of_volume: v.index, method: bde::method_label(key.method).into(), protector: key.protector.clone() });
+        out.push(u);
+    }
+    out
+}
+
+/// Tries a BitLocker secret on every BitLocker volume of the evidence and
+/// keeps the keys it opens. Returns, per BitLocker volume, its index and
+/// start and what happened.
+pub fn unlock_bitlocker(ev: Evidence, secret: &bde::Secret) -> (Evidence, Vec<(usize, u64, Result<bde::Key, String>)>) {
+    let mut out = vec![];
+    let vols = match ev.reader() {
+        Ok(mut r) => detect_volumes(&mut r, ev.size),
+        Err(_) => vec![],
+    };
+    let mut ev = ev;
+    for v in vols.iter().filter(|v| v.fs == FsKind::BitLocker && !v.is_virtual()) {
+        let res = ev.reader().map_err(|e| e.to_string()).and_then(|base| {
+            let mut sub = SubReader::new(base, v.start, v.length);
+            let info = bde::info(&mut sub, v.length).map_err(|e| e.to_string())?;
+            bde::unlock(&info, secret)
+        });
+        if let Ok(k) = &res {
+            ev = ev.with_bitlocker_key(v.start, k.clone());
+        }
+        out.push((v.index, v.start, res));
+    }
+    (ev, out)
 }

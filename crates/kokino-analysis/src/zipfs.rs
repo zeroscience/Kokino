@@ -70,8 +70,10 @@ fn unescape(s: &str) -> String {
     let mut i = 0;
     while i < b.len() {
         if b[i] == b'%' && i + 2 < b.len() {
-            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(v);
+            // Bytes, not a str slice: the name may hold multi-byte characters.
+            let hex = |c: u8| (c as char).to_digit(16);
+            if let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2])) {
+                out.push((h * 16 + l) as u8);
                 i += 3;
                 continue;
             }
@@ -288,8 +290,9 @@ impl ZipVolume {
                 let data = match cached {
                     Some(d) => d,
                     None => {
-                        let comp = read_at(r, start, e.csize.min(MAX_INFLATE) as usize)?;
-                        let mut out = Vec::with_capacity(e.usize as usize);
+                        // Sizes come from the file: never allocate more than it holds.
+                        let comp = read_at(r, start, e.csize.min(MAX_INFLATE).min(self.size.saturating_sub(start)) as usize)?;
+                        let mut out = Vec::with_capacity((e.usize as usize).min(16 << 20));
                         flate2::read::DeflateDecoder::new(&comp[..]).take(e.usize).read_to_end(&mut out)?;
                         let d = std::sync::Arc::new(out);
                         *self.cache.lock().unwrap() = Some((fe.record, d.clone()));
@@ -405,5 +408,9 @@ mod tests {
         let config = ls.iter().find(|e| e.path == "/uploads/auto/C:/Windows/System32/config").unwrap();
         assert!(config.is_dir && sys.parent == config.record);
         assert!(open(&mut std::io::Cursor::new(b"PK\x03\x04 nothing else".to_vec()), 20).is_err());
+        // %XX next to multi-byte characters (found by fuzzing).
+        assert_eq!(unescape("caf\u{e9}%2"), "caf\u{e9}%2");
+        assert_eq!(unescape("%\u{2019}x"), "%\u{2019}x");
+        assert_eq!(unescape("C%3A%24MFT"), "C:$MFT");
     }
 }

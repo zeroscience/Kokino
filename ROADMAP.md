@@ -50,8 +50,10 @@ checked against public test images with known answers where they exist
 - [ ] LZFSE decompression (decmpfs types 11 and 12)
 - [ ] macOS artifacts: property lists, unified logs, KnowledgeC, quarantine events, FSEvents
 - [ ] XFS
-- [ ] BitLocker with a recovery key
-- [ ] Volume Shadow Copies
+- [x] BitLocker with a password or recovery password; clear key (unreleased)
+- [ ] BitLocker: TPM and startup key (.BEK) protectors, Windows Vista volumes, carving decrypted volumes
+- [x] Volume Shadow Copies (unreleased)
+- [ ] Shadow copies inside BitLocker volumes
 
 ### Deeper NTFS and Windows
 - [x] $UsnJrnl (change journal: every file change, grouped per round, paths rebuilt from the journal for folders that are gone) (1.2.8)

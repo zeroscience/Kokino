@@ -290,7 +290,7 @@ fn run_index(st: &AppState, job: &Job, user: &str, cid: &str, eid: &str) -> anyh
 fn run_ingest(st: &AppState, job: &Job, user: &str, cid: &str, eid: &str, rehash: bool, reanalyze: bool) -> anyhow::Result<()> {
     let case = st.case(cid)?;
     let mut rec = case.evidence_by_id(eid)?;
-    let ev = Evidence::open(&rec.path)?;
+    let ev = crate::state::open_evidence(&case, &rec)?;
 
     if rehash || rec.hashes.is_none() {
         let total = ev.size;

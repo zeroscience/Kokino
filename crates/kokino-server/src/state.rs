@@ -173,9 +173,40 @@ impl AppState {
             anyhow::bail!("evidence has not been analyzed yet");
         }
         let analysis: Analysis = read_json(&p)?;
-        let evidence = Evidence::open(&rec.path)?;
+        let evidence = open_evidence(&case, &rec)?;
         Ok(self.put(cid, eid, analysis, evidence))
     }
+}
+
+/// A BitLocker key kept with the case, found with a password or recovery
+/// password the examiner gave (the secret itself is not kept).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StoredKey {
+    pub volume_start: u64,
+    pub key: kokino_image::bde::Key,
+    pub by: String,
+    pub at: String,
+}
+
+pub fn stored_keys(case: &Case, eid: &str) -> Vec<StoredKey> {
+    case.keys_path(eid).ok().filter(|p| p.exists()).and_then(|p| read_json(&p).ok()).unwrap_or_default()
+}
+
+pub fn save_keys(case: &Case, eid: &str, keys: &[StoredKey]) -> anyhow::Result<()> {
+    let p = case.keys_path(eid)?;
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    kokino_core::case::write_json(&p, &keys)
+}
+
+/// The evidence with the BitLocker keys the case holds for it.
+pub fn open_evidence(case: &Case, rec: &kokino_core::case::EvidenceRecord) -> anyhow::Result<Evidence> {
+    let mut ev = Evidence::open(&rec.path)?;
+    for k in stored_keys(case, &rec.id) {
+        ev = ev.with_bitlocker_key(k.volume_start, k.key);
+    }
+    Ok(ev)
 }
 
 fn index(analysis: Analysis, evidence: Evidence) -> Loaded {

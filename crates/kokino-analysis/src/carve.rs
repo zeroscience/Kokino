@@ -798,7 +798,8 @@ fn evtx_chunk(src: &mut dyn Bytes, at: u64) -> Option<Hit> {
 /// Free space to carve: (image offset, length, region label, volume index).
 fn regions(ev: &Evidence, analysis: &Analysis) -> Vec<(u64, u64, String, Option<usize>)> {
     let mut out = vec![];
-    for (fi, fsa) in analysis.filesystems.iter().enumerate() {
+    // Shadow copies and decrypted volumes: their bytes are not in the image as shown.
+    for (fi, fsa) in analysis.filesystems.iter().enumerate().filter(|(_, f)| !f.volume.is_virtual()) {
         let Ok(mut r) = volume_reader(ev, &fsa.volume) else { continue };
         let Ok(fs) = crate::fs::Fs::open(&mut r, &fsa.volume) else { continue };
         for (start, len) in fs.free_runs(&mut r).unwrap_or_default() {
@@ -823,7 +824,7 @@ pub fn carve(ev: &Evidence, analysis: &Analysis, progress: Progress) -> anyhow::
     let mut src = Img { r: BlockCache::new(ev.reader()?)?, size: ev.size };
     // Deleted files whose data still starts where something is carved.
     let mut deleted_at: HashMap<u64, String> = HashMap::new();
-    for fsa in &analysis.filesystems {
+    for fsa in analysis.filesystems.iter().filter(|f| !f.volume.is_virtual()) {
         for f in fsa.files.iter().filter(|f| f.e.deleted && !f.e.is_dir) {
             if let Some(o) = f.e.data_offset() {
                 deleted_at.insert(fsa.volume.start + o, f.e.path.clone());

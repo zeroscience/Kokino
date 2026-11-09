@@ -846,6 +846,8 @@ pub fn search(path: &Path, analysis: &Analysis, mode: &Mode, scope: Scope, fi: O
             let image_offset = match (file, fsa) {
                 _ if src == SRC_DOC || src == SRC_CARVED => None,
                 (_, None) => Some(offset),
+                // A shadow copy's or a decrypted volume's bytes are not in the image as shown.
+                (_, Some(fsa)) if fsa.volume.is_virtual() => None,
                 (None, Some(fsa)) => Some(fsa.volume.start + offset),
                 (Some(f), Some(fsa)) => {
                     let key = (cfi, f, stream.clone());

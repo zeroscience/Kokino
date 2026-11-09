@@ -28,6 +28,7 @@ are no separate patches for older versions.
 |---|---|---|
 | Evidence images and the files inside them | Hostile: crafted to crash, hang or exhaust the examiner's machine, or to hide data | Read-only access; every parser bounds memory and time by the size of its input; `unsafe` Rust is forbidden in every Kokino crate; parsers fuzzed (below) |
 | Databases inside evidence (browser history) | Hostile SQL schema (views, triggers) and corrupt pages | SQLite in defensive mode, `trusted_schema=OFF`, cell size checks, no memory mapping, a time limit per database, views standing in for tables refused |
+| BitLocker passwords and recovery passwords | Secret | Used once to find the volume key, never stored or logged; the volume key is kept in the case's `keys` folder and never returned by the API; every unlock and every failed attempt is in the case audit log |
 | Signed-in examiners and reviewers | Honest but limited to their cases and role | Per-case membership and roles enforced on the server; every action in a hash-chained audit log |
 | Other machines on the lab network | Untrusted | LAN mode is HTTPS only; sign-in required; CSRF header and Host check on every request |
 | Other tabs in the examiner's browser | Untrusted | Strict Content-Security-Policy; HttpOnly, SameSite=Strict session cookies |
@@ -145,7 +146,21 @@ Legacy event logs, email and journald compression (1.3.0):
 | `journalz` | journald's compressed fields: XZ, LZ4 (Kokino's own decoder) and zstd, from the input and from offsets inside it | 10 min | 45,374,291 | none |
 | `linuxlogs` | again, with a journal holding XZ and LZ4 fields | 10 min | 7,898,202 | none |
 
-In all: 567,157,854 inputs over 31 targets, and 29 distinct problems
+Shadow copies, BitLocker and triage collections (unreleased):
+
+| Target | What it covers | Rounds | Inputs in all | Distinct problems found |
+|---|---|---|--:|---|
+| `zip` | ZIP collections read as file systems (central directory, ZIP64, time fields, Velociraptor's escaped names) and nested image detection | 3 x 10 min | 5,383,514 | 2: a crash on escaped names next to multi-byte characters, and runaway memory from claimed sizes; fixed |
+| `vss` | Shadow copy catalogs, block lists (full, overlay, forwarded blocks) and snapshot reads across the stores | 3 x 10 min | 9,887,067 | 2: integer overflows on offsets near 2^64, and a stack overflow from a catalog listing thousands of stores; fixed |
+| `bde` | BitLocker volume headers, FVE metadata blocks and entries, key protectors, key unwrapping (clear key), and the decrypting reader for every method | 2 x 10 min | 1,891,137 | 1: an integer overflow on a boot sector copy offset near 2^64; fixed |
+
+The first `vss` round ran an optimized build without overflow checks and
+found nothing; the same inputs on the `fuzz` profile (overflow checks on)
+found the overflows within seconds, and the stack overflow later. That
+round and the first `bde` round were stopped to fix what they found and are
+not counted in the inputs; the rounds after the fixes found nothing.
+
+In all: 584,319,572 inputs over 34 targets, and 34 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed
@@ -181,6 +196,11 @@ found by fuzzing, all fixed.
 | 27 | HFS+ | Integer overflow | Fuzzing | A B-tree node claiming more records than its offset table can hold | The record loop stops before the table runs out |
 | 28 | HFS+ | Crash (read past the end) | Fuzzing | A volume header cut short at the end of the image | Short headers refused |
 | 29 | APFS | Integer overflow | Fuzzing | A checkpoint address from the superblock multiplied by the block size | Saturating arithmetic for every block address |
+| 30 | ZIP collections | Crash (panic) | Fuzzing | A Velociraptor-escaped name (`%xx`) next to a multi-byte character was cut inside the character | Escapes decoded byte by byte |
+| 31 | ZIP collections | Runaway memory | Fuzzing | Sizes claimed by a damaged ZIP's directory sized the read and inflate buffers | Capped by the file's size; inflated output limited |
+| 32 | Volume Shadow Copies | Integer overflow (2 places) | Fuzzing | A catalog or block list offset near 2^64 plus the block size | Checked arithmetic |
+| 33 | Volume Shadow Copies | Stack overflow | Fuzzing | A catalog listing thousands of stores made the block lookup recurse once per store | The lookup is a loop; at most 512 stores, Windows' own limit |
+| 34 | BitLocker | Integer overflow | Fuzzing | A boot sector copy or metadata offset near 2^64 | Saturating arithmetic |
 
 Before the fixes, every one of these could stop or slow an ingest, a carving
 job or a picture scan, or exhaust the examiner's memory, on purpose-made
@@ -207,6 +227,12 @@ was reviewed. Fixed:
   report can run script or act as the signed-in examiner.
 - **SQLite databases from evidence** are opened as described in the threat
   model above.
+- **BitLocker unlocking** (new): the password or recovery password is sent
+  once in the request body, used to derive the key and dropped. Only the
+  volume key is written, to `keys/<evidence>.json` in the case folder,
+  outside `case.json`, so no API response carries it. Reviewers cannot
+  unlock (it is a write). Each attempt costs 2^20 SHA-256 rounds on the
+  server, as it does on Windows.
 
 Checked and found sound: the server folder browser (examiners and admins
 only), export file names (no path separators survive),

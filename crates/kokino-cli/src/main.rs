@@ -10,6 +10,46 @@ struct Cli {
     cmd: Cmd,
 }
 
+#[derive(clap::Args)]
+struct Unlock {
+    /// Unlock BitLocker volumes with this password ("-" asks for it)
+    #[arg(long, value_name = "PASSWORD")]
+    bitlocker_password: Option<String>,
+    /// Unlock BitLocker volumes with this 48-digit recovery password ("-" asks for it)
+    #[arg(long, value_name = "DIGITS")]
+    recovery_password: Option<String>,
+}
+
+impl Unlock {
+    /// Opens the evidence and unlocks its BitLocker volumes with what was given.
+    fn open(&self, image: &std::path::Path) -> anyhow::Result<kokino_image::Evidence> {
+        let mut ev = kokino_image::Evidence::open(image)?;
+        let ask = |v: &str, prompt: &str| -> anyhow::Result<String> { Ok(if v == "-" { rpassword::prompt_password(prompt)? } else { v.to_string() }) };
+        let mut secrets = vec![];
+        if let Some(p) = &self.bitlocker_password {
+            secrets.push((true, ask(p, "BitLocker password: ")?));
+        }
+        if let Some(p) = &self.recovery_password {
+            secrets.push((false, ask(p, "BitLocker recovery password: ")?));
+        }
+        for (pw, s) in &secrets {
+            let secret = if *pw { kokino_image::bde::Secret::Password(s) } else { kokino_image::bde::Secret::RecoveryPassword(s) };
+            let (e, res) = kokino_image::unlock_bitlocker(ev, &secret);
+            ev = e;
+            if res.is_empty() {
+                eprintln!("no BitLocker volume found");
+            }
+            for (i, _, r) in res {
+                match r {
+                    Ok(k) => eprintln!("volume {}: unlocked ({}, {})", i, kokino_image::bde::method_label(k.method), k.protector.to_lowercase()),
+                    Err(e) => eprintln!("volume {}: {}", i, e),
+                }
+            }
+        }
+        Ok(ev)
+    }
+}
+
 #[derive(Subcommand)]
 enum Cmd {
     /// Start the browser GUI (127.0.0.1 unless --listen is given)
@@ -74,6 +114,8 @@ enum Cmd {
     /// Analyze an image headless and print the summary (same engine as the GUI)
     Analyze {
         image: PathBuf,
+        #[command(flatten)]
+        unlock: Unlock,
         /// Write the full analysis as JSON
         #[arg(long)]
         json: Option<PathBuf>,
@@ -84,6 +126,8 @@ enum Cmd {
     /// each with its image offset, length and hashes
     Carve {
         image: PathBuf,
+        #[command(flatten)]
+        unlock: Unlock,
         /// One JSON object per line instead of tab-separated text
         #[arg(long)]
         json: bool,
@@ -92,6 +136,8 @@ enum Cmd {
     /// and SHA-256, read from the image
     Files {
         image: PathBuf,
+        #[command(flatten)]
+        unlock: Unlock,
         /// One JSON object per line instead of tab-separated text
         #[arg(long)]
         json: bool,
@@ -510,9 +556,9 @@ async fn main() -> anyhow::Result<()> {
         Cmd::User { cases, cmd } => user_cmd(cases.unwrap_or_else(default_cases), cmd)?,
         Cmd::Hashset { cases, cmd } => hashset_cmd(cases.unwrap_or_else(default_cases), cmd)?,
         Cmd::Purge { cases, confirm } => purge(cases.unwrap_or_else(default_cases), confirm)?,
-        Cmd::Carve { image, json } => {
+        Cmd::Carve { image, json, unlock } => {
             use std::io::{Read, Seek, SeekFrom};
-            let ev = kokino_image::Evidence::open(&image)?;
+            let ev = unlock.open(&image)?;
             eprintln!("{} ({}, {} bytes)", image.display(), ev.format_label(), ev.size);
             let a = kokino_analysis::analyze(&ev, &mut |_, _, _| true)?;
             let c = kokino_analysis::carve::carve(&ev, &a, &mut |_, _, _| true)?;
@@ -547,8 +593,8 @@ async fn main() -> anyhow::Result<()> {
                 eprintln!("{} Internet Explorer records recovered{}", c.records.len(), if c.records_truncated { " (stopped at the limit)" } else { "" });
             }
         }
-        Cmd::Files { image, json, extract } => {
-            let ev = kokino_image::Evidence::open(&image)?;
+        Cmd::Files { image, json, extract, unlock } => {
+            let ev = unlock.open(&image)?;
             eprintln!("{} ({}, {} bytes)", image.display(), ev.format_label(), ev.size);
             let a = kokino_analysis::analyze(&ev, &mut |_, _, _| true)?;
             let fh = kokino_analysis::hashsets::hash_files(&ev, &a, &mut |_, _, _| true)?;
@@ -587,8 +633,8 @@ async fn main() -> anyhow::Result<()> {
             }
             eprintln!("{} files hashed", fh.files.len());
         }
-        Cmd::Analyze { image, json } => {
-            let ev = kokino_image::Evidence::open(&image)?;
+        Cmd::Analyze { image, json, unlock } => {
+            let ev = unlock.open(&image)?;
             eprintln!("{} ({}, {} bytes)", image.display(), ev.format_label(), ev.size);
             let mut last = String::new();
             let a = kokino_analysis::analyze(&ev, &mut |stage, d, t| {

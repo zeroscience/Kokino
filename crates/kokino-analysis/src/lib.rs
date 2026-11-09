@@ -26,7 +26,7 @@ pub mod web;
 pub mod windows;
 
 use antiforensics::{Indicator, Score};
-use kokino_image::{detect_volumes, BlockCache, Evidence, FsKind, SubReader, Volume};
+use kokino_image::{detect_volumes, BlockCache, Evidence, FsKind, Volume};
 use fs::Fs;
 use kokino_ntfs::{FsEntry, NtfsVolumeInfo, UnreadableRecord};
 use serde::{Deserialize, Serialize};
@@ -110,7 +110,9 @@ pub type Progress<'a> = &'a mut dyn FnMut(&str, u64, u64) -> bool;
 pub fn analyze(ev: &Evidence, progress: Progress) -> anyhow::Result<Analysis> {
     let mut r = BlockCache::new(ev.reader()?)?;
     progress("Detecting volumes", 0, 1);
-    let volumes = detect_volumes(&mut r, ev.size);
+    let mut volumes = detect_volumes(&mut r, ev.size);
+    let unlocked = kokino_image::unlocked_volumes(ev, &volumes);
+    volumes.extend(unlocked);
     let mut filesystems = vec![];
     let mut errors = vec![];
     // Remarks about the virtual disk itself (unreplayed VHDX log, a parent
@@ -131,6 +133,12 @@ pub fn analyze(ev: &Evidence, progress: Progress) -> anyhow::Result<Analysis> {
         }
     }
     for v in volumes.iter().filter(|v| !fs::supported(v.fs) && v.fs != FsKind::Unknown) {
+        if v.fs == FsKind::BitLocker {
+            if !volumes.iter().any(|u| u.bitlocker.as_ref().is_some_and(|b| b.of_volume == v.index)) {
+                errors.push(format!("Volume {} is encrypted with BitLocker: unlock it with its password or recovery password to read it", v.index));
+            }
+            continue;
+        }
         errors.push(format!("Volume {} ({}) detected; parser not available yet", v.index, v.fs_label));
     }
     if let Some(info) = ev.ewf_info() {
@@ -159,8 +167,8 @@ pub fn analyze(ev: &Evidence, progress: Progress) -> anyhow::Result<Analysis> {
     })
 }
 
-pub fn volume_reader(ev: &Evidence, v: &Volume) -> anyhow::Result<BlockCache<SubReader<kokino_image::EvidenceReader>>> {
-    Ok(BlockCache::new(SubReader::new(ev.reader()?, v.start, v.length))?)
+pub fn volume_reader(ev: &Evidence, v: &Volume) -> anyhow::Result<BlockCache<kokino_image::VolReader>> {
+    Ok(BlockCache::new(kokino_image::volume_reader(ev, v)?)?)
 }
 
 fn analyze_fs(ev: &Evidence, v: &Volume, progress: Progress) -> anyhow::Result<FsAnalysis> {

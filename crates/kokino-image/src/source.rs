@@ -54,6 +54,8 @@ pub struct Evidence {
     parts: Vec<Part>,
     ewf: Option<Arc<EwfImage>>,
     vdisk: Option<Arc<VDisk>>,
+    /// BitLocker keys known for volumes of this evidence, by volume start.
+    bitlocker: Vec<(u64, crate::bde::Key)>,
 }
 
 impl Evidence {
@@ -72,16 +74,16 @@ impl Evidence {
             // Any segment opens the whole set; the evidence is named by its first segment.
             let first = crate::ewf::segment_path(&path, 1).unwrap_or(path);
             let img = Arc::new(EwfImage::open(&first)?);
-            return Ok(Evidence { size: img.size(), path: first, format: ImageFormat::Ewf, parts: vec![], ewf: Some(img), vdisk: None });
+            return Ok(Evidence { size: img.size(), path: first, format: ImageFormat::Ewf, parts: vec![], ewf: Some(img), vdisk: None, bitlocker: vec![] });
         }
         if let Some(v) = crate::vdisk::open(&path)? {
             let v = Arc::new(v);
-            return Ok(Evidence { size: v.size, path, format: ImageFormat::Virtual, parts: vec![], ewf: None, vdisk: Some(v) });
+            return Ok(Evidence { size: v.size, path, format: ImageFormat::Virtual, parts: vec![], ewf: None, vdisk: Some(v), bitlocker: vec![] });
         }
 
         if let Some(parts) = split_parts(&path)? {
             let size = parts.iter().map(|p| p.len).sum();
-            return Ok(Evidence { path, format: ImageFormat::SplitRaw, size, parts, ewf: None, vdisk: None });
+            return Ok(Evidence { path, format: ImageFormat::SplitRaw, size, parts, ewf: None, vdisk: None, bitlocker: vec![] });
         }
 
         if len >= 512 {
@@ -91,12 +93,24 @@ impl Evidence {
             if &footer[..8] == b"conectix" {
                 // Dynamic and differencing VHDs were opened above.
                 let parts = vec![Part { path: path.clone(), start: 0, len: len - 512 }];
-                return Ok(Evidence { path, format: ImageFormat::VhdFixed, size: len - 512, parts, ewf: None, vdisk: None });
+                return Ok(Evidence { path, format: ImageFormat::VhdFixed, size: len - 512, parts, ewf: None, vdisk: None, bitlocker: vec![] });
             }
         }
 
         let parts = vec![Part { path: path.clone(), start: 0, len }];
-        Ok(Evidence { path, format: ImageFormat::Raw, size: len, parts, ewf: None, vdisk: None })
+        Ok(Evidence { path, format: ImageFormat::Raw, size: len, parts, ewf: None, vdisk: None, bitlocker: vec![] })
+    }
+
+    /// Adds the key for the BitLocker volume starting at byte `start`.
+    pub fn with_bitlocker_key(mut self, start: u64, key: crate::bde::Key) -> Evidence {
+        self.bitlocker.retain(|(s, _)| *s != start);
+        self.bitlocker.push((start, key));
+        self
+    }
+
+    /// The key given for the BitLocker volume starting at byte `start`.
+    pub fn bitlocker_key(&self, start: u64) -> Option<&crate::bde::Key> {
+        self.bitlocker.iter().find(|(s, _)| *s == start).map(|(_, k)| k)
     }
 
     pub fn reader(&self) -> io::Result<EvidenceReader> {

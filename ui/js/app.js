@@ -578,7 +578,7 @@ async function workspace(cid, eid, tab, q) {
   if (tab === "photo") return photoViewer(ctx);
   if (tab === "hashes") return hashesTab(ctx);
   if (!ctx.fs) {
-    return render(h("div.card.stack", h("h2", "No supported filesystem found"), h("p.muted", "Kokino parses NTFS, FAT12/16/32, exFAT, ext2/3/4, ISO 9660, UDF, HFS+ and APFS. Detected volumes:"), volumeMap(s), ...s.errors.map((e) => h("p", e)), h("a.btn", { href: `#/c/${cid}/e/${eid}/hex` }, "Open in hex")));
+    return render(h("div.card.stack", h("h2", "No supported filesystem found"), h("p.muted", "Kokino parses NTFS, FAT12/16/32, exFAT, ext2/3/4, ISO 9660, UDF, HFS+ and APFS. Detected volumes:"), volumeMap(s), ...s.errors.map((e) => h("p", e)), bitlockerCard(ctx), h("a.btn", { href: `#/c/${cid}/e/${eid}/hex` }, "Open in hex")));
   }
   if (tab === "explorer") return explorerTab(ctx);
   if (tab === "timeline") return timelineTab(ctx);
@@ -608,7 +608,17 @@ const FS_COLORS = { ntfs: "linear-gradient(135deg,var(--accent),var(--accent2))"
 
 function volumeMap(s) {
   const total = s.image_size || 1;
-  return h("div.volmap", s.volumes.map((v, i) => h("div", { style: { "--i": i, color: v.kind === "unallocated" ? "var(--muted)" : v.supported ? "var(--accent-ink)" : null, flex: `${Math.max(v.length / total, 0.02)}`, background: v.kind === "unallocated" ? "repeating-linear-gradient(45deg,var(--bg2) 0 6px,color-mix(in srgb,var(--muted) 22%,var(--bg2)) 6px 12px)" : v.supported ? FS_COLORS.ntfs : FS_COLORS[v.fs] || FS_COLORS.unknown }, title: `${v.description}, ${v.fs_label}, offset ${v.start}, ${bytes(v.length)}` }, v.length / total > 0.08 ? `${v.kind === "unallocated" ? "Unallocated" : v.fs_label} ${bytes(v.length)}` : "")));
+  // Shadow copies and decrypted volumes take no space of their own: the
+  // volume they come from says so in its label.
+  const views = s.volumes.filter((v) => v.shadow || v.bitlocker);
+  const vols = s.volumes.filter((v) => !v.shadow && !v.bitlocker).map((v) => {
+    const u = views.find((x) => x.bitlocker && x.bitlocker.of_volume === v.index);
+    const n = views.filter((x) => x.shadow && x.shadow.of_volume === v.index).length;
+    if (u) return { ...v, supported: u.supported, fs_label: `BitLocker, unlocked: ${u.fs_label.replace(" (BitLocker, unlocked)", "")}` };
+    if (n) return { ...v, fs_label: `${v.fs_label} + ${n} shadow cop${n === 1 ? "y" : "ies"}` };
+    return v;
+  });
+  return h("div.volmap", vols.map((v, i) => h("div", { style: { "--i": i, color: v.kind === "unallocated" ? "var(--muted)" : v.supported ? "var(--accent-ink)" : null, flex: `${Math.max(v.length / total, 0.02)}`, background: v.kind === "unallocated" ? "repeating-linear-gradient(45deg,var(--bg2) 0 6px,color-mix(in srgb,var(--muted) 22%,var(--bg2)) 6px 12px)" : v.supported ? FS_COLORS.ntfs : FS_COLORS[v.fs] || FS_COLORS.unknown }, title: `${v.description}, ${v.fs_label}, offset ${v.start}, ${bytes(v.length)}` }, v.length / total > 0.08 ? `${v.kind === "unallocated" ? "Unallocated" : v.fs_label} ${bytes(v.length)}` : "")));
 }
 
 function gauge(likelihood, band) {
@@ -713,8 +723,46 @@ function summaryTab(ctx) {
     fs.unreadable.length ? h("div.card", h("h3", `Unreadable MFT records (${fs.unreadable.length})`), h("p.muted", "Valid record slots Kokino could not parse. Inspect them in the hex view."),
       h("div.kv", fs.unreadable.slice(0, 50).map((u) => [h("span", "Record " + u.record), h("code", u.reason)]))) : null,
     s.errors.length ? h("div.card", h("h3", "Limitations"), h("ul", s.errors.map((e) => h("li", e)))) : null,
+    bitlockerCard(ctx),
     nestedCard(ctx),
   ));
+}
+
+// BitLocker volumes on the evidence: protectors, drive label, and unlocking
+// with a password or recovery password (the volume key is kept with the case).
+function bitlockerCard(ctx) {
+  const box = h("div");
+  api(`/cases/${ctx.cid}/evidence/${ctx.eid}/bitlocker`, { quiet: true }).then((r) => {
+    if (!r.items.length) return;
+    const form = (v) => {
+      const kind = h("select", h("option", { value: "password" }, "Password"), h("option", { value: "recovery" }, "Recovery password (48 digits)"));
+      const secret = h("input", { type: "password", autocomplete: "off", placeholder: "Password", style: { flex: 1, minWidth: "220px" } });
+      kind.addEventListener("change", () => { secret.type = kind.value === "recovery" ? "text" : "password"; secret.placeholder = kind.value === "recovery" ? "000000-000000-000000-000000-000000-000000-000000-000000" : "Password"; });
+      const btn = h("button", "Unlock");
+      const go1 = () => {
+        if (!secret.value) return;
+        btn.disabled = true;
+        const body = kind.value === "recovery" ? { recovery_password: secret.value } : { password: secret.value };
+        api(`/cases/${ctx.cid}/evidence/${ctx.eid}/bitlocker/${v.volume}/unlock`, { method: "POST", body })
+          .then((j) => { secret.value = ""; toast(`Volume ${v.volume} unlocked (${j.unlocked.method}); analyzing it again`); kickJobs(j.job); route(); })
+          .catch((e) => { btn.disabled = false; toast(e.message, true); });
+      };
+      btn.onclick = go1;
+      secret.addEventListener("keydown", (e) => { if (e.key === "Enter") go1(); });
+      return h("div.row.wrap", { style: { gap: "8px", marginTop: "8px" } }, kind, secret, btn);
+    };
+    box.replaceChildren(h("div.card.stack", h("h3", `BitLocker (${r.items.length})`),
+      h("p.muted", { style: { margin: 0 } }, "Encrypted volumes. Unlocking keeps the volume key with the case (not the password), records it in the audit log and analyzes the evidence again; the decrypted volume is added as a volume of its own. Failed attempts are recorded too."),
+      ...r.items.map((v) => h("div.card.flat",
+        h("div.row.wrap", h("b", `Volume ${v.volume}`), v.method ? h("span.pill", v.method) : null, v.to_go ? h("span.pill.info", "BitLocker To Go") : null,
+          v.unlocked ? h("span.pill.ok", `unlocked (${v.unlocked.toLowerCase()})`) : h("span.pill.bad", "locked")),
+        v.error ? h("p.muted", v.error) : h("div.kv", { style: { marginTop: "8px" } },
+          h("span", "Drive label"), h("span", v.description || ""), h("span", "Encrypted"), h("span", v.created ? ts(v.created, 19) : ""),
+          h("span", "Volume ID"), h("code", v.volume_id || ""),
+          h("span", "Protectors"), h("span", v.protectors.map((p) => h("div", h("b", p.kind), " ", h("code", p.id), p.modified ? h("span.muted", `, changed ${ts(p.modified, 19)}`) : null)))),
+        !v.unlocked && !v.error && canWrite() ? form(v) : null))));
+  }).catch(() => {});
+  return box;
 }
 
 // Disk images stored on this volume, each extractable as evidence of its own.

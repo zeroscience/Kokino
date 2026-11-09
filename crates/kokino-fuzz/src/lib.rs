@@ -31,6 +31,8 @@ pub const TARGETS: &[Target] = &[
     Target { name: "task", run: task, seeds: &["tests/fixtures/win/Windows_System32_Tasks_Updater Check", "tests/fixtures/win/Windows_System32_Tasks_Microsoft_Windows_WinUpdate_Sync", "tests/fixtures/win/Windows_System32_Tasks_Microsoft_Windows_Defrag_ScheduledDefrag", "tests/fixtures/win/Windows_System32_config_SOFTWARE"] },
     Target { name: "evt", run: evt, seeds: &["crates/kokino-fuzz/seeds/evt"] },
     Target { name: "mail", run: mail, seeds: &["crates/kokino-fuzz/seeds/mail"] },
+    Target { name: "bde", run: bde, seeds: &["crates/kokino-fuzz/seeds/bde"] },
+    Target { name: "vss", run: vss, seeds: &["crates/kokino-fuzz/seeds/vss"] },
     Target { name: "zip", run: zipfs, seeds: &["crates/kokino-fuzz/seeds/zip", "tests/fixtures/iso-rr-joliet.iso"] },
     Target { name: "reglog", run: reglog, seeds: &["tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_UsrClass.dat.LOG1", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_UsrClass.dat"] },
     Target { name: "iecache", run: iecache, seeds: &["tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_History_History.IE5_MSHist012025031020250311_index.dat", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_History_History.IE5_index.dat", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_Temporary Internet Files_Content.IE5_index.dat", "tests/fixtures/win/Users_alice_AppData_Roaming_Microsoft_Windows_IEDownloadHistory_index.dat"] },
@@ -297,6 +299,45 @@ fn task(d: &[u8]) {
     let _ = kokino_artifacts::task::dynamic_info(d);
     // A SOFTWARE hive: TaskCache joined with no task files.
     kokino_analysis::windows::fuzz_tasks(d);
+}
+
+/// Volume Shadow Copies: the catalog, block lists (full, overlay,
+/// forwarder) and snapshot reads across the stores.
+fn bde(d: &[u8]) {
+    use kokino_image::bde;
+    use std::io::{Read, Seek, SeekFrom};
+    let len = d.len() as u64;
+    let mut c = std::io::Cursor::new(d);
+    let _ = kokino_image::volume::detect_fs(&mut c, 0);
+    let Ok(info) = bde::info(&mut c, len) else { return };
+    let _ = bde::unlock(&info, &bde::Secret::ClearKey);
+    let _ = bde::unlock(&info, &bde::Secret::RecoveryPassword("1-2"));
+    // The reader with a key of every method (stretching is too slow to fuzz).
+    for (m, f, t) in [(0x8000u32, 16usize, 16usize), (0x8003, 32, 0), (0x8005, 64, 0)] {
+        let key = bde::Key { method: m, fvek: "ab".repeat(f), tweak: "cd".repeat(t), protector: String::new() };
+        if let Ok(mut r) = bde::BdeReader::new(std::io::Cursor::new(d), len, &key) {
+            let mut b = vec![0u8; 4096];
+            for at in [0u64, 300, 0x8000, 0x14000, len.saturating_sub(700)] {
+                let _ = r.seek(SeekFrom::Start(at));
+                let _ = r.read(&mut b);
+            }
+        }
+    }
+}
+
+fn vss(d: &[u8]) {
+    use std::io::{Read, Seek, SeekFrom};
+    let len = d.len() as u64;
+    let stores = kokino_image::vss::stores(&mut std::io::Cursor::new(d), len);
+    for s in stores.iter().take(4) {
+        if let Ok(mut r) = kokino_image::vss::ShadowReader::new(std::io::Cursor::new(d), len, s.index) {
+            let mut b = vec![0u8; 0x4000];
+            for at in [0u64, 0x10000, 0x14000, 0x18000, len.saturating_sub(100)] {
+                let _ = r.seek(SeekFrom::Start(at));
+                let _ = r.read(&mut b);
+            }
+        }
+    }
 }
 
 /// A ZIP read as a file system (triage collections): the directory, ZIP64,

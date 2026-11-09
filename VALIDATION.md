@@ -369,6 +369,48 @@ The new-format checksums turned out to be the whole 64-bit Marvin32
 state, not the usual 32-bit result; the first version of the reader
 rejected every real log entry until that was fixed.
 
+## Volume Shadow Copies: dfvfs test image (unreleased)
+
+The dfvfs project (log2timeline, Apache-2.0) publishes `vss.raw`, an NTFS
+volume of 82,771,968 bytes with two shadow copies, made by writing files
+between snapshots, and the expected results in its tests. Used here as
+local test data only, not included in Kokino.
+
+| | dfvfs | Kokino |
+|---|---|---|
+| Store 1 | de81cc22-aa8b-11eb-9339-8cdcd4557abc, 2021-05-01 17:40:03 | Same ID and time; volume 1, "Shadow copy 1 of volume 0" |
+| Store 2 | de81cc2b-aa8b-11eb-9339-8cdcd4557abc, 2021-05-01 17:41:28 | Same ID and time; volume 2, "Shadow copy 2 of volume 0" |
+| Snapshot 1 | taken before `vss1` was written | 38 entries; neither `/vss1` nor `/vss2` |
+| Snapshot 2 | taken after `vss1`, before `vss2` | 40 entries; `/vss1` (7 bytes), no `/vss2` |
+| Live volume | both files written | 41 entries; `/vss1` and `/vss2` |
+
+Each rebuilt snapshot parses as a complete NTFS volume (boot sector, MFT,
+folder indexes), which a wrong block in the store map would break. The
+synthetic test in `crates/kokino-image/src/vss.rs` covers the cases this
+image does not: overlay blocks (single sectors copied), forwarded blocks and
+blocks taken from a later store.
+
+## BitLocker To Go: dfvfs test image (unreleased)
+
+dfvfs' `bdetogo.raw` (Apache-2.0, local test data only) is a 64 MiB
+removable drive encrypted with BitLocker To Go on Windows 7, password
+`bde-TEST` (published with the image).
+
+| Check | Kokino |
+|---|---|
+| Metadata | AES-128-CBC with Elephant diffuser; drive label "TESTBOX1 H: 6/2/2014"; a password and a recovery password protector; all three metadata blocks found |
+| Wrong password | Refused (the AES-CCM tag of the volume master key does not match) |
+| Password | Opens the volume master key, then the volume key; the decrypted boot sector is a FAT16 boot record |
+| Files | 10 files with content, among them `/passwords.txt`, `/a_directory/a_file` and `/a_directory/another_file`, whose text is what dfvfs' tests expect; BitLocker's own reserved files under System Volume Information read as zeros |
+
+This image exercises the diffuser and the relocated boot sectors. AES-XTS
+(Windows 10's default) and plain CBC are covered by a synthetic volume in
+`crates/kokino-image/src/bde.rs` (made and read back byte for byte) and by
+the IEEE 1619 XTS test vector; a real Windows 10 volume has not been
+checked yet. No recovery password was available for this image, so
+unlocking with one is checked only by unit tests (the 48-digit format and
+its key) and the shared key path the password also takes.
+
 ## Deleted registry keys: the Digital Detective hives (1.2.9)
 
 The SOFTWARE and SYSTEM hives in Digital Detective's practice files (a

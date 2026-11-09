@@ -53,6 +53,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/by-record/{rec}", get(by_record))
         .route("/cases/{cid}/evidence", post(add_evidence))
         .route("/cases/{cid}/evidence/{eid}/ingest", post(reingest))
+        .route("/cases/{cid}/evidence/{eid}/bitlocker", get(bitlocker_list))
+        .route("/cases/{cid}/evidence/{eid}/bitlocker/{vi}/unlock", post(bitlocker_unlock))
         .route("/cases/{cid}/evidence/{eid}/summary", get(summary))
         .route("/cases/{cid}/evidence/{eid}/report", get(report))
         .route("/cases/{cid}/evidence/{eid}/hex", get(hex))
@@ -478,6 +480,87 @@ async fn reingest(State(st): St, Extension(me): Me, Path((cid, eid)): Path<(Stri
     Ok(Json(json!(view)))
 }
 
+/// BitLocker volumes on the evidence: what their metadata says (method,
+/// protectors, drive label) and whether Kokino can read them.
+async fn bitlocker_list(State(st): St, Path((cid, eid)): Path<(String, String)>) -> R {
+    Ok(Json(tokio::task::spawn_blocking(move || -> anyhow::Result<Value> {
+        use kokino_image::bde;
+        let case = st.case(&cid)?;
+        let rec = case.evidence_by_id(&eid)?;
+        let ev = crate::state::open_evidence(&case, &rec)?;
+        let vols = kokino_image::detect_volumes(&mut ev.reader()?, ev.size);
+        let mut out = vec![];
+        for v in vols.iter().filter(|v| v.fs == kokino_image::FsKind::BitLocker && !v.is_virtual()) {
+            let info = bde::info(&mut kokino_image::SubReader::new(ev.reader()?, v.start, v.length), v.length);
+            let unlocked = match (&info, ev.bitlocker_key(v.start)) {
+                (_, Some(k)) => Some(k.protector.clone()),
+                (Ok(i), None) => bde::unlock(i, &bde::Secret::ClearKey).ok().map(|k| k.protector),
+                _ => None,
+            };
+            let ft = |t: u64| if t > 0 { filetime_to_iso(t) } else { String::new() };
+            let item = match &info {
+                Ok(i) => json!({"volume": v.index, "start": v.start, "length": v.length, "to_go": i.to_go, "method": i.method_label, "volume_id": i.volume_id,
+                    "created": ft(i.created), "description": i.description, "encrypted_size": i.encrypted_size,
+                    "protectors": i.protectors.iter().map(|p| json!({"kind": p.kind, "id": p.id, "modified": ft(p.modified)})).collect::<Vec<_>>(),
+                    "unlocked": unlocked}),
+                Err(e) => json!({"volume": v.index, "start": v.start, "length": v.length, "error": e.to_string(), "protectors": [], "unlocked": null}),
+            };
+            out.push(item);
+        }
+        Ok(json!({"items": out}))
+    })
+    .await??))
+}
+
+#[derive(Deserialize)]
+struct UnlockB {
+    password: Option<String>,
+    recovery_password: Option<String>,
+}
+
+/// Unlocks a BitLocker volume with its password or recovery password, keeps
+/// the volume key with the case (not the secret), records it in the audit log
+/// and analyzes the evidence again. Failed attempts are recorded too.
+async fn bitlocker_unlock(State(st): St, Extension(me): Me, Path((cid, eid, vi)): Path<(String, String, usize)>, Json(b): Json<UnlockB>) -> R {
+    let (st2, user, cid2, eid2) = (st.clone(), me.username.clone(), cid.clone(), eid.clone());
+    let done = tokio::task::spawn_blocking(move || -> anyhow::Result<Value> {
+        use kokino_image::bde;
+        let case = st2.case(&cid2)?;
+        let rec = case.evidence_by_id(&eid2)?;
+        let ev = Evidence::open(&rec.path)?;
+        let vols = kokino_image::detect_volumes(&mut ev.reader()?, ev.size);
+        let v = vols.iter().find(|v| v.index == vi && v.fs == kokino_image::FsKind::BitLocker && !v.is_virtual()).ok_or_else(|| anyhow::anyhow!("volume {} is not a BitLocker volume", vi))?;
+        let info = bde::info(&mut kokino_image::SubReader::new(ev.reader()?, v.start, v.length), v.length)?;
+        let pw = b.password.as_deref().filter(|s| !s.is_empty());
+        let rp = b.recovery_password.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let secret = match (pw, rp) {
+            (Some(p), _) => bde::Secret::Password(p),
+            (None, Some(r)) => bde::Secret::RecoveryPassword(r),
+            _ => anyhow::bail!("give the password or the recovery password"),
+        };
+        let kind = if pw.is_some() { "Password" } else { "Recovery password" };
+        match bde::unlock(&info, &secret) {
+            Err(e) => {
+                case.audit.append(&user, "evidence.unlock_failed", json!({"evidence": eid2, "volume": vi, "start": v.start, "protector": kind, "reason": e}))?;
+                anyhow::bail!("{}", e)
+            }
+            Ok(k) => {
+                let mut keys = crate::state::stored_keys(&case, &eid2);
+                keys.retain(|s| s.volume_start != v.start);
+                keys.push(crate::state::StoredKey { volume_start: v.start, key: k.clone(), by: user.clone(), at: now_iso() });
+                crate::state::save_keys(&case, &eid2, &keys)?;
+                case.audit.append(&user, "evidence.unlock", json!({"evidence": eid2, "volume": vi, "start": v.start, "protector": k.protector, "method": bde::method_label(k.method), "volume_id": info.volume_id}))?;
+                Ok(json!({"volume": vi, "protector": k.protector, "method": bde::method_label(k.method)}))
+            }
+        }
+    })
+    .await??;
+    st.invalidate(&cid, &eid);
+    let job = jobs::spawn_ingest(st.clone(), &me.username, cid, eid, false, true);
+    let view = job.view.lock().unwrap().clone();
+    Ok(Json(json!({"unlocked": done, "job": view})))
+}
+
 /// Jobs on cases the user can see.
 async fn list_jobs(State(st): St, Extension(me): Me) -> R {
     let mut v: Vec<JobView> = st.jobs.lock().unwrap().values().map(|j| j.view.lock().unwrap().clone()).collect();
@@ -637,6 +720,9 @@ async fn file_detail(State(st): St, Path((cid, eid, fi, idx)): Path<(String, Str
         Some(json!({"md5": x.hashes.md5, "sha1": x.hashes.sha1, "sha256": x.hashes.sha256, "error": x.error, "hashed_at": h.fh.hashed_at, "sets": set_hits(h, i)}))
     });
     let vol = f.volume.start;
+    // A shadow copy (rebuilt from blocks all over the volume) or a decrypted
+    // volume: no image offsets.
+    let shadow = f.volume.is_virtual();
     let indicators: Vec<Value> = f
         .indicators
         .iter()
@@ -662,7 +748,7 @@ async fn file_detail(State(st): St, Path((cid, eid, fi, idx)): Path<(String, Str
         .e
         .streams
         .iter()
-        .map(|s| json!({"name": s.name, "size": s.size, "resident": s.resident, "image_offset": s.first_offset.map(|o| o + vol)}))
+        .map(|s| json!({"name": s.name, "size": s.size, "resident": s.resident, "image_offset": s.first_offset.filter(|_| !shadow).map(|o| o + vol)}))
         .collect();
     Ok(Json(json!({
         "row": row(idx, r, &l, fi, &hs),
@@ -672,9 +758,9 @@ async fn file_detail(State(st): St, Path((cid, eid, fi, idx)): Path<(String, Str
         "attribute_names": attr_names(r.e.attributes), "hard_links": r.e.hard_links, "usn": r.e.usn,
         "reparse": r.e.has_reparse, "uniform": r.uniform, "ads_sig": r.ads_sig, "error": r.e.error,
         "si": times_json(r.e.si), "fn": times_json(r.e.fname),
-        "record_image_offset": if r.e.name_only.is_some() && r.e.record_offset == 0 { None } else { Some(r.e.record_offset + vol) },
+        "record_image_offset": if shadow || (r.e.name_only.is_some() && r.e.record_offset == 0) { None } else { Some(r.e.record_offset + vol) },
         "name_only": r.e.name_only, "journal": journal,
-        "data_image_offset": r.e.data_offset().map(|o| o + vol),
+        "data_image_offset": r.e.data_offset().filter(|_| !shadow).map(|o| o + vol),
         "streams": streams, "indicators": indicators, "events": events, "hashes": hashes,
         "unix": r.e.unix.as_ref().map(|u| json!({
             "inode": u.inode, "mode": format!("{:o}", u.mode), "mode_string": u.mode_string(), "uid": u.uid, "gid": u.gid,
