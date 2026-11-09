@@ -13,6 +13,7 @@ pub mod carve;
 pub mod doctext;
 pub mod mail;
 pub mod nested;
+pub mod pst;
 pub mod tarfs;
 pub mod zipfs;
 pub mod oletext;
@@ -214,7 +215,27 @@ fn analyze_fs(ev: &Evidence, v: &Volume, progress: Progress) -> anyhow::Result<F
     let now = kokino_core::time::datetime_to_filetime(chrono::Utc::now());
     let indicators = antiforensics::evaluate(&mut files, now, &web, &windows, &linux, !fs.is_ntfs());
     let score = antiforensics::score(&indicators);
-    let mut stats = stats::compute(&files, &indicators, &score, now);
+    let mut stats = match &root {
+        // A collection: user profiles and the system are found at the
+        // paths they had on the collected drive.
+        Some(p) => {
+            let mapped: Vec<FileRow> = files.iter().map(|f| {
+                let mut g = f.clone();
+                if g.e.path.len() > p.len() && g.e.path[..p.len()].eq_ignore_ascii_case(p) && g.e.path.as_bytes()[p.len()] == b'/' {
+                    g.e.path = g.e.path[p.len()..].to_string();
+                }
+                g
+            }).collect();
+            let mut s = stats::compute(&mapped, &indicators, &score, now);
+            if s.os.is_none() {
+                if let Some(first) = s.impact.first_mut() {
+                    *first = format!("A triage collection: files collected from a computer, not a whole volume{}.", if s.users.is_empty() { String::new() } else { format!("; user profiles: {}", s.users.join(", ")) });
+                }
+            }
+            s
+        }
+        None => stats::compute(&files, &indicators, &score, now),
+    };
     if !scan.unreadable.is_empty() {
         stats.impact.push(format!(
             "{} MFT record(s) could not be parsed (corrupt, partially wiped or split across clusters) and are listed separately.",
@@ -741,6 +762,37 @@ mod tests {
         let pw = fs.files.iter().find(|f| f.e.path == "/[root]/etc/passwd").unwrap();
         assert_eq!(pw.e.unix.as_ref().unwrap().mode_string(), "-rw-r--r--");
         assert!(fs.files.iter().any(|f| f.e.path == "/live_response/system/uname_-a.txt"));
+    }
+
+    /// An Outlook PST on a volume (here in a tar collection): every message
+    /// with its folder, on the timeline, and in the text index.
+    #[test]
+    fn outlook_pst_mailbox() {
+        let pst = crate::pst::tests::sample();
+        let t = crate::tarfs::tests::tar(&[("Users/alice/Documents/Outlook Files/alice.pst", b'0', &pst, "")]);
+        let dir = std::env::temp_dir().join(format!("kokino-pst-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("collection.tar");
+        std::fs::write(&p, &t).unwrap();
+        let ev = Evidence::open(&p).unwrap();
+        let a = analyze(&ev, &mut |_, _, _| true).unwrap();
+        let fs = &a.filesystems[0];
+        let m = &fs.mail;
+        assert_eq!(m.mailboxes.iter().map(|b| (b.kind.as_str(), b.client.as_str(), b.messages)).collect::<Vec<_>>(), [("pst", "Outlook", 3)]);
+        let got: Vec<(&str, &str)> = m.messages.iter().map(|x| (x.subject.as_str(), x.folder.as_str())).collect();
+        assert_eq!(got, [("Q3 numbers \u{2013} confidential", "Top of Personal Folders/Inbox"), ("Lunch", "Top of Personal Folders/Inbox"), ("wipe the laptop", "Top of Personal Folders/Deleted Items")]);
+        assert_eq!(m.messages[0].attachments[0].size, 20_000);
+        assert!(m.messages[1].snippet.contains("Lunch at"));
+        assert!(fs.windows.timeline.iter().any(|t| t.kind == "MAIL" && t.what == "wipe the laptop"));
+        {
+            use crate::textindex::{build, search, Mode, Scope};
+            let out = dir.join("idx.sqlite");
+            build(&ev, &a, None, &out, &mut |_, _, _| true).unwrap();
+            let kw = |q: &str| search(&out, &a, &Mode::Keyword(q.into()), Scope::Files, None, 50, 10_000).unwrap().hits;
+            let h = kw("sdelete on everything");
+            assert!(h.iter().any(|x| x.part.as_deref() == Some("Top of Personal Folders/Deleted Items, message 3")), "{:?}", h);
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

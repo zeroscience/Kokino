@@ -10,6 +10,9 @@
 //! documents. Thunderbird marks a message it deleted with the
 //! `X-Mozilla-Status` flag 0x0008 and keeps it in the file until the folder
 //! is compacted; such messages are listed and marked.
+//!
+//! Outlook PST and OST files (see `pst`) are mailboxes too: each message
+//! is listed with its folder, and read on demand as an RFC 822 message.
 
 use crate::FileRow;
 use serde::{Deserialize, Serialize};
@@ -48,13 +51,16 @@ pub struct Message {
     pub expunged: bool,
     /// The mailbox file itself is deleted.
     pub deleted: bool,
+    /// The folder in a PST or OST ("Top of Personal Folders/Inbox").
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub folder: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Mailbox {
     pub file: u32,
     pub path: String,
-    /// "mbox" or "eml"
+    /// "mbox", "eml", "pst" or "ost"
     pub kind: String,
     /// "Thunderbird", "Linux mail spool" or "".
     pub client: String,
@@ -95,6 +101,9 @@ pub fn classify(path: &str) -> Option<(&'static str, &'static str)> {
     let name = p.rsplit('/').next().unwrap_or("");
     if name.ends_with(".eml") {
         return Some(("eml", ""));
+    }
+    if name.ends_with(".pst") || name.ends_with(".ost") {
+        return Some(("pst", "Outlook"));
     }
     if name.ends_with(".mbox") || name.ends_with(".mbx") {
         return Some(("mbox", if p.contains("/thunderbird/") { "Thunderbird" } else { "" }));
@@ -390,6 +399,16 @@ fn walk(h: &[(String, String)], body: &[u8], out: &mut Parsed, depth: usize, par
         let hh = headers(ih);
         let subj = hh.iter().find(|(k, _)| k.eq_ignore_ascii_case("Subject")).map(|(_, v)| decode_words(v)).unwrap_or_default();
         out.text.push_str(&format!("\n[attached message: {}]\n", subj));
+        if cd.to_ascii_lowercase().starts_with("attachment") {
+            // An attached message is an attachment of its own (exported as
+            // .eml); its text is searched with the message.
+            let mut sub = Parsed::default();
+            walk(&hh, ib, &mut sub, depth + 1, parts);
+            out.text.push_str(sub.text.trim());
+            let name = param(cd, "filename").or_else(|| param(ct, "name")).unwrap_or_else(|| format!("{}.eml", if subj.is_empty() { "message" } else { &subj }));
+            out.attachments.push((Attachment { name, content_type: mime, size: inner.len() as u64 }, inner));
+            return;
+        }
         walk(&hh, ib, out, depth + 1, parts);
         return;
     }
@@ -445,6 +464,7 @@ pub fn summary(raw: &[u8], file: u32, offset: u64, deleted: bool) -> Message {
         snippet,
         expunged: mozilla & 0x0008 != 0,
         deleted,
+        folder: String::new(),
     }
 }
 
@@ -464,6 +484,25 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
         progress("Email", n as u64, total);
         let f = &files[i];
         let mut mb = Mailbox { file: i as u32, path: f.e.path.clone(), kind: kind.into(), client: client.into(), deleted: f.e.deleted, ..Default::default() };
+        if kind == "pst" {
+            // Read in place, block by block: PST files are often large.
+            let left = MAX_MESSAGES.saturating_sub(out.messages.len());
+            match pst_messages(fs, r, f, i as u32, left) {
+                Ok((k, msgs)) => {
+                    mb.kind = k.into();
+                    mb.messages = msgs.len() as u64;
+                    out.messages.extend(msgs);
+                }
+                Err(e) => {
+                    if !crate::pst::is_pst(&fs.read(r, &f.e, "", 0, 16).unwrap_or_default()) {
+                        continue;
+                    }
+                    mb.error = Some(format!("{:#}", e));
+                }
+            }
+            out.mailboxes.push(mb);
+            continue;
+        }
         if f.e.size > MAX_MAILBOX {
             mb.error = Some(format!("{} bytes; larger than the {} byte limit", f.e.size, MAX_MAILBOX));
             out.mailboxes.push(mb);
@@ -490,6 +529,35 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
     progress("Email", total, total);
     out.messages.sort_by_key(|m| m.date);
     out
+}
+
+/// The messages of a PST or OST file, read through the file system.
+fn pst_messages<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, f: &FileRow, file: u32, max: usize) -> anyhow::Result<(&'static str, Vec<Message>)> {
+    let mut p = crate::pst::Pst::open(crate::fs::stream(fs, r, &f.e), f.e.size)?;
+    let folders: std::collections::HashMap<u32, String> = p.folders().into_iter().map(|x| (x.nid, x.path)).collect();
+    let mut out = vec![];
+    for nid in p.message_ids().into_iter().take(max) {
+        let parent = p.nodes.get(&nid).map(|n| n.parent).unwrap_or(0);
+        let Ok((m, _)) = p.message(nid) else { continue };
+        let snippet: String = m.text().split_whitespace().collect::<Vec<_>>().join(" ").chars().take(240).collect();
+        out.push(Message {
+            file,
+            offset: nid as u64,
+            len: 0,
+            date: m.date,
+            from: m.from,
+            to: m.to,
+            cc: m.cc,
+            subject: m.subject,
+            message_id: m.message_id,
+            attachments: m.attachments.iter().map(|a| Attachment { name: if a.embedded && !a.name.to_ascii_lowercase().ends_with(".eml") { format!("{}.eml", a.name) } else { a.name.clone() }, content_type: if a.embedded { "message/rfc822".into() } else { a.mime.clone() }, size: a.size }).collect(),
+            snippet,
+            expunged: false,
+            deleted: f.e.deleted,
+            folder: folders.get(&parent).cloned().unwrap_or_else(|| "(folder not found)".into()),
+        });
+    }
+    Ok((if p.ost { "ost" } else { "pst" }, out))
 }
 
 /// Timeline events (kind MAIL): one per dated message.

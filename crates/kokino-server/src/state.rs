@@ -28,6 +28,8 @@ pub struct Loaded {
     pub fs: Vec<FsIndex>,
     /// Opened file systems by volume index (a FAT is read once, not per request).
     handles: Mutex<HashMap<usize, Arc<Fs>>>,
+    /// Indexes of PST and OST mailboxes by (file system, file), read once.
+    pub pst: Mutex<HashMap<(usize, u32), Arc<kokino_analysis::pst::Pst<()>>>>,
 }
 
 impl Loaded {
@@ -240,7 +242,7 @@ fn index(analysis: Analysis, evidence: Evidence) -> Loaded {
             FsIndex { timeline: timeline::build(files, &fsa.web, &fsa.windows, &fsa.linux.timeline), children }
         })
         .collect();
-    Loaded { analysis, evidence, fs, handles: Mutex::default() }
+    Loaded { analysis, evidence, fs, handles: Mutex::default(), pst: Mutex::default() }
 }
 
 pub fn random_token() -> String {

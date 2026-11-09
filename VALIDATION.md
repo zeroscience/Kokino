@@ -411,6 +411,35 @@ checked yet. No recovery password was available for this image, so
 unlocking with one is checked only by unit tests (the 48-digit format and
 its key) and the shared key path the password also takes.
 
+## Outlook PST and OST: public sample files (unreleased)
+
+Four public files were read (local test data only, not included in
+Kokino): from java-libpst (Apache-2.0) `dist-list.pst` and
+`example-2013.ost`, from the Aspose.Email examples (MIT) `Outlook.pst`, and
+from pst-extractor `enron.pst` (messages from the public Enron data set).
+
+| File | Format | Folders | Messages | Unreadable | Notes |
+|---|---|--:|--:|--:|---|
+| dist-list.pst | Unicode PST, compressible encryption | 18 | 4 | 0 | A distribution list, a contact, free/busy data and an appointment with two attached appointment items, which open as attached messages |
+| Outlook.pst | Unicode PST, compressible encryption | 21 | 17 | 0 | Senders, recipients with addresses, plain text bodies |
+| enron.pst | Unicode PST, compressible encryption | 10 | 71 | 0 | Messages with up to 11 Word attachments each, all of them read back at their stated sizes |
+| example-2013.ost | OST, Outlook 2013 (4 KiB pages, compressed blocks) | 40 | 3 | 0 | Bodies kept only as HTML, shown as text |
+
+For every message, the message rendered as RFC 822 was parsed back and
+gave the same number of attachments as the attachment list. No sample
+uses high (cyclic) encryption or the ANSI format; those paths follow the
+specification and are covered only by the fuzzer. The synthetic PST in
+`crates/kokino-analysis/src/pst.rs` (two-level B-trees, a recipient
+table, an attachment spread over three blocks) is checked byte for byte.
+
+## Folders as evidence (unreleased)
+
+A KAPE collection copied out as files (the contents of
+`collection-kape.zip`) was added as a folder: 28 files packed, the drive
+folder `/C` found, and the same Windows artifacts read as from the ZIP.
+The server test packs a folder, checks each file's SHA-256 in the
+manifest against the original, and analyzes the result.
+
 ## BitLocker carving and startup keys, UAC collections, VHDX logs (unreleased)
 
 These were checked on test images made for them; no public sample of a

@@ -352,6 +352,48 @@ pub struct IndexStats {
 
 /// Builds the index for every analyzed NTFS volume into `out` (written to a
 /// temporary file first and renamed when complete).
+/// The text of every message in a PST or OST, each a part ("Inbox, message
+/// 3"), with document attachments opened like any other content.
+fn pst_text<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, e: &kokino_ntfs::FsEntry) -> crate::doctext::Extracted {
+    let mut x = crate::doctext::Extracted::default();
+    let mut p = match crate::pst::Pst::open(crate::fs::stream(fs, r, e), e.size) {
+        Ok(p) => p,
+        Err(err) => {
+            x.notes.push(format!("PST: {:#}", err));
+            return x;
+        }
+    };
+    let folders: std::collections::HashMap<u32, String> = p.folders().into_iter().map(|f| (f.nid, f.path)).collect();
+    let mut left: usize = 512 << 20;
+    for (k, nid) in p.message_ids().into_iter().enumerate() {
+        if left == 0 {
+            x.notes.push("PST: text limit reached; later messages are not indexed".into());
+            break;
+        }
+        let Ok(eml) = p.eml(nid) else { continue };
+        let folder = p.nodes.get(&nid).and_then(|n| folders.get(&n.parent)).cloned().unwrap_or_default();
+        let label = format!("{}{}message {}", folder, if folder.is_empty() { "" } else { ", " }, k + 1);
+        let m = crate::mail::parse(&eml);
+        let head: Vec<String> = ["Date", "From", "To", "Cc", "Subject"].iter().map(|h| format!("{}: {}", h, crate::mail::decode_words(&m.header(h)))).collect();
+        let mut text = head.join("\n");
+        text.push('\n');
+        text.push_str(&m.text);
+        if !m.attachments.is_empty() {
+            text.push_str(&format!("\nAttachments: {}", m.attachments.iter().map(|(a, _)| a.name.clone()).collect::<Vec<_>>().join(", ")));
+        }
+        left = left.saturating_sub(text.len());
+        x.parts.push(crate::doctext::Part { name: label.clone(), text });
+        for (a, bytes) in m.attachments {
+            let inner = crate::doctext::extract(&bytes);
+            for ip in inner.parts {
+                left = left.saturating_sub(ip.text.len());
+                x.parts.push(crate::doctext::Part { name: format!("{}/{}/{}", label, a.name, ip.name), text: ip.text });
+            }
+        }
+    }
+    x
+}
+
 pub fn build(ev: &Evidence, analysis: &Analysis, carved: Option<&crate::carve::CarveResult>, out: &Path, progress: Progress) -> anyhow::Result<IndexStats> {
     let tmp = out.with_extension("sqlite.part");
     let _ = std::fs::remove_file(&tmp);
@@ -430,12 +472,16 @@ pub fn build(ev: &Evidence, analysis: &Analysis, carved: Option<&crate::carve::C
             }
             ch.flush()?;
             st.chunks += ch.chunks;
-            if read_any && len <= MAX_DOC_BYTES {
+            // Outlook PST and OST: read in place whatever their size, one
+            // message at a time.
+            let pst = read_any && name.is_empty() && crate::pst::is_pst(&fs.read(&mut r, e, "", 0, 16).unwrap_or_default());
+            if read_any && (len <= MAX_DOC_BYTES || pst) {
                 // Mail is recognized by its first header lines, so read a little more.
                 let head = fs.read(&mut r, e, &name, 0, 2048.min(len as usize)).unwrap_or_default();
-                if crate::doctext::detect(&head).is_some() {
-                    if let Ok(data) = fs.read(&mut r, e, &name, 0, len as usize) {
-                        let x = crate::doctext::extract(&data);
+                if pst || crate::doctext::detect(&head).is_some() {
+                    let data = if pst { Ok(vec![]) } else { fs.read(&mut r, e, &name, 0, len as usize) };
+                    if let Ok(data) = data {
+                        let x = if pst { pst_text(&fs, &mut r, e) } else { crate::doctext::extract(&data) };
                         if !x.parts.is_empty() {
                             st.documents += 1;
                         }

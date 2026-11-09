@@ -146,7 +146,7 @@ Legacy event logs, email and journald compression (1.3.0):
 | `journalz` | journald's compressed fields: XZ, LZ4 (Kokino's own decoder) and zstd, from the input and from offsets inside it | 10 min | 45,374,291 | none |
 | `linuxlogs` | again, with a journal holding XZ and LZ4 fields | 10 min | 7,898,202 | none |
 
-Shadow copies, BitLocker, triage collections and VHDX logs (unreleased):
+Shadow copies, BitLocker, triage collections, VHDX logs and Outlook (unreleased):
 
 | Target | What it covers | Rounds | Inputs in all | Distinct problems found |
 |---|---|---|--:|---|
@@ -155,6 +155,7 @@ Shadow copies, BitLocker, triage collections and VHDX logs (unreleased):
 | `bde` | BitLocker volume headers, FVE metadata blocks and entries, key protectors, key unwrapping (clear key, startup key files), and the decrypting reader for every method | 3 x 10 min | 4,459,482 | 1: an integer overflow on a boot sector copy offset near 2^64; fixed |
 | `tar` | tar and tar.gz collections (UAC): headers and checksums, base-256 sizes, GNU long names, PAX records, hard links, reads | 10 min | 4,169,869 | none |
 | `vdisk` | again, with a VHDX whose log holds writes to replay (entries, descriptors, data sectors, the circular log) | 10 min | 36,659 | none |
+| `pst` | Outlook PST and OST: header, node and block B-trees, blocks (decoding, inflating), data and subnode trees, heaps, property and table contexts, folders, messages rendered as RFC 822 and parsed back | 2 x 10 min | 6,797,118 | 2: a crash on dates outside years 0 to 9999, and a read past the end of a one-byte subnode block; fixed |
 
 The first `vss` round ran an optimized build without overflow checks and
 found nothing; the same inputs on the `fuzz` profile (overflow checks on)
@@ -165,7 +166,7 @@ not counted in the inputs; the rounds after the fixes found nothing.
 The `vdisk` target writes each input to a file (virtual disks are opened
 by path), so it runs far fewer inputs than the others.
 
-In all: 591,094,445 inputs over 35 targets, and 34 distinct problems
+In all: 597,891,563 inputs over 36 targets, and 36 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed
@@ -206,6 +207,8 @@ found by fuzzing, all fixed.
 | 32 | Volume Shadow Copies | Integer overflow (2 places) | Fuzzing | A catalog or block list offset near 2^64 plus the block size | Checked arithmetic |
 | 33 | Volume Shadow Copies | Stack overflow | Fuzzing | A catalog listing thousands of stores made the block lookup recurse once per store | The lookup is a loop; at most 512 stores, Windows' own limit |
 | 34 | BitLocker | Integer overflow | Fuzzing | A boot sector copy or metadata offset near 2^64 | Saturating arithmetic |
+| 35 | Outlook PST | Crash (panic in chrono) | Fuzzing | A message time far outside years 0 to 9999 was formatted as an RFC 2822 date | Such dates are left out of the rendered headers |
+| 36 | Outlook PST | Crash (read past the end) | Fuzzing | A subnode block one byte long was read for its level | Short blocks read as empty |
 
 Before the fixes, every one of these could stop or slow an ingest, a carving
 job or a picture scan, or exhaust the examiner's memory, on purpose-made

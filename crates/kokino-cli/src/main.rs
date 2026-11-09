@@ -26,6 +26,17 @@ struct Unlock {
 impl Unlock {
     /// Opens the evidence and unlocks its BitLocker volumes with what was given.
     fn open(&self, image: &std::path::Path) -> anyhow::Result<kokino_image::Evidence> {
+        // A folder (a collection copied out as files): packed into a tar in
+        // the temporary folder, which is then examined.
+        let packed;
+        let image = if image.is_dir() {
+            packed = std::env::temp_dir().join(format!("kokino-folder-{}.tar", std::process::id()));
+            let p = kokino_analysis::tarfs::pack(image, &packed, &mut |_, _| true)?;
+            eprintln!("{}: {} files, {} bytes, packed into {}{}", image.display(), p.files, p.bytes, packed.display(), if p.skipped.is_empty() { String::new() } else { format!(" ({} not readable: {})", p.skipped.len(), p.skipped.join("; ")) });
+            packed.as_path()
+        } else {
+            image
+        };
         let mut ev = kokino_image::Evidence::open(image)?;
         let ask = |v: &str, prompt: &str| -> anyhow::Result<String> { Ok(if v == "-" { rpassword::prompt_password(prompt)? } else { v.to_string() }) };
         let mut secrets = vec![];

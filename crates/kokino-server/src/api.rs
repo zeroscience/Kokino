@@ -417,6 +417,19 @@ struct NewEvidence {
 
 async fn add_evidence(State(st): St, Extension(me): Me, Path(cid): Path<String>, Json(b): Json<NewEvidence>) -> R {
     let c = st.case(&cid)?;
+    // A folder (a triage collection copied out as files) is packed into the case first.
+    let dir = std::path::Path::new(b.path.trim());
+    if dir.is_dir() {
+        let abs = std::fs::canonicalize(dir).unwrap_or(dir.to_path_buf());
+        let abs = std::path::PathBuf::from(abs.display().to_string().trim_start_matches(r"\\?\").to_string());
+        if inside_cases_dir(&st.root, &abs) {
+            return Err(anyhow::anyhow!("folders in the cases directory cannot be added as evidence").into());
+        }
+        let name = b.name.filter(|n| !n.trim().is_empty()).unwrap_or_else(|| abs.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "folder".into()));
+        let job = jobs::spawn_pack(st.clone(), &me.username, cid, abs, name, b.notes.unwrap_or_default());
+        let view = job.view.lock().unwrap().clone();
+        return Ok(Json(json!({"record": null, "job": view, "folder": true})));
+    }
     let ev = Evidence::open(b.path.trim())?;
     let abs = std::fs::canonicalize(&ev.path).unwrap_or(ev.path.clone());
     let abs = abs.display().to_string().trim_start_matches(r"\\?\").to_string();
@@ -1174,7 +1187,7 @@ async fn mail_list(State(st): St, Path((cid, eid, fi)): Path<(String, String, us
         .iter()
         .enumerate()
         .filter(|(_, x)| q.mailbox.is_none_or(|b| b == x.file))
-        .filter(|(_, x)| needle.is_empty() || format!("{} {} {} {} {} {}", x.from, x.to, x.cc, x.subject, x.snippet, x.attachments.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(" ")).to_lowercase().contains(&needle))
+        .filter(|(_, x)| needle.is_empty() || format!("{} {} {} {} {} {} {}", x.from, x.to, x.cc, x.subject, x.snippet, x.folder, x.attachments.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(" ")).to_lowercase().contains(&needle))
         .collect();
     let off = q.offset.unwrap_or(0);
     let lim = q.limit.unwrap_or(300).min(3000);
@@ -1186,6 +1199,23 @@ fn mail_raw(l: &Loaded, fi: usize, n: usize) -> anyhow::Result<(kokino_analysis:
     let f = l.analysis.filesystems.get(fi).ok_or_else(|| anyhow::anyhow!("no such file system"))?;
     let m = f.mail.messages.get(n).ok_or_else(|| anyhow::anyhow!("no such message"))?.clone();
     let e = &f.files.get(m.file as usize).ok_or_else(|| anyhow::anyhow!("mailbox file missing"))?.e;
+    let kind = f.mail.mailboxes.iter().find(|b| b.file == m.file).map(|b| b.kind.as_str()).unwrap_or("mbox");
+    if kind == "pst" || kind == "ost" {
+        // The PST's indexes are read once and kept with the loaded evidence.
+        let key = (fi, m.file);
+        let cached = l.pst.lock().unwrap().get(&key).cloned();
+        let read = |off: u64, len: usize| l.read_file(fi, e, "", off, len).map_err(|x| std::io::Error::other(format!("{:#}", x)));
+        let base = match cached {
+            Some(p) => p,
+            None => {
+                let p = std::sync::Arc::new(kokino_analysis::pst::Pst::open(kokino_analysis::fs::ReadAt::new(e.size, read), e.size)?.with_reader(()));
+                l.pst.lock().unwrap().insert(key, p.clone());
+                p
+            }
+        };
+        let raw = base.with_reader(kokino_analysis::fs::ReadAt::new(e.size, read)).eml(m.offset as u32)?;
+        return Ok((m, raw));
+    }
     let raw = l.read_file(fi, e, "", m.offset, m.len as usize)?;
     Ok((m, raw))
 }

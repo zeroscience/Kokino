@@ -122,6 +122,59 @@ pub fn spawn_extract(st: Arc<AppState>, user: &str, cid: String, eid: String, fi
     job
 }
 
+/// Packs a folder added as evidence (a triage collection copied out as
+/// files) into a tar in the case, with a manifest of every file's SHA-256,
+/// registers the tar as evidence and analyzes it.
+pub fn spawn_pack(st: Arc<AppState>, user: &str, cid: String, src: std::path::PathBuf, name: String, notes: String) -> Arc<Job> {
+    let job = new_job(&st, "pack", user, &cid, "");
+    let j = job.clone();
+    tokio::task::spawn_blocking(move || {
+        let user = j.view.lock().unwrap().user.clone();
+        let res = guarded(|| {
+            let new_id = run_pack(&st, &j, &user, &cid, &src, &name, &notes)?;
+            j.view.lock().unwrap().evidence = new_id.clone();
+            run_ingest(&st, &j, &user, &cid, &new_id, true, true)
+        });
+        j.finish(&res);
+    });
+    job
+}
+
+fn run_pack(st: &AppState, job: &Job, user: &str, cid: &str, src: &std::path::Path, name: &str, notes: &str) -> anyhow::Result<String> {
+    let case = st.case(cid)?;
+    let tag = format!("[folder {}]", src.display());
+    if case.evidence().iter().any(|r| r.notes.contains(&tag)) {
+        anyhow::bail!("this folder is already part of the case");
+    }
+    let new_id = uuid::Uuid::new_v4().simple().to_string()[..10].to_string();
+    let dir = case.dir.join("derived").join(&new_id);
+    std::fs::create_dir_all(&dir)?;
+    let safe: String = name.chars().map(|c| if c.is_alphanumeric() || ".-_ ()[]".contains(c) { c } else { '_' }).collect();
+    let dest = dir.join(format!("{}.tar", if safe.is_empty() { "folder".to_string() } else { safe }));
+    let packed = kokino_analysis::tarfs::pack(src, &dest, &mut |bytes, files| job.progress(&format!("Packing the folder ({} files)", files), bytes, 0))?;
+    let manifest = dir.join("manifest.tsv");
+    std::fs::write(&manifest, format!("path\tsize\tsha256\tmodified_unix\n{}", packed.manifest))?;
+    let (mh, _) = kokino_core::hashing::hash_reader(std::fs::File::open(&manifest)?, |_| true)?;
+    let ev = Evidence::open(&dest)?;
+    let rec = kokino_core::case::EvidenceRecord {
+        id: new_id.clone(),
+        name: name.to_string(),
+        path: dest.display().to_string(),
+        format: "Folder (packed as tar)".into(),
+        size: ev.size,
+        added: kokino_core::time::now_iso(),
+        notes: format!("{}{}Packed from the folder {} on {}: {} files, {} bytes{}; every file's SHA-256 is in {} (SHA-256 {}) {}", notes, if notes.is_empty() { "" } else { " | " }, src.display(), kokino_core::time::now_iso(), packed.files, packed.bytes, if packed.skipped.is_empty() { String::new() } else { format!(", {} not readable", packed.skipped.len()) }, manifest.display(), mh.sha256, tag),
+        hashes: None,
+        hashed_at: None,
+        expected: None,
+        embedded: None,
+        acquisition: None,
+    };
+    case.save_evidence(&rec)?;
+    case.audit.append(user, "evidence.pack_folder", serde_json::json!({"folder": src.display().to_string(), "files": packed.files, "bytes": packed.bytes, "manifest": manifest.display().to_string(), "manifest_sha256": mh.sha256, "not_readable": packed.skipped, "record": rec}))?;
+    Ok(new_id)
+}
+
 fn run_extract(st: &AppState, job: &Job, user: &str, cid: &str, eid: &str, fi: usize, file: usize) -> anyhow::Result<String> {
     let l = st.loaded(cid, eid)?;
     let case = st.case(cid)?;
@@ -460,6 +513,40 @@ mod tests {
         // The extracted image is analyzed like any evidence.
         run_ingest(&st, &job, "tester", &cid, &id, true, true).unwrap();
         assert!(st.loaded(&cid, &id).unwrap().analysis.filesystems.iter().any(|f| f.volume.fs_label.contains("ISO")));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A folder added as evidence: packed into the case with its manifest,
+    /// recorded in the audit log, and analyzed as a collection.
+    #[test]
+    fn packs_a_folder_as_evidence() {
+        let root = std::env::temp_dir().join(format!("kokino-pack-job-{}", uuid::Uuid::new_v4()));
+        let src = root.join("collection");
+        std::fs::create_dir_all(src.join("C/Users/alice/Documents")).unwrap();
+        std::fs::write(src.join("C/Users/alice/Documents/plan.txt"), b"the plan").unwrap();
+        std::fs::create_dir_all(src.join("C/Windows/System32/config")).unwrap();
+        std::fs::write(src.join("C/Windows/System32/config/SYSTEM"), b"regf").unwrap();
+        let cases = root.join("cases");
+        std::fs::create_dir_all(&cases).unwrap();
+        let st = AppState::new(cases.clone(), 7311, false, vec![]).unwrap();
+        let case = kokino_core::case::Case::create(&cases, "Folder", "tester", "").unwrap();
+        let cid = case.info.id.clone();
+        let job = new_job(&st, "pack", "tester", &cid, "");
+        let id = run_pack(&st, &job, "tester", &cid, &src, "LAB-PC collection", "").unwrap();
+        let rec = case.evidence_by_id(&id).unwrap();
+        assert_eq!(rec.format, "Folder (packed as tar)");
+        assert!(rec.notes.contains("2 files, 12 bytes"), "{}", rec.notes);
+        let manifest = std::fs::read_to_string(std::path::Path::new(&rec.path).with_file_name("manifest.tsv")).unwrap();
+        let (h, _) = kokino_core::hashing::hash_reader(&b"the plan"[..], |_| true).unwrap();
+        assert!(manifest.contains(&format!("C/Users/alice/Documents/plan.txt	8	{}", h.sha256)), "{}", manifest);
+        let log = std::fs::read_to_string(case.dir.join("audit.jsonl")).unwrap();
+        assert!(log.contains("\"evidence.pack_folder\""));
+        assert!(run_pack(&st, &job, "tester", &cid, &src, "again", "").is_err(), "once only");
+        run_ingest(&st, &job, "tester", &cid, &id, true, true).unwrap();
+        let l = st.loaded(&cid, &id).unwrap();
+        let fs = &l.analysis.filesystems[0];
+        assert!(fs.files.iter().any(|f| f.e.path == "/C/Users/alice/Documents/plan.txt"));
+        assert!(fs.stats.users.contains(&"alice".to_string()), "{:?} {:?}", fs.stats.impact, fs.files.iter().map(|f| (&f.e.path, f.e.is_dir)).collect::<Vec<_>>());
         std::fs::remove_dir_all(&root).ok();
     }
 }

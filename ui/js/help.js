@@ -187,6 +187,7 @@ const WIKI = [
         ["File systems", "NTFS, FAT12, FAT16, FAT32, exFAT, ext2, ext3, ext4, ISO 9660, UDF, HFS+ and APFS are parsed, live and deleted files alike. Volume Shadow Copies on NTFS volumes are rebuilt and read as volumes of their own (pick them with the volume buttons)."],
         ["BitLocker", "Encrypted volumes (Windows 7 and later, BitLocker To Go) are listed on the Summary with their method, drive label and key protectors. Unlock one there with its password, its 48-digit recovery password or its startup key file ({GUID}.BEK, given as a path on the Kokino server): Kokino keeps the volume key with the case (never the password), records the unlock in the audit log, failed attempts too, and analyzes the evidence again with the decrypted volume as a volume of its own, shadow copies inside it included. Volumes with protection suspended are read without asking. Carving and the text index work on the decrypted volume; carved files from it show their offset in that volume (the hex view shows the image as stored). TPM protectors and Windows Vista volumes are not read."],
         ["Images inside evidence", "Disk images stored as files on the evidence (E01, VHD, VHDX, VMDK, ISO, raw) are listed on the Summary. Extract as evidence copies all of an image's files into the case, checks the copy against the bytes read, records both in the audit log and adds the image as evidence of its own, noting where it came from."],
+        ["Folders", "A collection copied out as plain files (KAPE's or Velociraptor's output folder): pick the folder and click Use this folder. Kokino packs it into a tar inside the case, hashing every file into a manifest (manifest.tsv next to the tar, its SHA-256 in the audit log), then examines the tar like any collection. Files in use that cannot be read are listed in the audit entry."],
         ["Triage collections", "Add a Velociraptor offline collection, a KAPE ZIP or a UAC tar / tar.gz as it is: it is read as a file system, and Windows and Linux artifacts are read with the paths they had on the collected system. A .tar.gz is decompressed in memory (up to 1 GiB; decompress larger ones with gzip -d and add the .tar). Checks that need a whole volume are not made from a collection."],
       ]),
       p("If you have the acquisition hash, paste it: Kokino reports whether the image still matches. For E01 it also checks the hash the imaging tool stored inside the file. Both results go into the audit log, and a mismatch is shown in red on the evidence card."),
@@ -204,7 +205,7 @@ const WIKI = [
         ["Explorer", "The folder tree including deleted and orphaned entries. Click a file for its detail drawer: both timestamp sets side by side, data streams, signature, entropy, where its MFT record lies on disk, its timeline events and a hex preview."],
         ["Timeline", "MACB events from $SI and $FN interleaved with browser visits, downloads and searches, Windows artifacts and, on NTFS, files created, deleted and renamed per the change journal (USN). Filter by text, date, source, deleted or flagged."],
         ["Web activity", "Browser history per profile (Chrome family, Firefox, Internet Explorer): visits, downloads, searches and Internet Explorer's cache and cookies. Click a profile card to filter by it."],
-        ["Email", "Messages in mbox mailboxes and .eml files, with their text and attachments."],
+        ["Email", "Messages in Outlook PST and OST files, mbox mailboxes and .eml files, with their text and attachments."],
         ["Anti-forensics", "Each indicator with its weight, caveat and the exact files: click Show files to list them, then a file to open it."],
         ["Hex", "The whole image, any size. See Hex and exports."],
       ]),
@@ -296,12 +297,13 @@ const WIKI = [
   {
     id: "mail", title: "Email", icon: "mail",
     body: [
-      p("Kokino lists the messages in mbox mailboxes (Thunderbird and SeaMonkey mail folders, /var/mail and /var/spool/mail on Linux, .mbox files) and single .eml files, live and deleted: date, sender, recipients, subject, attachments and the first words of the text. Click a message for its text, every header and its attachments; Export saves an attachment in the case's exports folder with its hashes in the audit log."),
+      p("Kokino lists the messages in Outlook PST and OST files, mbox mailboxes (Thunderbird and SeaMonkey mail folders, /var/mail and /var/spool/mail on Linux, .mbox files) and single .eml files, live and deleted: date, sender, recipients, subject, attachments and the first words of the text. Click a message for its text, every header and its attachments; Export saves an attachment in the case's exports folder with its hashes in the audit log."),
       ul(
         h("span", h("b", "Deleted in Thunderbird:"), " a message deleted in Thunderbird stays in the mailbox file, marked deleted, until the folder is compacted. Kokino lists it and marks it."),
         h("span", h("b", "Search:"), " message text (quoted-printable, base64 and character sets decoded, HTML without its markup) and document attachments (PDF, Office, ZIP...) are in the full-text index."),
         h("span", h("b", "Timeline:"), " every dated message is an event (source MAIL)."),
-        h("span", h("b", "Not read yet:"), " Outlook PST and OST files, Apple Mail .emlx and Windows Live Mail stores."),
+        h("span", h("b", "Outlook:"), " PST files (Outlook 97 to today) and OST files (also the compressed ones of Outlook 2013 and later), encrypted or not, of any size: they are read in place. Each message shows its folder; attached messages (forwarded mail, meeting items) are attachments of their own, exported as .eml. Messages whose folder is gone are listed with \"(folder not found)\"."),
+        h("span", h("b", "Not read yet:"), " deleted PST items still in the file's free blocks, message bodies kept only as RTF, Apple Mail .emlx and Windows Live Mail stores."),
       ),
     ],
   },
@@ -552,7 +554,7 @@ const WIKI = [
     body: [
       p("Evidence can be made to attack the tool that reads it: a disk image, registry hive or picture crafted to crash Kokino, hang an ingest, or use up the examiner's memory. Kokino is written in Rust with ", code("unsafe"), " code forbidden in every crate, and every parser that reads evidence has been fuzzed."),
       h("h3", "Fuzzing"),
-      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks, optical media, Mac disks, NTFS folder indexes and $LogFile, the change journal, ShellBags, ESE databases (SRUM), scheduled tasks, Internet Explorer index.dat, deleted registry keys, legacy Office files, registry logs, legacy event logs, email, journald compression, ZIP and tar collections, shadow copies, BitLocker and VHDX logs ran ", h("b", "591,094,445 inputs"), " and found ", h("b", "34 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
+      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks, optical media, Mac disks, NTFS folder indexes and $LogFile, the change journal, ShellBags, ESE databases (SRUM), scheduled tasks, Internet Explorer index.dat, deleted registry keys, legacy Office files, registry logs, legacy event logs, email, journald compression, ZIP and tar collections, shadow copies, BitLocker, VHDX logs and Outlook PST ran ", h("b", "597,891,563 inputs"), " and found ", h("b", "36 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
       h("div.scroll", h("table.tbl",
         h("thead", h("tr", h("th", "Target"), h("th", "Covers"), h("th", "Inputs"), h("th", "Found"))),
         h("tbody", [
@@ -572,6 +574,7 @@ const WIKI = [
         ["evt", "Legacy .evt event logs (Windows NT to 2003)", "30,689,834", "none"],
         ["zip", "ZIP collections read as file systems (Velociraptor, KAPE), and nested image detection", "5,383,514", "2 (crash on escaped names, memory; fixed)"],
         ["tar", "tar and tar.gz collections (UAC): headers, GNU long names, PAX records, links", "4,169,869", "none"],
+        ["pst", "Outlook PST and OST: B-trees, blocks, data and subnode trees, property and table contexts, messages", "6,797,118", "2 (crash on dates, read past the end; fixed)"],
         ["vss", "Volume Shadow Copies: catalog, block lists, overlays and forwarders, snapshot reads", "9,887,067", "2 (overflow, stack overflow; fixed)"],
         ["bde", "BitLocker: metadata, key protectors, key unwrapping, startup key files, the decrypting reader for every method", "4,459,482", "1 (overflow, fixed)"],
         ["mail", "Mailboxes and messages: MIME, encodings, attachments", "7,542,816", "none"],

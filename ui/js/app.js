@@ -488,7 +488,7 @@ function deleteCase(c) {
 }
 
 function addEvidence(cid) {
-  const path = h("input", { placeholder: "Full path to .E01 / .dd / .raw / .img / .001 / .vhd / .vhdx / .vmdk" });
+  const path = h("input", { placeholder: "Full path to .E01 / .dd / .raw / .img / .001 / .vhd / .vhdx / .vmdk / .zip / .tar.gz, or a folder" });
   const name = h("input", { placeholder: "Defaults to file name" });
   const notes = h("textarea", { rows: 2, placeholder: "Acquisition notes, chain of custody reference..." });
   const md5 = h("input.mono", { placeholder: "optional" });
@@ -499,7 +499,7 @@ function addEvidence(cid) {
   const browse = async (p) => {
     try {
       const r = await api("/browse?path=" + encodeURIComponent(p || ""));
-      where.textContent = r.path || "Choose a location";
+      where.replaceChildren(r.path || "Choose a location", r.path ? h("button.sm", { style: { marginLeft: "8px" }, title: "Add this folder as evidence: a triage collection copied out as files", onclick: () => { path.value = r.path; toast("Selected the folder " + r.path); } }, "Use this folder") : "");
       picker.replaceChildren(
         ...(r.path ? [h("div", { onclick: () => browse(r.parent || "") }, icon("up"), "..")] : []),
         ...r.entries.map((e) => h("div", { onclick: () => (e.is_dir ? browse(e.path) : ((path.value = e.path), toast("Selected " + e.name))) }, e.is_dir ? icon("folder") : icon("disk"), h("span", e.name), h("span.sp"), e.is_dir ? null : h("span.muted", bytes(e.size)))),
@@ -512,15 +512,15 @@ function addEvidence(cid) {
       const added = await api(`/cases/${cid}/evidence`, { method: "POST", body: { path: path.value, name: name.value, notes: notes.value, expected_md5: md5.value, expected_sha1: sha1.value, expected_sha256: sha256.value } });
       kickJobs(added.job);
       closeModal();
-      toast("Evidence added. Hashing and analysis started.");
+      toast(added.folder ? "Folder added: Kokino packs it into the case (every file hashed), then hashes and analyzes it." : "Evidence added. Hashing and analysis started.");
       route();
     } catch (err) { toast(err.message, true); }
   };
   modal([
     h("div.hd", h("h2", "Add evidence"), h("span.sp"), h("button.ghost.sm", { onclick: closeModal }, "Close")),
-    h("p.muted", "The image is opened read-only. For E01, pick the first segment; the others are found automatically and the hash the imager stored is checked too. Kokino hashes the media (MD5, SHA-1, SHA-256), compares against the acquisition hash if you supply one, and records every step in the case audit log."),
+    h("p.muted", "The image is opened read-only. For E01, pick the first segment; the others are found automatically and the hash the imager stored is checked too. Kokino hashes the media (MD5, SHA-1, SHA-256), compares against the acquisition hash if you supply one, and records every step in the case audit log. A folder (a KAPE or Velociraptor collection copied out as files) is packed into a tar inside the case, with every file's SHA-256 in a manifest, and that tar is examined."),
     h("div.stack",
-      h("label", "Image path", path),
+      h("label", "Image or folder path", path),
       h("div", where, picker),
       h("div.grid.g2", h("label", "Display name", name), h("label", "Acquisition MD5", md5)),
       h("div.grid.g2", h("label", "Acquisition SHA-1", sha1), h("label", "Acquisition SHA-256", sha256)),
@@ -1982,14 +1982,14 @@ async function mailTab(ctx) {
       canWrite() ? h("button.primary", { onclick: () => reingest(ctx.cid, ctx.eid, false) }, "Re-analyze now") : h("p.muted", "Ask an examiner on this case to re-analyze it."))));
   }
   if (!head.mailboxes.length) {
-    return render(h("div.stack", intro, h("div.card.empty", "No mailboxes on this volume: no Thunderbird mail folders, /var/mail spools, .mbox or .eml files.")));
+    return render(h("div.stack", intro, h("div.card.empty", "No mailboxes on this volume: no Outlook PST or OST files, Thunderbird mail folders, /var/mail spools, .mbox or .eml files.")));
   }
   let box = ctx.q.box != null && ctx.q.box !== "" ? Number(ctx.q.box) : null;
   let offset = 0;
   const cards = h("div.grid.g3.stagger");
   const drawCards = () => cards.replaceChildren(...head.mailboxes.map((b, i) => h("div.card.web-src", { class: box === b.file ? "on" : null, style: { "--i": i }, title: b.path, onclick: () => { box = box === b.file ? null : b.file; drawCards(); reload(); } },
     h("div.row", h("span.bbadge", icon("mail", 14)), h("div", { style: { minWidth: 0 } }, h("b", b.path.split("/").pop()), h("div.muted.ell", b.client ? `${b.client}, ${b.path}` : b.path)), h("span.sp"),
-      b.deleted ? h("span.pill.bad", "deleted file") : null, b.kind === "eml" ? h("span.pill", ".eml") : null),
+      b.deleted ? h("span.pill.bad", "deleted file") : null, b.kind === "eml" ? h("span.pill", ".eml") : null, b.kind === "pst" || b.kind === "ost" ? h("span.pill", "." + b.kind) : null),
     b.error ? h("p.bad-text", b.error) : h("div.web-stats", h("div", h("b", num(b.messages)), h("small", "messages"))))));
   drawCards();
   const q = h("input", { placeholder: "Filter by sender, recipient, subject, text or attachment name...", value: ctx.q.q || "", style: { flex: 1 } });
@@ -2004,7 +2004,7 @@ async function mailTab(ctx) {
       h("div.hd", h("h2", d.message.subject || "(no subject)"), h("span.sp"),
         bmButton({ cid: ctx.cid, eid: ctx.eid, kind: "web", fi: ctx.fi, key: `mail:${ctx.eid}:${ctx.fi}:${d.message.file}:${d.message.offset}`, title: `Email: ${d.message.subject || "(no subject)"}`, path: `${d.message.from} to ${d.message.to}`, time: d.date_iso || "" }),
         h("button.ghost.sm", { onclick: closeModal }, "Close")),
-      h("div.kv", [["Date", ts(d.date_iso)], ["From", d.message.from], ["To", d.message.to], ["Cc", d.message.cc], ["Message-ID", d.message.message_id],
+      h("div.kv", [["Date", ts(d.date_iso)], ["From", d.message.from], ["To", d.message.to], ["Cc", d.message.cc], ["Folder", d.message.folder], ["Message-ID", d.message.message_id],
         ["Note", [d.message.expunged ? "Deleted in Thunderbird, still in the mailbox file (the folder was not compacted)." : "", d.message.deleted ? "The mailbox file is deleted." : ""].filter(Boolean).join(" ")]]
         .filter(([, v]) => v).map(([k, v]) => [h("span", k), h("span.mono.wrap", v)])),
       att.length ? h("div.stack", h("h4", `Attachments (${att.length})`), ...att) : null,
@@ -2015,7 +2015,7 @@ async function mailTab(ctx) {
   };
   const row = (x) => h("tr", { class: x.expunged || x.deleted ? "deleted" : null, onclick: () => detail(x) },
     h("td.mono", ts(x.date_iso, 16)), h("td.nm.ell", { title: x.from }, x.from), h("td.nm.ell", { title: x.to }, x.to),
-    h("td.nm", h("b", x.subject || "(no subject)"), h("div.muted.ell", x.snippet)),
+    h("td.nm", h("b", x.subject || "(no subject)"), x.folder ? h("span.pill", { style: { marginLeft: "6px" }, title: "Folder in the PST or OST" }, x.folder.split("/").pop()) : null, h("div.muted.ell", x.snippet)),
     h("td", x.attachments.length ? h("span.pill.info", { title: x.attachments.map((a) => a.name).join(", ") }, `${x.attachments.length} attached`) : null, x.expunged ? h("span.pill.warn", "deleted") : null));
   const load = async (append) => {
     const p = new URLSearchParams({ q: q.value, offset, limit: 300 });
@@ -2032,7 +2032,7 @@ async function mailTab(ctx) {
   q.addEventListener("input", reload);
   more.onclick = () => load(true);
   render(h("div.stack", intro,
-    h("p.muted", "Messages in mbox mailboxes (Thunderbird mail folders, /var/mail) and .eml files, live and deleted. " + zoneSentence() + " Messages Thunderbird deleted stay in the mailbox file until the folder is compacted; they are listed and marked. Message text and document attachments are in the full-text index."),
+    h("p.muted", "Messages in Outlook PST and OST files, mbox mailboxes (Thunderbird mail folders, /var/mail) and .eml files, live and deleted. " + zoneSentence() + " Messages Thunderbird deleted stay in the mailbox file until the folder is compacted; they are listed and marked. Message text and document attachments are in the full-text index."),
     cards,
     h("div.row.wrap", q, count),
     h("div.scroll", { style: { maxHeight: "calc(100vh - 300px)" } }, h("table.tbl.web", h("thead", h("tr", [`Date (${zoneName()})`, "From", "To", "Subject", ""].map((c) => h("th", c)))), tbody)),

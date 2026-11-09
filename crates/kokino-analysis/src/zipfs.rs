@@ -18,7 +18,9 @@ use std::sync::Mutex;
 const MAX_ENTRIES: usize = 2_000_000;
 /// Largest deflated entry Kokino decompresses as a whole (for random reads).
 const MAX_INFLATE: u64 = 2 << 30;
-const FIRST_RECORD: u64 = 16;
+/// Above the record numbers NTFS keeps for itself (0 to 23), which the
+/// summary leaves out.
+const FIRST_RECORD: u64 = 64;
 
 #[derive(Debug, Clone)]
 struct Entry {

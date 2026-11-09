@@ -9,7 +9,12 @@
 //!
 //! Headers: POSIX ustar (with the name prefix), GNU long names and links
 //! ('L', 'K') and PAX extended headers ('x': path, linkpath, size, uid,
-//! gid, mtime, atime, ctime with fractions). Times are UTC.
+//! gid, mtime, atime, ctime with fractions; libarchive's creationtime).
+//! Times are UTC.
+//!
+//! `pack` turns a folder (a triage collection copied out as plain files)
+//! into such an archive, hashing every file as it copies it, so a folder
+//! can be examined the same way.
 
 use kokino_ntfs::{Extent, FsEntry, NtfsVolumeInfo, Stream, Times, UnixMeta};
 use std::collections::HashMap;
@@ -19,7 +24,9 @@ use std::sync::Arc;
 const MAX_ENTRIES: usize = 2_000_000;
 /// Largest uncompressed size of a .tar.gz read (it is held in memory).
 pub const MAX_GZIP: u64 = 1 << 30;
-const FIRST_RECORD: u64 = 16;
+/// Above the record numbers NTFS keeps for itself (0 to 23), which the
+/// summary leaves out.
+const FIRST_RECORD: u64 = 64;
 
 #[derive(Debug, Clone)]
 struct Item {
@@ -193,7 +200,7 @@ pub fn open<R: Read + Seek>(r: &mut R, len: u64) -> anyhow::Result<TarVolume> {
                 let times = Times {
                     modified: mtime,
                     accessed: ext.get("atime").and_then(|t| pax_time(t)).unwrap_or(0),
-                    created: 0,
+                    created: ext.get("LIBARCHIVE.creationtime").and_then(|t| pax_time(t)).unwrap_or(0),
                     mft_modified: ext.get("ctime").and_then(|t| pax_time(t)).unwrap_or(0),
                 };
                 let mode = num(&h[100..108]) as u32 & 0o7777;
@@ -369,6 +376,166 @@ impl TarVolume {
     }
 }
 
+/// What `pack` wrote: one line per file (path, size, SHA-256, times)
+/// and what it could not read.
+#[derive(Debug, Default)]
+pub struct Packed {
+    pub files: u64,
+    pub bytes: u64,
+    /// "path<TAB>size<TAB>sha256<TAB>modified" lines, sorted by path.
+    pub manifest: String,
+    pub skipped: Vec<String>,
+}
+
+fn pax_rec(k: &str, v: &str) -> String {
+    let body = format!(" {}={}\n", k, v);
+    let mut n = body.len() + 1;
+    while format!("{}{}", n, body).len() != n {
+        n += 1;
+    }
+    format!("{}{}", n, body)
+}
+
+fn ustar(name: &str, kind: u8, size: u64, mtime: u64, mode: u32, link: &str) -> Vec<u8> {
+    let mut h = vec![0u8; 512];
+    let put = |h: &mut Vec<u8>, at: usize, s: &[u8], max: usize| h[at..at + s.len().min(max)].copy_from_slice(&s[..s.len().min(max)]);
+    put(&mut h, 0, name.as_bytes(), 99);
+    put(&mut h, 100, format!("{:07o}\0", mode & 0o7777).as_bytes(), 8);
+    put(&mut h, 108, b"0000000\0", 8);
+    put(&mut h, 116, b"0000000\0", 8);
+    put(&mut h, 124, format!("{:011o}\0", size.min(0o77777777777)).as_bytes(), 12);
+    put(&mut h, 136, format!("{:011o}\0", mtime.min(0o77777777777)).as_bytes(), 12);
+    h[156] = kind;
+    put(&mut h, 157, link.as_bytes(), 99);
+    put(&mut h, 257, b"ustar\x0000", 8);
+    h[148..156].fill(b' ');
+    let sum: u64 = h.iter().map(|&c| c as u64).sum();
+    put(&mut h, 148, format!("{:06o}\0 ", sum).as_bytes(), 8);
+    h
+}
+
+fn unix_time(t: std::io::Result<std::time::SystemTime>) -> Option<String> {
+    let d = t.ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(format!("{}.{:09}", d.as_secs(), d.subsec_nanos()))
+}
+
+/// Packs the folder `src` into the tar file `dest`: every file and folder
+/// with its times (PAX, to the nanosecond, with the creation time where the
+/// system keeps one), symbolic links as links (never followed). Files are
+/// opened read-only and hashed as they are copied. `progress(bytes, files)`
+/// returns false to stop.
+pub fn pack(src: &std::path::Path, dest: &std::path::Path, progress: &mut dyn FnMut(u64, u64) -> bool) -> anyhow::Result<Packed> {
+    use std::io::Write;
+    let mut list = vec![];
+    let mut todo = vec![src.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        let mut rd: Vec<std::fs::DirEntry> = std::fs::read_dir(&d)?.flatten().collect();
+        rd.sort_by_key(|e| e.file_name());
+        for e in rd {
+            let ft = e.file_type()?;
+            if ft.is_dir() {
+                todo.push(e.path());
+            }
+            list.push(e.path());
+            if list.len() > MAX_ENTRIES {
+                anyhow::bail!("more than {} files and folders", MAX_ENTRIES);
+            }
+        }
+    }
+    list.sort();
+    let mut out = std::io::BufWriter::new(std::fs::File::create(dest)?);
+    let mut packed = Packed::default();
+    let mut lines = vec![];
+    for p in list {
+        let rel = p.strip_prefix(src).unwrap_or(&p).to_string_lossy().replace('\\', "/");
+        let meta = match std::fs::symlink_metadata(&p) {
+            Ok(m) => m,
+            Err(e) => {
+                packed.skipped.push(format!("{}: {}", rel, e));
+                continue;
+            }
+        };
+        let ft = meta.file_type();
+        let (kind, link) = if ft.is_symlink() {
+            (b'2', std::fs::read_link(&p).map(|l| l.to_string_lossy().replace('\\', "/")).unwrap_or_default())
+        } else if ft.is_dir() {
+            (b'5', String::new())
+        } else {
+            (b'0', String::new())
+        };
+        // Opened read-only before anything is written, so a locked file is
+        // skipped whole.
+        let file = if kind == b'0' {
+            match std::fs::File::open(&p) {
+                Ok(f) => Some(f),
+                Err(e) => {
+                    packed.skipped.push(format!("{}: {}", rel, e));
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
+        let size = if file.is_some() { meta.len() } else { 0 };
+        let mut recs = pax_rec("path", &format!("{}{}", rel, if kind == b'5' { "/" } else { "" }));
+        if !link.is_empty() {
+            recs.push_str(&pax_rec("linkpath", &link));
+        }
+        for (k, t) in [("mtime", unix_time(meta.modified())), ("atime", unix_time(meta.accessed())), ("LIBARCHIVE.creationtime", unix_time(meta.created()))] {
+            if let Some(t) = t {
+                recs.push_str(&pax_rec(k, &t));
+            }
+        }
+        recs.push_str(&pax_rec("size", &size.to_string()));
+        let pad = |n: u64| vec![0u8; (n.div_ceil(512) * 512 - n) as usize];
+        out.write_all(&ustar("PaxHeader", b'x', recs.len() as u64, 0, 0o644, ""))?;
+        out.write_all(recs.as_bytes())?;
+        out.write_all(&pad(recs.len() as u64))?;
+        let mtime = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+        #[cfg(unix)]
+        let mode = std::os::unix::fs::PermissionsExt::mode(&meta.permissions());
+        #[cfg(not(unix))]
+        let mode = if kind == b'5' { 0o755 } else if meta.permissions().readonly() { 0o444 } else { 0o644 };
+        out.write_all(&ustar(&rel.chars().take(90).collect::<String>(), kind, size, mtime, mode, &link))?;
+        if let Some(mut f) = file {
+            // Exactly the size recorded: a file that shrank while being read
+            // is padded with zeros (and noted), one that grew is cut.
+            let mut h = kokino_core::hashing::MultiHasher::default();
+            let mut buf = vec![0u8; 1 << 20];
+            let mut left = size;
+            while left > 0 {
+                let want = left.min(buf.len() as u64) as usize;
+                let n = std::io::Read::read(&mut f, &mut buf[..want])?;
+                if n == 0 {
+                    packed.skipped.push(format!("{}: {} bytes short of its size while being read; zeros written instead", rel, left));
+                    let z = vec![0u8; want];
+                    while left > 0 {
+                        let k = left.min(z.len() as u64) as usize;
+                        out.write_all(&z[..k])?;
+                        h.update(&z[..k]);
+                        left -= k as u64;
+                    }
+                    break;
+                }
+                out.write_all(&buf[..n])?;
+                h.update(&buf[..n]);
+                left -= n as u64;
+            }
+            out.write_all(&pad(size))?;
+            lines.push(format!("{}\t{}\t{}\t{}", rel, size, h.finish().sha256, mtime));
+            packed.files += 1;
+            packed.bytes += size;
+            if !progress(packed.bytes, packed.files) {
+                anyhow::bail!("packing cancelled");
+            }
+        }
+    }
+    out.write_all(&[0u8; 1024])?;
+    out.flush()?;
+    packed.manifest = lines.join("\n") + "\n";
+    Ok(packed)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -480,5 +647,36 @@ pub(crate) mod tests {
         assert!(v.notes[0].contains("damaged at byte 1024"));
         assert!(open(&mut std::io::Cursor::new(vec![0u8; 2048]), 2048).is_err());
         assert_eq!(num(&[0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0]), 256);
+    }
+
+    /// A folder packed and read back: names (also non-ASCII and long),
+    /// sizes, content, times to the second, the manifest.
+    #[test]
+    fn packs_a_folder() {
+        let base = std::env::temp_dir().join(format!("kokino-pack-{}", std::process::id()));
+        let src = base.join("C");
+        let deep = src.join("Users").join("alice").join(format!("{}", "Documents-".repeat(12)));
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(src.join("Users/alice/caf\u{e9}.txt"), b"accent").unwrap();
+        std::fs::write(deep.join("report.txt"), vec![b'x'; 70_000]).unwrap();
+        std::fs::create_dir_all(src.join("Windows/System32/config")).unwrap();
+        std::fs::write(src.join("Windows/System32/config/SYSTEM"), b"regf....").unwrap();
+        let dest = base.join("pack.tar");
+        let p = pack(&src, &dest, &mut |_, _| true).unwrap();
+        assert_eq!((p.files, p.bytes), (3, 6 + 70_000 + 8));
+        assert!(p.manifest.contains("Windows/System32/config/SYSTEM\t8\t"));
+        let d = std::fs::read(&dest).unwrap();
+        let mut r = std::io::Cursor::new(&d);
+        let v = open(&mut r, d.len() as u64).unwrap();
+        let es = v.entries();
+        let get = |path: &str| es.iter().find(|e| e.path == path).unwrap_or_else(|| panic!("{} missing: {:?}", path, es.iter().map(|e| &e.path).collect::<Vec<_>>())).clone();
+        let rep = get(&format!("/Users/alice/{}/report.txt", "Documents-".repeat(12)));
+        assert_eq!(v.read(&mut r, &rep, 69_990, 100).unwrap(), vec![b'x'; 10]);
+        assert_eq!(v.read(&mut r, &get("/Users/alice/caf\u{e9}.txt"), 0, 10).unwrap(), b"accent");
+        let want = std::fs::metadata(src.join("Windows/System32/config/SYSTEM")).unwrap().modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        let got = get("/Windows/System32/config/SYSTEM").si.unwrap().modified;
+        assert_eq!(got / 10_000_000, kokino_artifacts::bin::unix_to_filetime(want).unwrap() / 10_000_000);
+        assert!(get("/Users").is_dir);
+        std::fs::remove_dir_all(&base).ok();
     }
 }

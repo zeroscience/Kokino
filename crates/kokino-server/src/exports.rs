@@ -226,8 +226,8 @@ pub fn table(l: &Loaded, fi: usize, hs: Option<&HashStatus>, carved: Option<&Car
         "mail" => {
             let f = fsa()?;
             tb(
-                vec!["date_utc", "from", "to", "cc", "subject", "attachments", "deleted_in_thunderbird", "mailbox_deleted", "message_id", "mailbox", "offset", "length"],
-                f.mail.messages.iter().map(|m| vec![t(m.date), s(&m.from), s(&m.to), s(&m.cc), s(&m.subject), s(m.attachments.iter().map(|a| format!("{} ({} bytes)", a.name, a.size)).collect::<Vec<_>>().join("; ")), json!(m.expunged), json!(m.deleted), s(&m.message_id), s(f.files.get(m.file as usize).map(|r| r.e.path.clone()).unwrap_or_default()), json!(m.offset), json!(m.len)]).collect(),
+                vec!["date_utc", "from", "to", "cc", "subject", "attachments", "deleted_in_thunderbird", "mailbox_deleted", "message_id", "mailbox", "folder", "offset", "length"],
+                f.mail.messages.iter().map(|m| vec![t(m.date), s(&m.from), s(&m.to), s(&m.cc), s(&m.subject), s(m.attachments.iter().map(|a| format!("{} ({} bytes)", a.name, a.size)).collect::<Vec<_>>().join("; ")), json!(m.expunged), json!(m.deleted), s(&m.message_id), s(f.files.get(m.file as usize).map(|r| r.e.path.clone()).unwrap_or_default()), s(&m.folder), json!(m.offset), json!(m.len)]).collect(),
             )
         }
         "linux-commands" | "linux-logons" | "linux-events" | "linux-packages" | "linux-persistence" => {

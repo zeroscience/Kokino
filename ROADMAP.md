@@ -73,14 +73,15 @@ checked against public test images with known answers where they exist
 
 ### Content
 - [x] Email: mbox mailboxes (Thunderbird, /var/mail) and .eml files (1.3.0)
-- [ ] Email: Outlook PST and OST
+- [x] Email: Outlook PST and OST (unreleased)
+- [ ] Email: deleted PST items (recovered from the file's free blocks), RTF-only message bodies, Apple Mail .emlx
 - [x] Text from legacy Office files (DOC, XLS, PPT), Outlook .msg and RTF (1.3.0)
 - [ ] Carving of fragmented files
 
 ### Workflow
 - [x] Triage collections: Velociraptor and KAPE ZIPs, KAPE VHDX output (unreleased)
 - [x] UAC collections (tar, tar.gz) (unreleased)
-- [ ] Triage collections as plain folders (a directory added as evidence)
+- [x] Triage collections as plain folders (unreleased)
 - [x] JSON and CSV exports of every list, in the GUI and with `kokino export` (1.3.0)
 - [ ] Validation suite run automatically on every release
 - [ ] Signed release builds with an SBOM

@@ -197,3 +197,59 @@ impl Fs {
         }
     }
 }
+
+/// Anything that reads bytes at an offset, as `Read + Seek`, with a 64 KiB
+/// cache: lets parsers that seek (PST) read a file through its file system
+/// without holding it in memory.
+pub struct ReadAt<F: FnMut(u64, usize) -> std::io::Result<Vec<u8>>> {
+    f: F,
+    size: u64,
+    pos: u64,
+    cache: (u64, Vec<u8>),
+}
+
+const READ_AT_CHUNK: u64 = 64 * 1024;
+
+impl<F: FnMut(u64, usize) -> std::io::Result<Vec<u8>>> ReadAt<F> {
+    pub fn new(size: u64, f: F) -> Self {
+        ReadAt { f, size, pos: 0, cache: (u64::MAX, vec![]) }
+    }
+}
+
+impl<F: FnMut(u64, usize) -> std::io::Result<Vec<u8>>> Read for ReadAt<F> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.pos >= self.size || buf.is_empty() {
+            return Ok(0);
+        }
+        let chunk = self.pos / READ_AT_CHUNK * READ_AT_CHUNK;
+        if self.cache.0 != chunk {
+            let n = READ_AT_CHUNK.min(self.size - chunk) as usize;
+            self.cache = (chunk, (self.f)(chunk, n)?);
+        }
+        let w = (self.pos - chunk) as usize;
+        let have = self.cache.1.len().saturating_sub(w);
+        if have == 0 {
+            return Ok(0);
+        }
+        let n = buf.len().min(have);
+        buf[..n].copy_from_slice(&self.cache.1[w..w + n]);
+        self.pos += n as u64;
+        Ok(n)
+    }
+}
+
+impl<F: FnMut(u64, usize) -> std::io::Result<Vec<u8>>> Seek for ReadAt<F> {
+    fn seek(&mut self, p: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.pos = match p {
+            std::io::SeekFrom::Start(x) => x,
+            std::io::SeekFrom::End(x) => (self.size as i64).saturating_add(x).max(0) as u64,
+            std::io::SeekFrom::Current(x) => (self.pos.min(i64::MAX as u64) as i64).saturating_add(x).max(0) as u64,
+        };
+        Ok(self.pos)
+    }
+}
+
+/// A file's main stream as `Read + Seek`, read through its file system.
+pub fn stream<'a, R: Read + Seek>(fs: &'a Fs, r: &'a mut R, e: &'a FsEntry) -> ReadAt<impl FnMut(u64, usize) -> std::io::Result<Vec<u8>> + 'a> {
+    ReadAt::new(e.size, move |off, n| fs.read(r, e, "", off, n).map_err(|x| std::io::Error::other(format!("{:#}", x))))
+}

@@ -34,6 +34,7 @@ pub const TARGETS: &[Target] = &[
     Target { name: "bde", run: bde, seeds: &["crates/kokino-fuzz/seeds/bde"] },
     Target { name: "vss", run: vss, seeds: &["crates/kokino-fuzz/seeds/vss"] },
     Target { name: "tar", run: tarfs, seeds: &["crates/kokino-fuzz/seeds/tar"] },
+    Target { name: "pst", run: pst, seeds: &["crates/kokino-fuzz/seeds/pst"] },
     Target { name: "zip", run: zipfs, seeds: &["crates/kokino-fuzz/seeds/zip", "tests/fixtures/iso-rr-joliet.iso"] },
     Target { name: "reglog", run: reglog, seeds: &["tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_UsrClass.dat.LOG1", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_UsrClass.dat"] },
     Target { name: "iecache", run: iecache, seeds: &["tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_History_History.IE5_MSHist012025031020250311_index.dat", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_History_History.IE5_index.dat", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_Temporary Internet Files_Content.IE5_index.dat", "tests/fixtures/win/Users_alice_AppData_Roaming_Microsoft_Windows_IEDownloadHistory_index.dat"] },
@@ -356,6 +357,20 @@ fn tarfs(d: &[u8]) {
             let _ = t.read(&mut r, e, 0, 4096);
             let _ = t.read(&mut r, e, e.size.saturating_sub(10), 100);
             let _ = t.extents(e);
+        }
+    }
+}
+
+/// Outlook PST and OST: header, both B-trees, blocks (decoding, inflating),
+/// data and subnode trees, heaps, property and table contexts, messages
+/// rendered as RFC 822 and read back.
+fn pst(d: &[u8]) {
+    let Ok(mut p) = kokino_analysis::pst::Pst::open(std::io::Cursor::new(d), d.len() as u64) else { return };
+    let _ = p.folders();
+    for nid in p.message_ids().into_iter().take(32) {
+        let _ = p.message(nid);
+        if let Ok(eml) = p.eml(nid) {
+            let _ = kokino_analysis::mail::parse(&eml);
         }
     }
 }
