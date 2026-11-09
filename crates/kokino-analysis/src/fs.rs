@@ -14,6 +14,7 @@ pub enum Fs {
     Udf(kokino_iso::udf::UdfVolume),
     Hfs(kokino_mac::hfs::HfsVolume),
     Apfs(kokino_mac::apfs::ApfsContainer),
+    Zip(crate::zipfs::ZipVolume),
 }
 
 /// What a file-system walk produced.
@@ -27,7 +28,7 @@ pub struct FsScan {
 
 /// File systems with a parser.
 pub fn supported(k: FsKind) -> bool {
-    matches!(k, FsKind::Ntfs | FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat | FsKind::Ext | FsKind::Iso9660 | FsKind::Udf | FsKind::HfsPlus | FsKind::Apfs)
+    matches!(k, FsKind::Ntfs | FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat | FsKind::Ext | FsKind::Iso9660 | FsKind::Udf | FsKind::HfsPlus | FsKind::Apfs | FsKind::Zip)
 }
 
 impl Fs {
@@ -52,6 +53,7 @@ impl Fs {
             FsKind::Udf => Ok(Fs::Udf(kokino_iso::udf::open(r, v.length)?)),
             FsKind::HfsPlus => Ok(Fs::Hfs(kokino_mac::hfs::open(r, v.length)?)),
             FsKind::Apfs => Ok(Fs::Apfs(kokino_mac::apfs::open(r, v.length)?)),
+            FsKind::Zip => Ok(Fs::Zip(crate::zipfs::open(r, v.length)?)),
             _ => anyhow::bail!("no parser for {}", v.fs_label),
         }
     }
@@ -104,6 +106,14 @@ impl Fs {
                 let s = kokino_mac::apfs::scan(v, r, progress)?;
                 Ok(FsScan { info: s.info, entries: s.entries, unreadable: vec![], notes: s.notes })
             }
+            Fs::Zip(z) => {
+                let entries = z.entries();
+                let mut notes = vec![format!("A ZIP file{}: files are read from it as stored; it has no deleted files or free space.", if z.layout.is_empty() { String::new() } else { format!(" ({} collection)", z.layout) })];
+                if entries.iter().all(|e| e.si.is_none_or(|t| t.created == 0)) {
+                    notes.push("The ZIP keeps only a modified time per file, in the collecting computer's local time and to 2 seconds, unless it has extended time fields.".into());
+                }
+                Ok(FsScan { info: z.info(), entries, unreadable: vec![], notes })
+            }
         }
     }
 
@@ -128,6 +138,8 @@ impl Fs {
             Fs::Hfs(v) => v.read(r, e, offset, len),
             Fs::Apfs(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
             Fs::Apfs(v) => v.read(r, e, offset, len),
+            Fs::Zip(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
+            Fs::Zip(z) => z.read(r, e, offset, len),
         }
     }
 
@@ -149,6 +161,8 @@ impl Fs {
             Fs::Hfs(_) | Fs::Apfs(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
             Fs::Hfs(v) => Ok(v.extents(r, e)),
             Fs::Apfs(v) => Ok(v.extents(r, e)),
+            Fs::Zip(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
+            Fs::Zip(z) => Ok(z.extents(r, e)),
         }
     }
 
@@ -163,6 +177,7 @@ impl Fs {
             Fs::Hfs(v) => Ok(v.free_runs(r)),
             // APFS free space (space manager) is not read yet.
             Fs::Apfs(_) => Ok(vec![]),
+            Fs::Zip(_) => Ok(vec![]),
         }
     }
 }

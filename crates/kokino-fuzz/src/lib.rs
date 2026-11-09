@@ -31,6 +31,7 @@ pub const TARGETS: &[Target] = &[
     Target { name: "task", run: task, seeds: &["tests/fixtures/win/Windows_System32_Tasks_Updater Check", "tests/fixtures/win/Windows_System32_Tasks_Microsoft_Windows_WinUpdate_Sync", "tests/fixtures/win/Windows_System32_Tasks_Microsoft_Windows_Defrag_ScheduledDefrag", "tests/fixtures/win/Windows_System32_config_SOFTWARE"] },
     Target { name: "evt", run: evt, seeds: &["crates/kokino-fuzz/seeds/evt"] },
     Target { name: "mail", run: mail, seeds: &["crates/kokino-fuzz/seeds/mail"] },
+    Target { name: "zip", run: zipfs, seeds: &["crates/kokino-fuzz/seeds/zip", "tests/fixtures/iso-rr-joliet.iso"] },
     Target { name: "reglog", run: reglog, seeds: &["tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_UsrClass.dat.LOG1", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_UsrClass.dat"] },
     Target { name: "iecache", run: iecache, seeds: &["tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_History_History.IE5_MSHist012025031020250311_index.dat", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_History_History.IE5_index.dat", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_Temporary Internet Files_Content.IE5_index.dat", "tests/fixtures/win/Users_alice_AppData_Roaming_Microsoft_Windows_IEDownloadHistory_index.dat"] },
     Target { name: "ese", run: ese, seeds: &["tests/fixtures/win/SRUDB-4k.dat", "tests/fixtures/win/SRUDB.dat", "tests/fixtures/win/ese-deep.dat"] },
@@ -296,6 +297,23 @@ fn task(d: &[u8]) {
     let _ = kokino_artifacts::task::dynamic_info(d);
     // A SOFTWARE hive: TaskCache joined with no task files.
     kokino_analysis::windows::fuzz_tasks(d);
+}
+
+/// A ZIP read as a file system (triage collections): the directory, ZIP64,
+/// extra fields, stored and deflated reads; and nested image detection.
+fn zipfs(d: &[u8]) {
+    let mut r = std::io::Cursor::new(d);
+    if let Ok(z) = kokino_analysis::zipfs::open(&mut r, d.len() as u64) {
+        for e in z.entries().iter().filter(|e| !e.is_dir).take(64) {
+            let _ = z.read(&mut r, e, 0, 1 << 16);
+            let _ = z.read(&mut r, e, 7, 100);
+            let _ = z.extents(&mut r, e);
+        }
+    }
+    let tail = &d[d.len().saturating_sub(512)..];
+    for ext in ["e01", "vhd", "dd", "iso", "vmdk"] {
+        let _ = kokino_analysis::nested::probe(d, tail, ext);
+    }
 }
 
 /// Mailboxes and messages: splitting, headers, MIME parts, encodings, and

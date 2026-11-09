@@ -713,7 +713,26 @@ function summaryTab(ctx) {
     fs.unreadable.length ? h("div.card", h("h3", `Unreadable MFT records (${fs.unreadable.length})`), h("p.muted", "Valid record slots Kokino could not parse. Inspect them in the hex view."),
       h("div.kv", fs.unreadable.slice(0, 50).map((u) => [h("span", "Record " + u.record), h("code", u.reason)]))) : null,
     s.errors.length ? h("div.card", h("h3", "Limitations"), h("ul", s.errors.map((e) => h("li", e)))) : null,
+    nestedCard(ctx),
   ));
+}
+
+// Disk images stored on this volume, each extractable as evidence of its own.
+function nestedCard(ctx) {
+  const box = h("div");
+  api(`/cases/${ctx.cid}/evidence/${ctx.eid}/fs/${ctx.fi}/images`, { quiet: true }).then((r) => {
+    if (!r.items.length) return;
+    const extract = (n) => api(`/cases/${ctx.cid}/evidence/${ctx.eid}/fs/${ctx.fi}/images/${n.file}/extract`, { method: "POST" })
+      .then((j) => { toast(`Extracting ${n.path.split("/").pop()}; it is added to the case as evidence`); kickJobs(j.job); })
+      .catch((e) => toast(e.message, true));
+    box.replaceChildren(h("div.card.stack", h("h3", `Disk images on this volume (${r.items.length})`),
+      h("p.muted", { style: { margin: 0 } }, "Images stored as files on this evidence. Extract copies all of an image's files (segments, parts, extents) into the case, checks the copy against the bytes read, records both in the audit log and adds the image as evidence of its own, noting where it came from."),
+      h("table.tbl.sys", h("thead", h("tr", ["Image", "Format", "Size", ""].map((c) => h("th", c)))), h("tbody", r.items.map((n) => h("tr", { class: n.deleted ? "deleted" : null },
+        h("td.nm", h("b", n.path), n.parts.length > 1 ? h("div.muted", `${n.parts.length} files`) : null, n.note ? h("div.muted", n.note) : null),
+        h("td", n.format, n.deleted ? h("span.pill.bad", { style: { marginLeft: "6px" } }, "deleted") : null), h("td.num", bytes(n.size)),
+        h("td", n.extracted ? h("span.pill.ok", "in this case") : canWrite() && n.supported ? h("button.sm", { onclick: (e) => { e.target.disabled = true; extract(n); } }, "Extract as evidence") : null)))))));
+  }).catch(() => {});
+  return box;
 }
 
 // ---------------------------------------------------------------- explorer

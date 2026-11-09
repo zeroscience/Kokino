@@ -30,6 +30,8 @@ pub enum FsKind {
     Iso9660,
     /// UDF without an ISO 9660 descriptor (most Blu-ray and some DVDs).
     Udf,
+    /// A ZIP file added as evidence (triage collections: Velociraptor, KAPE).
+    Zip,
     Unknown,
 }
 
@@ -47,6 +49,7 @@ impl FsKind {
             FsKind::BitLocker => "BitLocker (encrypted)",
             FsKind::Iso9660 => "ISO 9660",
             FsKind::Udf => "UDF",
+            FsKind::Zip => "ZIP",
             FsKind::Unknown => "Unknown",
         }
     }
@@ -74,6 +77,10 @@ pub fn detect_fs<R: Read + Seek>(r: &mut R, start: u64) -> FsKind {
     }
     if &b[3..11] == b"NTFS    " {
         return FsKind::Ntfs;
+    }
+    // A ZIP added as evidence (only where the evidence starts).
+    if start == 0 && (b.starts_with(b"PK\x03\x04") || b.starts_with(b"PK\x05\x06")) {
+        return FsKind::Zip;
     }
     if &b[3..11] == b"-FVE-FS-" {
         return FsKind::BitLocker;

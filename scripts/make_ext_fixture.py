@@ -454,6 +454,8 @@ def server_tree():
         "/home/alice/.bash_history": history,
         "/var/mail/alice": MAIL_SPOOL,
         "/home/alice/Downloads/reset.eml": SAVED_EML,
+        # A disk image stored on the evidence (the ISO fixture), for nested image extraction.
+        "/home/alice/Downloads/tools.iso": open(os.path.join(OUT, "iso-rr-joliet.iso"), "rb").read(),
         "/home/alice/.ssh/authorized_keys": 'ssh-ed25519 %s alice@lab-laptop\ncommand="/tmp/.x/k" ssh-ed25519 %s backdoor@lab.test\n' % (pub, pub),
         "/home/alice/.ssh/known_hosts": "192.0.2.10 ssh-ed25519 %s\n" % pub,
         "/root/.bash_history": ("link", "/dev/null"),

@@ -74,6 +74,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/file/{idx}/bytes", get(file_bytes))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/file/{idx}/export", get(file_export))
         .route("/cases/{cid}/evidence/{eid}/lists", get(lists))
+        .route("/cases/{cid}/evidence/{eid}/fs/{fi}/images", get(nested_images))
+        .route("/cases/{cid}/evidence/{eid}/fs/{fi}/images/{file}/extract", post(extract_image))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/mail", get(mail_list))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/mail/{n}", get(mail_message))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/mail/{n}/attachment/{k}/export", get(mail_attachment_export))
@@ -992,6 +994,42 @@ async fn file_export(State(st): St, Extension(me): Me, Path((cid, eid, fi, idx))
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"", out_name))
         .body(Body::from(data))?)
+}
+
+/// Disk images stored on this file system.
+async fn nested_images(State(st): St, Path((cid, eid, fi)): Path<(String, String, usize)>) -> R {
+    let l = st.loaded(&cid, &eid)?;
+    fs_of(&l, fi)?;
+    let l2 = l.clone();
+    let found = tokio::task::spawn_blocking(move || {
+        let files = &l2.analysis.filesystems[fi].files;
+        let mut read = |e: &kokino_ntfs::FsEntry, off: u64, n: usize| l2.read_file(fi, e, "", off, n).unwrap_or_default();
+        kokino_analysis::nested::find(files, &mut read)
+    })
+    .await?;
+    // Which of them were already extracted into this case.
+    let case = st.case(&cid)?;
+    let done: Vec<String> = case.evidence().iter().map(|r| r.notes.clone()).collect();
+    let items: Vec<Value> = found
+        .iter()
+        .map(|n| {
+            let tag = format!("[from {}:{}:{}]", eid, fi, l.analysis.filesystems[fi].files[n.file as usize].e.record);
+            let mut v = json!(n);
+            v["extracted"] = json!(done.iter().any(|d| d.contains(&tag)));
+            v
+        })
+        .collect();
+    Ok(Json(json!({"items": items})))
+}
+
+/// Copies a disk image (all its files) out of the evidence into the case,
+/// adds it as evidence of its own and analyzes it.
+async fn extract_image(State(st): St, Extension(me): Me, Path((cid, eid, fi, file)): Path<(String, String, usize, usize)>) -> R {
+    let l = st.loaded(&cid, &eid)?;
+    fs_of(&l, fi)?;
+    let job = jobs::spawn_extract(st.clone(), &me.username, cid, eid, fi, file);
+    let view = job.view.lock().unwrap().clone();
+    Ok(Json(json!({"job": view})))
 }
 
 #[derive(Deserialize)]

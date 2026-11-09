@@ -101,6 +101,100 @@ pub fn spawn_ingest(st: Arc<AppState>, user: &str, cid: String, eid: String, reh
     job
 }
 
+/// Extracts a disk image found on the evidence (all of its files) into the
+/// case folder, registers it as new evidence with where it came from, and
+/// hashes and analyzes it. The copy is checked against the bytes read.
+pub fn spawn_extract(st: Arc<AppState>, user: &str, cid: String, eid: String, fi: usize, file: usize) -> Arc<Job> {
+    let job = new_job(&st, "extract", user, &cid, &eid);
+    let j = job.clone();
+    tokio::task::spawn_blocking(move || {
+        let user = j.view.lock().unwrap().user.clone();
+        let res = guarded(|| {
+            let new_id = run_extract(&st, &j, &user, &cid, &eid, fi, file)?;
+            {
+                let mut v = j.view.lock().unwrap();
+                v.evidence = new_id.clone();
+            }
+            run_ingest(&st, &j, &user, &cid, &new_id, true, true)
+        });
+        j.finish(&res);
+    });
+    job
+}
+
+fn run_extract(st: &AppState, job: &Job, user: &str, cid: &str, eid: &str, fi: usize, file: usize) -> anyhow::Result<String> {
+    let l = st.loaded(cid, eid)?;
+    let case = st.case(cid)?;
+    let src = case.evidence_by_id(eid)?;
+    let fsa = l.analysis.filesystems.get(fi).ok_or_else(|| anyhow::anyhow!("no such file system"))?;
+    let first = fsa.files.get(file).ok_or_else(|| anyhow::anyhow!("no such file"))?;
+    let mut read = |e: &kokino_ntfs::FsEntry, off: u64, n: usize| l.read_file(fi, e, "", off, n).unwrap_or_default();
+    let found = kokino_analysis::nested::find(std::slice::from_ref(first), &mut read);
+    let format = found.first().map(|n| n.format.clone()).ok_or_else(|| anyhow::anyhow!("{} is not a disk image Kokino recognizes", first.e.path))?;
+    let parts = kokino_analysis::nested::parts(&fsa.files, file, &format);
+    let tag = format!("[from {}:{}:{}]", eid, fi, first.e.record);
+    if case.evidence().iter().any(|r| r.notes.contains(&tag)) {
+        anyhow::bail!("this image was already extracted into the case");
+    }
+    let new_id = uuid::Uuid::new_v4().simple().to_string()[..10].to_string();
+    let dir = case.dir.join("derived").join(&new_id);
+    std::fs::create_dir_all(&dir)?;
+    let total: u64 = parts.iter().map(|&p| fsa.files[p as usize].e.size).sum();
+    let mut done = 0u64;
+    let mut copied = vec![];
+    const CHUNK: u64 = 16 << 20;
+    for &p in &parts {
+        let e = &fsa.files[p as usize].e;
+        let safe: String = e.name.chars().map(|c| if c.is_alphanumeric() || ".-_ ()[]".contains(c) { c } else { '_' }).collect();
+        let dest = dir.join(&safe);
+        let mut out = std::io::BufWriter::new(std::fs::File::create(&dest)?);
+        let mut hasher = kokino_core::hashing::MultiHasher::default();
+        let mut off = 0u64;
+        while off < e.size {
+            let n = (e.size - off).min(CHUNK) as usize;
+            let b = l.read_file(fi, e, "", off, n)?;
+            if b.len() != n {
+                anyhow::bail!("{}: could not read {} bytes at offset {}", e.path, n, off);
+            }
+            std::io::Write::write_all(&mut out, &b)?;
+            hasher.update(&b);
+            off += n as u64;
+            done += n as u64;
+            if !job.progress(&format!("Extracting {}", e.name), done, total) {
+                anyhow::bail!("extraction cancelled");
+            }
+        }
+        std::io::Write::flush(&mut out)?;
+        drop(out);
+        let read_hashes = hasher.finish();
+        // The copy on disk must hash the same as the bytes read.
+        let (copy_hashes, _) = kokino_core::hashing::hash_reader(std::fs::File::open(&dest)?, |_| true)?;
+        if copy_hashes.sha256 != read_hashes.sha256 {
+            anyhow::bail!("{}: the copy does not match the bytes read", e.path);
+        }
+        copied.push(serde_json::json!({"path": e.path, "mft_record": e.record, "deleted": e.deleted, "bytes": e.size, "saved_as": dest.display().to_string(), "hashes": read_hashes}));
+    }
+    let first_dest = dir.join(fsa.files[parts[0] as usize].e.name.chars().map(|c| if c.is_alphanumeric() || ".-_ ()[]".contains(c) { c } else { '_' }).collect::<String>());
+    let ev = Evidence::open(&first_dest).map_err(|e| anyhow::anyhow!("extracted, but it does not open as an image: {:#} (a differencing disk needs its parent extracted too)", e))?;
+    let rec = kokino_core::case::EvidenceRecord {
+        id: new_id.clone(),
+        name: first.e.name.clone(),
+        path: first_dest.display().to_string(),
+        format: ev.format_label(),
+        size: ev.size,
+        added: kokino_core::time::now_iso(),
+        notes: format!("Extracted from evidence \"{}\" ({}), file {}{} on volume {} {}", src.name, eid, first.e.path, if first.e.deleted { " (deleted)" } else { "" }, fsa.volume.index, tag),
+        hashes: None,
+        hashed_at: None,
+        expected: None,
+        embedded: ev.ewf_info().filter(|i| i.md5.is_some() || i.sha1.is_some()).map(|i| kokino_core::hashing::Hashes { md5: i.md5.clone().unwrap_or_default(), sha1: i.sha1.clone().unwrap_or_default(), sha256: String::new() }),
+        acquisition: ev.ewf_info().map(serde_json::to_value).transpose()?,
+    };
+    case.save_evidence(&rec)?;
+    case.audit.append(user, "evidence.extract", serde_json::json!({"from_evidence": eid, "fs": fi, "format": format, "files": copied, "record": rec}))?;
+    Ok(new_id)
+}
+
 /// Carve unallocated space, then rebuild the text index so carved
 /// documents become searchable.
 pub fn spawn_carve(st: Arc<AppState>, user: &str, cid: String, eid: String) -> Arc<Job> {
@@ -322,4 +416,50 @@ pub fn spawn_hashset_import(st: Arc<AppState>, user: &str, src: std::path::PathB
         j.finish(&res);
     });
     job
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An ISO stored on the Linux test image, extracted as evidence of its own.
+    #[test]
+    fn extracts_nested_image() {
+        let img = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/linux-server.img");
+        let iso = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/iso-rr-joliet.iso");
+        if !img.exists() || !iso.exists() {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("kokino-extract-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let st = AppState::new(root.clone(), 7311, false, vec![]).unwrap();
+        let case = kokino_core::case::Case::create(&root, "Nested", "tester", "").unwrap();
+        let cid = case.info.id.clone();
+        let ev = Evidence::open(&img).unwrap();
+        let rec = kokino_core::case::EvidenceRecord { id: "src1".into(), name: "linux-server.img".into(), path: img.display().to_string(), format: ev.format_label(), size: ev.size, added: String::new(), notes: String::new(), hashes: None, hashed_at: None, expected: None, embedded: None, acquisition: None };
+        case.save_evidence(&rec).unwrap();
+        let a = kokino_analysis::analyze(&ev, &mut |_, _, _| true).unwrap();
+        st.put(&cid, "src1", a, ev);
+        let l = st.loaded(&cid, "src1").unwrap();
+        let files = &l.analysis.filesystems[0].files;
+        let mut read = |e: &kokino_ntfs::FsEntry, off: u64, n: usize| l.read_file(0, e, "", off, n).unwrap_or_default();
+        let found = kokino_analysis::nested::find(files, &mut read);
+        assert_eq!(found.len(), 1, "{:?}", found);
+        assert_eq!((found[0].path.as_str(), found[0].format.as_str()), ("/home/alice/Downloads/tools.iso", "ISO 9660"));
+        let job = new_job(&st, "extract", "tester", &cid, "src1");
+        let id = run_extract(&st, &job, "tester", &cid, "src1", 0, found[0].file as usize).unwrap();
+        let new = case.evidence_by_id(&id).unwrap();
+        assert!(new.notes.starts_with("Extracted from evidence \"linux-server.img\" (src1), file /home/alice/Downloads/tools.iso on volume"), "{}", new.notes);
+        assert_eq!(std::fs::read(&new.path).unwrap(), std::fs::read(&iso).unwrap());
+        assert_eq!(new.size, std::fs::metadata(&iso).unwrap().len());
+        // Once only; and the audit log names the source and the copy's hashes.
+        assert!(run_extract(&st, &job, "tester", &cid, "src1", 0, found[0].file as usize).is_err());
+        let (h, _) = kokino_core::hashing::hash_reader(std::fs::File::open(&iso).unwrap(), |_| true).unwrap();
+        let log = std::fs::read_to_string(case.dir.join("audit.jsonl")).unwrap();
+        assert!(log.contains("\"evidence.extract\"") && log.contains(&h.sha256));
+        // The extracted image is analyzed like any evidence.
+        run_ingest(&st, &job, "tester", &cid, &id, true, true).unwrap();
+        assert!(st.loaded(&cid, &id).unwrap().analysis.filesystems.iter().any(|f| f.volume.fs_label.contains("ISO")));
+        std::fs::remove_dir_all(&root).ok();
+    }
 }

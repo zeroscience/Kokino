@@ -5,6 +5,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Disk images stored on the evidence (E01 with its segments, VHD, VHDX, VMDK with its extents, ISO, split and plain raw disks) are listed on the evidence summary; "Extract as evidence" copies all of an image's files into the case (checked against the bytes read), records them in the audit log with their hashes and where they came from, and adds and analyzes the image as evidence of its own.
+- Triage collections: a ZIP added as evidence is read as a file system (central directory, ZIP64, NTFS and Unix time fields, Velociraptor's escaped names), so Velociraptor offline collections and KAPE ZIP output can be examined as they are, their hash being the collector's. On any volume where a collected drive sits below a folder (KAPE's C, Velociraptor's uploads/auto/C:), Windows and Linux artifacts, browser history and email are read with the paths they had on the drive; checks that need a whole volume are not made from a collection.
+- Fuzz target `zip` (the ZIP reader and nested image detection).
+
 ## [1.3.0] - 2026-11-09
 
 Email, exports and older systems: mbox and .eml mail, every list as CSV or JSON, registry transaction logs, text of legacy Office files, Windows XP event logs, Internet Explorer cookies and compressed journald fields.

@@ -12,6 +12,8 @@ pub mod signatures;
 pub mod carve;
 pub mod doctext;
 pub mod mail;
+pub mod nested;
+pub mod zipfs;
 pub mod oletext;
 pub mod fs;
 pub mod hashsets;
@@ -178,10 +180,22 @@ fn analyze_fs(ev: &Evidence, v: &Volume, progress: Progress) -> anyhow::Result<F
     }
     progress(&stage, total, total);
 
-    let web = web::collect(&fs, &mut r, &files, &mut *progress);
-    let windows = windows::collect(&fs, &mut r, &files, &mut *progress);
-    let linux = linux::collect(&fs, &mut r, &files, &mut *progress);
-    let mail = mail::collect(&fs, &mut r, &files, &mut *progress);
+    // A triage collection keeps a drive's files below a folder; the artifact
+    // readers see the paths as they were on the drive (same files, same order).
+    let root = drive_root(&files);
+    let logical: Option<Vec<FileRow>> = root.as_ref().map(|p| files.iter().map(|f| {
+        let mut g = f.clone();
+        if g.e.path.len() > p.len() && g.e.path[..p.len()].eq_ignore_ascii_case(p) && g.e.path.as_bytes()[p.len()] == b'/' {
+            g.e.path = g.e.path[p.len()..].to_string();
+        }
+        g
+    }).collect());
+    let view: &[FileRow] = logical.as_deref().unwrap_or(&files);
+    let web = web::collect(&fs, &mut r, view, &mut *progress);
+    let windows = windows::collect(&fs, &mut r, view, &mut *progress);
+    let linux = linux::collect(&fs, &mut r, view, &mut *progress);
+    let mail = mail::collect(&fs, &mut r, view, &mut *progress);
+    drop(logical);
     // Email joins the system events on the timeline.
     let mut windows = windows;
     windows.timeline.extend(mail::timeline(&mail));
@@ -206,12 +220,40 @@ fn analyze_fs(ev: &Evidence, v: &Volume, progress: Progress) -> anyhow::Result<F
     }
 
     stats.impact.extend(scan.notes.iter().cloned());
+    if let Some(p) = &root {
+        stats.impact.push(format!("Triage collection: the collected drive's files are under {}. Windows and Linux artifacts, browser history and email were read with the paths they had on the drive; checks that need a whole volume (a missing change journal or event log) are not made from them.", p));
+    }
     stats.impact.extend(web::impact(&web));
     stats.impact.extend(windows::impact(&windows));
     stats.impact.extend(linux::impact(&linux));
     stats.impact.extend(mail::impact(&mail));
 
     Ok(FsAnalysis { volume: v.clone(), info: scan.info, files, unreadable: scan.unreadable, indicators, score, stats, web, windows, linux, mail })
+}
+
+/// The folder a collected drive sits in, when the volume is a triage
+/// collection: KAPE puts drive C: under "C", Velociraptor under
+/// "uploads/auto/C:" or "uploads/ntfs/\\.\C:". Found by the system files
+/// below it; `None` when they are at the root, as on a disk.
+pub fn drive_root(files: &[FileRow]) -> Option<String> {
+    const MARKS: &[&str] = &["/windows/system32/config/system", "/windows/system32/config/software", "/etc/passwd", "/etc/os-release"];
+    let mut best: Option<String> = None;
+    for f in files.iter().filter(|f| !f.e.is_dir && !f.e.deleted) {
+        let p = f.e.path.to_ascii_lowercase();
+        for m in MARKS {
+            if p.ends_with(m) && p.len() > m.len() {
+                let prefix = f.e.path[..f.e.path.len() - m.len()].to_string();
+                // Windows over Linux, and the shortest (outermost) prefix.
+                if best.as_ref().is_none_or(|b| prefix.len() < b.len()) {
+                    best = Some(prefix);
+                }
+            }
+        }
+    }
+    // Only a real collection: not a copy of a system kept somewhere on a disk
+    // that has its own system at the root.
+    let at_root = files.iter().any(|f| MARKS.iter().any(|m| f.e.path.eq_ignore_ascii_case(m)));
+    best.filter(|_| !at_root)
 }
 
 fn content_facts<R: std::io::Read + std::io::Seek>(fs: &Fs, r: &mut R, e: FsEntry) -> FileRow {
@@ -633,6 +675,37 @@ mod tests {
     }
 
     /// Ground truth from scripts/make_ext_fixture.py (linux-server.img).
+    /// Triage collections: the Windows test artifacts as Velociraptor and
+    /// KAPE pack them in a ZIP (scripts/make_collection_fixture.py).
+    #[test]
+    fn triage_collections() {
+        for (name, prefix) in [("collection-velociraptor.zip", "/uploads/auto/C:"), ("collection-kape.zip", "/C")] {
+            let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures").join(name);
+            assert!(p.exists(), "{} missing: run scripts/make_collection_fixture.py", name);
+            let ev = Evidence::open(&p).unwrap();
+            let a = analyze(&ev, &mut |_, _, _| true).unwrap();
+            assert_eq!(a.filesystems.len(), 1, "{name}: {:?}", a.errors);
+            let fs = &a.filesystems[0];
+            assert_eq!(fs.volume.fs, FsKind::Zip);
+            assert!(fs.files.iter().any(|f| f.e.path == format!("{prefix}/Windows/System32/config/SYSTEM")), "{name}");
+            assert_eq!(drive_root(&fs.files).as_deref(), Some(prefix));
+            // The same artifacts as on disk-win.img.
+            let w = &fs.windows;
+            assert_eq!(w.computer.name, "LAB-PC", "{name}: {:?}", w.sources);
+            assert_eq!(w.tasks.len(), 4, "{name}");
+            assert!(w.reg_deleted_keys.iter().any(|k| k.path.ends_with("TypedURLs")), "{name}");
+            assert!(fs.web.sources.iter().any(|s| s.browser == "Internet Explorer"), "{name}");
+            assert!(fs.stats.impact.iter().any(|l| l.starts_with(&format!("Triage collection: the collected drive's files are under {prefix}."))), "{name}: {:?}", fs.stats.impact);
+            // Whole-volume checks are not made from a collection.
+            assert!(!fs.indicators.iter().any(|i| i.id == "usnjrnl_missing" || i.id == "evtx_cleared"), "{name}: {:?}", fs.indicators.iter().map(|i| &i.id).collect::<Vec<_>>());
+            // Files read back from the ZIP: the SYSTEM hive starts with regf.
+            let mut r = volume_reader(&ev, &fs.volume).unwrap();
+            let f = Fs::open(&mut r, &fs.volume).unwrap();
+            let sys = fs.files.iter().find(|x| x.e.name == "SYSTEM").unwrap();
+            assert_eq!(&f.read(&mut r, &sys.e, "", 0, 4).unwrap(), b"regf");
+        }
+    }
+
     #[test]
     fn linux_server_artifacts() {
         let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/linux-server.img");

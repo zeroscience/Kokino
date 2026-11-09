@@ -39,7 +39,7 @@ checked against public test images with known answers where they exist
 - [ ] Ex01 (EWF version 2)
 - [x] ISO 9660 (Rock Ridge, Joliet, multisession history) and UDF (1.2.7)
 - [ ] UDF virtual (VAT) and sparable partitions; UDF 2.50 metadata partition checked on a real disc
-- [ ] ISO and virtual disk files found inside evidence, opened as evidence of their own
+- [x] ISO and virtual disk files found inside evidence, extracted as evidence of their own (unreleased)
 
 ## Later
 
@@ -75,7 +75,8 @@ checked against public test images with known answers where they exist
 - [ ] Carving of fragmented files
 
 ### Workflow
-- [ ] Import of triage collections (KAPE, Velociraptor, UAC)
+- [x] Triage collections: Velociraptor and KAPE ZIPs, KAPE VHDX output (unreleased)
+- [ ] Triage collections as plain folders; UAC
 - [x] JSON and CSV exports of every list, in the GUI and with `kokino export` (1.3.0)
 - [ ] Validation suite run automatically on every release
 - [ ] Signed release builds with an SBOM
