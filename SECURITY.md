@@ -146,13 +146,15 @@ Legacy event logs, email and journald compression (1.3.0):
 | `journalz` | journald's compressed fields: XZ, LZ4 (Kokino's own decoder) and zstd, from the input and from offsets inside it | 10 min | 45,374,291 | none |
 | `linuxlogs` | again, with a journal holding XZ and LZ4 fields | 10 min | 7,898,202 | none |
 
-Shadow copies, BitLocker and triage collections (unreleased):
+Shadow copies, BitLocker, triage collections and VHDX logs (unreleased):
 
 | Target | What it covers | Rounds | Inputs in all | Distinct problems found |
 |---|---|---|--:|---|
 | `zip` | ZIP collections read as file systems (central directory, ZIP64, time fields, Velociraptor's escaped names) and nested image detection | 3 x 10 min | 5,383,514 | 2: a crash on escaped names next to multi-byte characters, and runaway memory from claimed sizes; fixed |
 | `vss` | Shadow copy catalogs, block lists (full, overlay, forwarded blocks) and snapshot reads across the stores | 3 x 10 min | 9,887,067 | 2: integer overflows on offsets near 2^64, and a stack overflow from a catalog listing thousands of stores; fixed |
-| `bde` | BitLocker volume headers, FVE metadata blocks and entries, key protectors, key unwrapping (clear key), and the decrypting reader for every method | 2 x 10 min | 1,891,137 | 1: an integer overflow on a boot sector copy offset near 2^64; fixed |
+| `bde` | BitLocker volume headers, FVE metadata blocks and entries, key protectors, key unwrapping (clear key, startup key files), and the decrypting reader for every method | 3 x 10 min | 4,459,482 | 1: an integer overflow on a boot sector copy offset near 2^64; fixed |
+| `tar` | tar and tar.gz collections (UAC): headers and checksums, base-256 sizes, GNU long names, PAX records, hard links, reads | 10 min | 4,169,869 | none |
+| `vdisk` | again, with a VHDX whose log holds writes to replay (entries, descriptors, data sectors, the circular log) | 10 min | 36,659 | none |
 
 The first `vss` round ran an optimized build without overflow checks and
 found nothing; the same inputs on the `fuzz` profile (overflow checks on)
@@ -160,7 +162,10 @@ found the overflows within seconds, and the stack overflow later. That
 round and the first `bde` round were stopped to fix what they found and are
 not counted in the inputs; the rounds after the fixes found nothing.
 
-In all: 584,319,572 inputs over 34 targets, and 34 distinct problems
+The `vdisk` target writes each input to a file (virtual disks are opened
+by path), so it runs far fewer inputs than the others.
+
+In all: 591,094,445 inputs over 35 targets, and 34 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed

@@ -161,6 +161,8 @@ pub enum VolReader {
     Plain(SubReader<EvidenceReader>),
     Shadow(Box<vss::ShadowReader<SubReader<EvidenceReader>>>),
     BitLocker(Box<bde::BdeReader<SubReader<EvidenceReader>>>),
+    /// A shadow copy inside a decrypted BitLocker volume.
+    BitLockerShadow(Box<vss::ShadowReader<bde::BdeReader<SubReader<EvidenceReader>>>>),
 }
 
 impl Read for VolReader {
@@ -169,6 +171,7 @@ impl Read for VolReader {
             VolReader::Plain(r) => r.read(buf),
             VolReader::Shadow(r) => r.read(buf),
             VolReader::BitLocker(r) => r.read(buf),
+            VolReader::BitLockerShadow(r) => r.read(buf),
         }
     }
 }
@@ -179,6 +182,7 @@ impl Seek for VolReader {
             VolReader::Plain(r) => r.seek(p),
             VolReader::Shadow(r) => r.seek(p),
             VolReader::BitLocker(r) => r.seek(p),
+            VolReader::BitLockerShadow(r) => r.seek(p),
         }
     }
 }
@@ -188,7 +192,11 @@ pub fn volume_reader(ev: &Evidence, v: &Volume) -> std::io::Result<VolReader> {
     if v.bitlocker.is_some() {
         let mut sub = SubReader::new(ev.reader()?, v.start, v.length);
         let key = bitlocker_key(ev, v, &mut sub).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::PermissionDenied, "BitLocker volume is locked"))?;
-        return Ok(VolReader::BitLocker(Box::new(bde::BdeReader::new(sub, v.length, &key)?)));
+        let dec = bde::BdeReader::new(sub, v.length, &key)?;
+        return Ok(match &v.shadow {
+            Some(s) => VolReader::BitLockerShadow(Box::new(vss::ShadowReader::new(dec, v.length, s.store)?)),
+            None => VolReader::BitLocker(Box::new(dec)),
+        });
     }
     match &v.shadow {
         None => Ok(VolReader::Plain(SubReader::new(ev.reader()?, v.start, v.length))),
@@ -225,9 +233,66 @@ pub fn unlocked_volumes(ev: &Evidence, vols: &[Volume]) -> Vec<Volume> {
         let mut u = volume::mk(vols.len() + out.len(), v.kind, v.start, v.length, format!("Volume {} decrypted ({}, unlocked with: {})", v.index, bde::method_label(key.method), key.protector.to_lowercase()), fs);
         u.fs_label = format!("{} (BitLocker, unlocked)", fs.label());
         u.bitlocker = Some(BitLockerRef { of_volume: v.index, method: bde::method_label(key.method).into(), protector: key.protector.clone() });
+        let unlocked_index = u.index;
+        let bref = u.bitlocker.clone();
         out.push(u);
+        // Shadow copies on the decrypted NTFS volume.
+        if fs == FsKind::Ntfs {
+            for s in vss::stores(&mut r, v.length) {
+                let day = chrono::DateTime::from_timestamp(((s.created / 10_000_000) as i64).saturating_sub(11_644_473_600), 0).map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or_default();
+                // The full encrypted length: the snapshot is read through the decryption.
+                let mut sv = volume::mk(vols.len() + out.len(), v.kind, v.start, v.length, format!("Shadow copy {} of volume {} (decrypted), created {}", s.index, unlocked_index, day), FsKind::Ntfs);
+                sv.fs_label = "NTFS (shadow copy, BitLocker)".into();
+                sv.shadow = Some(ShadowRef { of_volume: unlocked_index, store: s.index, id: s.id.clone(), created: s.created });
+                sv.bitlocker = bref.clone();
+                out.push(sv);
+            }
+        }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Shadow copies inside a BitLocker volume are found once it is
+    /// unlocked, and read through the decryption.
+    #[test]
+    fn shadow_copies_inside_bitlocker() {
+        let mut plain = vss::tests::synthetic();
+        plain[0..512].fill(0);
+        plain[3..11].copy_from_slice(b"NTFS    ");
+        plain[510] = 0x55;
+        plain[511] = 0xAA;
+        let n = plain.len();
+        plain.resize(n + 256 * 1024, 0);
+        let id = [7u8; 16];
+        let disk = bde::tests::build(&plain, [n, n + 64 * 1024, n + 128 * 1024], n + 192 * 1024, &[bde::tests::Prot::Startup(id, [9u8; 32])]);
+        let dir = std::env::temp_dir().join(format!("kokino-bde-vss-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("vol.img");
+        std::fs::write(&p, &disk).unwrap();
+        let ev = Evidence::open(&p).unwrap();
+        let vols = detect_volumes(&mut ev.reader().unwrap(), ev.size);
+        assert_eq!(vols.len(), 1);
+        assert!(unlocked_volumes(&ev, &vols).is_empty(), "locked without a key");
+        let (ev, _) = unlock_bitlocker(ev, &bde::Secret::StartupKey(&bde::tests::bek(id, [9u8; 32])));
+        let u = unlocked_volumes(&ev, &vols);
+        assert_eq!(u.iter().map(|v| (v.index, v.fs_label.as_str())).collect::<Vec<_>>(), vec![(1, "NTFS (BitLocker, unlocked)"), (2, "NTFS (shadow copy, BitLocker)"), (3, "NTFS (shadow copy, BitLocker)")]);
+        assert_eq!(u[1].shadow.as_ref().unwrap().of_volume, 1);
+        let read = |v: &Volume, off: u64| {
+            let mut r = volume_reader(&ev, v).unwrap();
+            let mut b = [0u8; 4];
+            read_at(&mut r, off, &mut b).unwrap();
+            b
+        };
+        assert_eq!(read(&u[1], 0x10000), [0xA1; 4]); // store 1's own copy
+        assert_eq!(read(&u[1], 0x18000), [0xB2; 4]); // forwarded to store 2
+        assert_eq!(read(&u[2], 0x10000), [4; 4]); // store 2: live
+        assert_eq!(read(&u[0], 0x20000), [8; 4]); // the decrypted volume itself
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 /// Tries a BitLocker secret on every BitLocker volume of the evidence and

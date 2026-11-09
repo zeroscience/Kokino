@@ -597,6 +597,8 @@ function fsPicker(ctx, tab) {
 /** FAT12/16/32 and exFAT: one timestamp set, no MFT, no named streams. */
 const isFat = (label) => /fat/i.test(label || "");
 const isExt = (label) => /^ext/i.test(label || "");
+/** A triage collection read as a file system (ZIP, tar). */
+const isCollection = (label) => /^(zip|tar)$/i.test(label || "");
 const isOptical = (label) => /iso 9660|udf/i.test(label || "");
 const isMac = (label) => /hfs|apfs/i.test(label || "");
 const isNtfs = (label) => !isFat(label) && !isExt(label) && !isOptical(label) && !isMac(label);
@@ -614,7 +616,8 @@ function volumeMap(s) {
   const vols = s.volumes.filter((v) => !v.shadow && !v.bitlocker).map((v) => {
     const u = views.find((x) => x.bitlocker && x.bitlocker.of_volume === v.index);
     const n = views.filter((x) => x.shadow && x.shadow.of_volume === v.index).length;
-    if (u) return { ...v, supported: u.supported, fs_label: `BitLocker, unlocked: ${u.fs_label.replace(" (BitLocker, unlocked)", "")}` };
+    const nu = u ? views.filter((x) => x.shadow && x.shadow.of_volume === u.index).length : 0;
+    if (u) return { ...v, supported: u.supported, fs_label: `BitLocker, unlocked: ${u.fs_label.replace(" (BitLocker, unlocked)", "")}${nu ? ` + ${nu} shadow cop${nu === 1 ? "y" : "ies"}` : ""}` };
     if (n) return { ...v, fs_label: `${v.fs_label} + ${n} shadow cop${n === 1 ? "y" : "ies"}` };
     return v;
   });
@@ -695,7 +698,7 @@ function summaryTab(ctx) {
   const maxCat = Math.max(1, ...st.by_category.map((c) => c[1]));
   const maxExt = Math.max(1, ...st.top_ext.map((c) => c[1]));
   render(h("div.stack",
-    h("div.hd", h("div", h("h1", ev.record.name), h("div.muted", `${fs.volume.fs_label} "${fs.info.label}", ${isOptical(fs.volume.fs_label) ? `${fs.info.version}, created ${ts(fs.info.serial, 19)}, sector` : isExt(fs.volume.fs_label) || isMac(fs.volume.fs_label) ? `${fs.info.version}, UUID ${fs.info.serial}, block` : `serial ${fs.info.serial}, ${isFat(fs.volume.fs_label) ? "" : `NTFS ${fs.info.version}, `}cluster`} ${fs.info.cluster_size} B, analyzed ${ts(s.analyzed_at, 19, { label: true })} by Kokino ${s.tool_version}`)), h("span.sp"), fsPicker(ctx, "summary"),
+    h("div.hd", h("div", h("h1", ev.record.name), h("div.muted", isCollection(fs.volume.fs_label) ? `${fs.info.version}, ${bytes(fs.info.volume_size)}, analyzed ${ts(s.analyzed_at, 19, { label: true })} by Kokino ${s.tool_version}` : `${fs.volume.fs_label} "${fs.info.label}", ${isOptical(fs.volume.fs_label) ? `${fs.info.version}, created ${ts(fs.info.serial, 19)}, sector` : isExt(fs.volume.fs_label) || isMac(fs.volume.fs_label) ? `${fs.info.version}, UUID ${fs.info.serial}, block` : `serial ${fs.info.serial}, ${isFat(fs.volume.fs_label) ? "" : `NTFS ${fs.info.version}, `}cluster`} ${fs.info.cluster_size} B, analyzed ${ts(s.analyzed_at, 19, { label: true })} by Kokino ${s.tool_version}`)), h("span.sp"), fsPicker(ctx, "summary"),
       h("a.btn", { href: apiUrl(`/cases/${ctx.cid}/evidence/${ctx.eid}/report`), target: "_blank", rel: "noopener" }, "HTML report"),
       canWrite() ? h("button", { onclick: () => exportDialog(ctx) }, "Export lists") : null),
     h("div.card.flat", h("div.hd", h("h3", "Disk layout"), h("span.sp"), h("span.muted", `${s.image_format}, ${bytes(s.image_size)}`)), volumeMap(s)),
@@ -735,14 +738,15 @@ function bitlockerCard(ctx) {
   api(`/cases/${ctx.cid}/evidence/${ctx.eid}/bitlocker`, { quiet: true }).then((r) => {
     if (!r.items.length) return;
     const form = (v) => {
-      const kind = h("select", h("option", { value: "password" }, "Password"), h("option", { value: "recovery" }, "Recovery password (48 digits)"));
+      const kind = h("select", h("option", { value: "password" }, "Password"), h("option", { value: "recovery" }, "Recovery password (48 digits)"), h("option", { value: "startup" }, "Startup key (.BEK file)"));
       const secret = h("input", { type: "password", autocomplete: "off", placeholder: "Password", style: { flex: 1, minWidth: "220px" } });
-      kind.addEventListener("change", () => { secret.type = kind.value === "recovery" ? "text" : "password"; secret.placeholder = kind.value === "recovery" ? "000000-000000-000000-000000-000000-000000-000000-000000" : "Password"; });
+      const ph = { password: "Password", recovery: "000000-000000-000000-000000-000000-000000-000000-000000", startup: "Path of the .BEK file on the Kokino server, e.g. E:\\keys\\{GUID}.BEK" };
+      kind.addEventListener("change", () => { secret.type = kind.value === "password" ? "password" : "text"; secret.placeholder = ph[kind.value]; });
       const btn = h("button", "Unlock");
       const go1 = () => {
         if (!secret.value) return;
         btn.disabled = true;
-        const body = kind.value === "recovery" ? { recovery_password: secret.value } : { password: secret.value };
+        const body = kind.value === "recovery" ? { recovery_password: secret.value } : kind.value === "startup" ? { startup_key: secret.value } : { password: secret.value };
         api(`/cases/${ctx.cid}/evidence/${ctx.eid}/bitlocker/${v.volume}/unlock`, { method: "POST", body })
           .then((j) => { secret.value = ""; toast(`Volume ${v.volume} unlocked (${j.unlocked.method}); analyzing it again`); kickJobs(j.job); route(); })
           .catch((e) => { btn.disabled = false; toast(e.message, true); });
@@ -752,7 +756,7 @@ function bitlockerCard(ctx) {
       return h("div.row.wrap", { style: { gap: "8px", marginTop: "8px" } }, kind, secret, btn);
     };
     box.replaceChildren(h("div.card.stack", h("h3", `BitLocker (${r.items.length})`),
-      h("p.muted", { style: { margin: 0 } }, "Encrypted volumes. Unlocking keeps the volume key with the case (not the password), records it in the audit log and analyzes the evidence again; the decrypted volume is added as a volume of its own. Failed attempts are recorded too."),
+      h("p.muted", { style: { margin: 0 } }, "Encrypted volumes. Unlock with the password, the recovery password or the startup key file (.BEK, from a USB stick or a key backup). Unlocking keeps the volume key with the case (not the password), records it in the audit log and analyzes the evidence again; the decrypted volume is added as a volume of its own. Failed attempts are recorded too."),
       ...r.items.map((v) => h("div.card.flat",
         h("div.row.wrap", h("b", `Volume ${v.volume}`), v.method ? h("span.pill", v.method) : null, v.to_go ? h("span.pill.info", "BitLocker To Go") : null,
           v.unlocked ? h("span.pill.ok", `unlocked (${v.unlocked.toLowerCase()})`) : h("span.pill.bad", "locked")),
@@ -1904,10 +1908,15 @@ async function carvedTab(ctx) {
   const seg = h("div.seg.wrap");
   const viewSeg = h("div.seg");
   const out = h("div");
+  // Offsets in the image link to the hex view; those in a decrypted volume do not.
+  const offCell = (x, onclick) => x.space != null
+    ? h("span", { title: `Offset in decrypted volume ${x.space} (the hex view shows the image as stored)` }, `vol ${x.space}: ${num(x.offset)}`)
+    : h("a", { href: `#/c/${cid}/e/${eid}/hex?off=${x.offset}`, onclick }, num(x.offset));
+  const offName = (x) => x.space != null ? "Offset in decrypted volume " + x.space : "Offset in image";
   const label = (f) => h("span", h("b", f.label), f.complete ? null : h("span.pill.warn", { style: { marginLeft: "6px" }, title: "The end of the file was not found: it may be cut off or overwritten" }, "incomplete"));
   const detail = (f) => webDetail(`Carved file #${f.id}: ${f.label}`, [
     ["Type", `${f.label} (.${f.ext})`],
-    ["Offset in image", h("span", h("a", { href: `#/c/${cid}/e/${eid}/hex?off=${f.offset}`, onclick: closeModal }, num(f.offset)), h("span.muted", ` (0x${f.offset.toString(16)})`))],
+    [offName(f), h("span", offCell(f, closeModal), h("span.muted", ` (0x${f.offset.toString(16)})`))],
     ["Length", `${num(f.len)} bytes`],
     ["Found in", f.region],
     ["Complete", f.complete ? "yes, the format's end was found" : "no, cut off or partly overwritten"],
@@ -1917,9 +1926,9 @@ async function carvedTab(ctx) {
     ["SHA-256", f.sha256],
     ["", h("div.row", PICTURES.includes(f.kind) ? h("img.carved-big", { src: apiUrl(`${base}/${f.id}/preview`), alt: "" }) : null)],
     ["", h("div.row.wrap", ["jpeg", "png", "bmp"].includes(f.kind) ? h("a.btn", { href: viewerHref(cid, eid, { kind: "carved", id: f.id }), onclick: closeModal }, icon("image", 14), "Analyze picture") : null,
-      h("button", { onclick: () => bytesDialog(`Carved ${f.label} #${f.id}`, `/cases/${cid}/evidence/${eid}/carved/${f.id}`, (off) => go(`/c/${cid}/e/${eid}/hex?off=${f.offset + off}`)) }, icon("hex", 14), "Byte map and strings"))],
+      h("button", { onclick: () => bytesDialog(`Carved ${f.label} #${f.id}`, `/cases/${cid}/evidence/${eid}/carved/${f.id}`, (off) => f.space != null ? toast("Carved from a decrypted volume: the hex view shows the image as stored") : go(`/c/${cid}/e/${eid}/hex?off=${f.offset + off}`)) }, icon("hex", 14), "Byte map and strings"))],
     ["", canWrite() ? h("a.btn.primary", { href: apiUrl(`${base}/${f.id}/export`) }, "Export (hashed + audited)") : h("span.muted", "Read-only access: export not available")],
-  ], { cid, eid, kind: "carved", key: `carved:${eid}:${f.offset}`, carved: f.id, title: `Carved ${f.label} #${f.id}`, path: `${f.region} at offset ${f.offset}` });
+  ], { cid, eid, kind: "carved", key: `carved:${eid}:${f.space != null ? "v" + f.space + ":" : ""}${f.offset}`, carved: f.id, title: `Carved ${f.label} #${f.id}`, path: `${f.region} at offset ${f.offset}` });
   const expC = h("span");
   const draw = () => {
     expC.replaceChildren(exportButtons(ctx, 0, kind === "ie-records" ? "ie-records" : "carved") || "");
@@ -1931,14 +1940,14 @@ async function carvedTab(ctx) {
       const recDetail = (x) => webDetail(`Internet Explorer record (${x.what})`, [
         [`Time (${zoneName()})`, ts(x.t_iso)], ["Record", `${x.tag}, ${num(x.len)} bytes`], ["What", x.what], ["User", x.user], ["URL", x.url], ["Title", x.title],
         [x.what === "download" ? "Saved to" : "Cached as", x.file], ["Hits", String(x.hits)], ["Found in", x.region + (x.in_file != null ? `, inside carved index.dat #${x.in_file}` : "")],
-        ["Offset in image", h("a", { href: `#/c/${cid}/e/${eid}/hex?off=${x.offset}`, onclick: closeModal }, num(x.offset))],
+        [offName(x), offCell(x, closeModal)],
         ["Note", x.what === "daily history" ? "Daily history keeps the visit time twice, in UTC and in the computer's local time; the UTC one is shown." : ""],
-      ], { cid, eid, kind: "offset", key: `ierec:${eid}:${x.offset}`, offset: x.offset, len: x.len, title: `IE ${x.what}: ${x.url.slice(0, 120)}`, path: `${x.region} at offset ${x.offset}`, time: x.t_iso || "" });
+      ], { cid, eid, kind: "offset", key: `ierec:${eid}:${x.space != null ? "v" + x.space + ":" : ""}${x.offset}`, offset: x.space != null ? null : x.offset, len: x.len, title: `IE ${x.what}: ${x.url.slice(0, 120)}`, path: `${x.region} at offset ${x.offset}`, time: x.t_iso || "" });
       out.replaceChildren(...[h("div.scroll", { style: { maxHeight: "calc(100vh - 290px)" } }, h("table.tbl.sys", h("thead", h("tr", [`Time (${zoneName()})`, "What", "User", "URL", "Hits", "Offset"].map((c) => h("th", c)))),
         h("tbody", recs.slice(0, 5000).map((x) => h("tr", { onclick: () => recDetail(x) },
           h("td.mono", ts(x.t_iso, 19)), h("td", h("span.pill" + (x.what.includes("history") ? ".info" : ""), x.what), x.tag === "LEAK" ? h("span.pill.warn", "LEAK") : null),
           h("td", x.user), h("td.nm", { title: x.url }, x.title ? h("b", x.title) : null, h("div.muted.ell", x.url), x.file ? h("div.muted.ell", x.file) : null), h("td.num", x.hits),
-          h("td.mono", h("a", { href: `#/c/${cid}/e/${eid}/hex?off=${x.offset}`, onclick: (e) => e.stopPropagation() }, num(x.offset)))))))),
+          h("td.mono", offCell(x, (e) => e.stopPropagation()))))))),
         recs.length > 5000 ? h("p.muted", `Showing the first 5,000 of ${num(recs.length)}; use kokino carve for the full list.`) : null].filter(Boolean));
       return;
     }
@@ -1950,7 +1959,7 @@ async function carvedTab(ctx) {
     } else {
       out.replaceChildren(list.length ? h("div.scroll", { style: { maxHeight: "calc(100vh - 290px)" } }, h("table.tbl.sys", h("thead", h("tr", ["Offset", "Type", "Size", "Detail", "Found in", "Note", "SHA-256"].map((c) => h("th", c)))),
         h("tbody", list.map((f) => h("tr", { onclick: () => detail(f) },
-          h("td.mono", h("a", { href: `#/c/${cid}/e/${eid}/hex?off=${f.offset}`, onclick: (e) => e.stopPropagation() }, num(f.offset))), h("td", label(f)), h("td.num", bytes(f.len)), h("td", f.detail), h("td.muted", f.region),
+          h("td.mono", offCell(f, (e) => e.stopPropagation())), h("td", label(f)), h("td.num", bytes(f.len)), h("td", f.detail), h("td.muted", f.region),
           h("td.muted", [f.note, f.beyond_region ? "runs into allocated space" : ""].filter(Boolean).join("; ")), h("td.mono.muted", { title: f.sha256 }, f.sha256.slice(0, 16))))))) : h("div.card.empty", "None."));
     }
   };

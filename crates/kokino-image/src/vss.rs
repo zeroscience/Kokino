@@ -236,7 +236,7 @@ impl<R: Read + Seek> Seek for ShadowReader<R> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn put64(b: &mut [u8], o: usize, v: u64) {
@@ -246,8 +246,7 @@ mod tests {
     /// A 1 MiB "volume" with two stores. Block 0x10000: store 1 holds it whole.
     /// Block 0x14000: store 1 overlays sector 2 on store 2's copy. Block
     /// 0x18000: store 1 forwards to 0x1c000 in store 2. Everything else: live.
-    #[test]
-    fn rebuilds_snapshots() {
+    pub(crate) fn synthetic() -> Vec<u8> {
         let len = 1 << 20;
         let mut v = vec![0u8; len];
         for (i, b) in v.iter_mut().enumerate() {
@@ -303,7 +302,13 @@ mod tests {
         let l2 = list(&[(0x14000, 0, 0x58000, 0, 0), (0x1c000, 0, 0x5C000, 0, 0)]);
         v[0x44000..0x48000].copy_from_slice(&l1);
         v[0x48000..0x4C000].copy_from_slice(&l2);
-        let mut r = std::io::Cursor::new(v);
+        v
+    }
+
+    #[test]
+    fn rebuilds_snapshots() {
+        let len = 1 << 20;
+        let mut r = std::io::Cursor::new(synthetic());
         let st = stores(&mut r, len as u64);
         assert_eq!(st.iter().map(|s| (s.index, s.created)).collect::<Vec<_>>(), vec![(1, 100), (2, 200)]);
         let read = |store: usize, off: u64, n: usize| {

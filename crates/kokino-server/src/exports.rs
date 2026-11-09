@@ -260,15 +260,15 @@ pub fn table(l: &Loaded, fi: usize, hs: Option<&HashStatus>, carved: Option<&Car
         "carved" => {
             let c = carved.ok_or_else(|| anyhow::anyhow!("this evidence has not been carved"))?;
             tb(
-                vec!["id", "offset", "length", "kind", "label", "complete", "detail", "region", "note", "beyond_region", "md5", "sha256"],
-                c.files.iter().map(|f| vec![json!(f.id), json!(f.offset), json!(f.len), s(&f.kind), s(&f.label), json!(f.complete), s(&f.detail), s(&f.region), s(&f.note), json!(f.beyond_region), s(&f.md5), s(&f.sha256)]).collect(),
+                vec!["id", "offset", "length", "kind", "label", "complete", "detail", "region", "note", "beyond_region", "md5", "sha256", "decrypted_volume"],
+                c.files.iter().map(|f| vec![json!(f.id), json!(f.offset), json!(f.len), s(&f.kind), s(&f.label), json!(f.complete), s(&f.detail), s(&f.region), s(&f.note), json!(f.beyond_region), s(&f.md5), s(&f.sha256), opt(f.space)]).collect(),
             )
         }
         "ie-records" => {
             let c = carved.ok_or_else(|| anyhow::anyhow!("this evidence has not been carved"))?;
             tb(
-                vec!["offset", "length", "record", "what", "time_utc", "user", "url", "title", "file", "hits", "region", "inside_carved_file"],
-                c.records.iter().map(|r| vec![json!(r.offset), json!(r.len), s(&r.tag), s(&r.what), t(r.t), s(&r.user), s(&r.url), s(&r.title), s(&r.file), json!(r.hits), s(&r.region), opt(r.in_file)]).collect(),
+                vec!["offset", "length", "record", "what", "time_utc", "user", "url", "title", "file", "hits", "region", "inside_carved_file", "decrypted_volume"],
+                c.records.iter().map(|r| vec![json!(r.offset), json!(r.len), s(&r.tag), s(&r.what), t(r.t), s(&r.user), s(&r.url), s(&r.title), s(&r.file), json!(r.hits), s(&r.region), opt(r.in_file), opt(r.space)]).collect(),
             )
         }
         _ => anyhow::bail!("no such list: {}", what),

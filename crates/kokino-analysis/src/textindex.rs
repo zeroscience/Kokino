@@ -503,9 +503,12 @@ pub fn build(ev: &Evidence, analysis: &Analysis, carved: Option<&crate::carve::C
 
     // Disk level: gaps between partitions, and volumes not parsed as a file system.
     let parsed: std::collections::HashSet<usize> = analysis.filesystems.iter().map(|f| f.volume.index).collect();
+    // Encrypted volumes read decrypted: their ciphertext holds no text.
+    let unlocked: std::collections::HashSet<usize> = analysis.volumes.iter().filter_map(|v| v.bitlocker.as_ref().map(|b| b.of_volume)).collect();
     let raw: Vec<(i64, u64, u64)> = analysis
         .volumes
         .iter()
+        .filter(|v| !v.is_virtual() && !unlocked.contains(&v.index))
         .filter_map(|v| match v.kind {
             VolumeKind::Unallocated => Some((SRC_UNALLOC, v.start, v.length)),
             _ if !parsed.contains(&v.index) => Some((SRC_RAW, v.start, v.length)),
@@ -538,9 +541,7 @@ pub fn build(ev: &Evidence, analysis: &Analysis, carved: Option<&crate::carve::C
         let n = docs.len() as u64;
         for (k, f) in docs.into_iter().enumerate() {
             progress("Text in carved documents", k as u64, n);
-            let mut data = vec![0u8; f.len as usize];
-            let got = read_at(&mut r, f.offset, &mut data)?;
-            data.truncate(got);
+            let Ok(data) = crate::carve::read_carved(ev, &analysis.volumes, f.space, f.offset, f.len) else { continue };
             let x = crate::doctext::extract(&data);
             if x.parts.is_empty() {
                 continue;

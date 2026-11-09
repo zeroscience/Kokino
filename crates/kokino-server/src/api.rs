@@ -516,6 +516,8 @@ async fn bitlocker_list(State(st): St, Path((cid, eid)): Path<(String, String)>)
 struct UnlockB {
     password: Option<String>,
     recovery_password: Option<String>,
+    /// Path of a startup key file (.BEK) on the server.
+    startup_key: Option<String>,
 }
 
 /// Unlocks a BitLocker volume with its password or recovery password, keeps
@@ -533,15 +535,36 @@ async fn bitlocker_unlock(State(st): St, Extension(me): Me, Path((cid, eid, vi))
         let info = bde::info(&mut kokino_image::SubReader::new(ev.reader()?, v.start, v.length), v.length)?;
         let pw = b.password.as_deref().filter(|s| !s.is_empty());
         let rp = b.recovery_password.as_deref().map(str::trim).filter(|s| !s.is_empty());
-        let secret = match (pw, rp) {
-            (Some(p), _) => bde::Secret::Password(p),
-            (None, Some(r)) => bde::Secret::RecoveryPassword(r),
-            _ => anyhow::bail!("give the password or the recovery password"),
+        let sk = b.startup_key.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let bek = match sk {
+            Some(p) => {
+                let path = std::path::Path::new(p);
+                // Like evidence: nothing from inside the cases directory.
+                if inside_cases_dir(&st2.root, path) {
+                    anyhow::bail!("files in the cases directory cannot be used as startup keys");
+                }
+                let m = std::fs::metadata(path).map_err(|e| anyhow::anyhow!("cannot read {}: {}", p, e))?;
+                if !m.is_file() || m.len() > 64 * 1024 {
+                    anyhow::bail!("{} is not a startup key file (.BEK files are a few hundred bytes)", p);
+                }
+                Some(std::fs::read(path)?)
+            }
+            None => None,
         };
-        let kind = if pw.is_some() { "Password" } else { "Recovery password" };
+        let secret = match (pw, rp, &bek) {
+            (Some(p), _, _) => bde::Secret::Password(p),
+            (None, Some(r), _) => bde::Secret::RecoveryPassword(r),
+            (None, None, Some(b)) => bde::Secret::StartupKey(b),
+            _ => anyhow::bail!("give the password, the recovery password or a startup key file"),
+        };
+        let kind = match secret {
+            bde::Secret::Password(_) => "Password",
+            bde::Secret::RecoveryPassword(_) => "Recovery password",
+            _ => "Startup key",
+        };
         match bde::unlock(&info, &secret) {
             Err(e) => {
-                case.audit.append(&user, "evidence.unlock_failed", json!({"evidence": eid2, "volume": vi, "start": v.start, "protector": kind, "reason": e}))?;
+                case.audit.append(&user, "evidence.unlock_failed", json!({"evidence": eid2, "volume": vi, "start": v.start, "protector": kind, "startup_key_file": sk, "reason": e}))?;
                 anyhow::bail!("{}", e)
             }
             Ok(k) => {
@@ -549,7 +572,8 @@ async fn bitlocker_unlock(State(st): St, Extension(me): Me, Path((cid, eid, vi))
                 keys.retain(|s| s.volume_start != v.start);
                 keys.push(crate::state::StoredKey { volume_start: v.start, key: k.clone(), by: user.clone(), at: now_iso() });
                 crate::state::save_keys(&case, &eid2, &keys)?;
-                case.audit.append(&user, "evidence.unlock", json!({"evidence": eid2, "volume": vi, "start": v.start, "protector": k.protector, "method": bde::method_label(k.method), "volume_id": info.volume_id}))?;
+                let bek_sha256 = bek.as_ref().map(|b| kokino_core::hashing::hash_reader(&b[..], |_| true).map(|(h, _)| h.sha256)).transpose()?;
+                case.audit.append(&user, "evidence.unlock", json!({"evidence": eid2, "volume": vi, "start": v.start, "protector": k.protector, "method": bde::method_label(k.method), "volume_id": info.volume_id, "startup_key_file": sk, "startup_key_sha256": bek_sha256}))?;
                 Ok(json!({"volume": vi, "protector": k.protector, "method": bde::method_label(k.method)}))
             }
         }
@@ -796,7 +820,20 @@ fn carved_src(st: &AppState, cid: &str, eid: &str, id: u32) -> anyhow::Result<By
     let case = st.case(cid)?;
     let res = jobs::load_carved(&case, eid).ok_or_else(|| anyhow::anyhow!("this evidence has not been carved"))?;
     let f = res.files.into_iter().find(|f| f.id == id).ok_or_else(|| anyhow::anyhow!("no such carved file"))?;
-    image_range(&case.evidence_by_id(eid)?, f.offset, f.len)
+    if f.space.is_none() {
+        return image_range(&case.evidence_by_id(eid)?, f.offset, f.len);
+    }
+    // Carved from a decrypted volume: read it decrypted.
+    let l = st.loaded(cid, eid)?;
+    let (mut reader, size) = kokino_analysis::carve::space_reader(&l.evidence, &l.analysis.volumes, f.space)?;
+    let (start, len) = (f.offset, f.len.min(size.saturating_sub(f.offset)));
+    Ok((len, Box::new(move |off, n| {
+        let n = n.min(len.saturating_sub(off) as usize);
+        let mut buf = vec![0u8; n];
+        let got = read_at(&mut reader, start + off, &mut buf)?;
+        buf.truncate(got);
+        Ok(buf)
+    })))
 }
 
 fn image_range(rec: &EvidenceRecord, start: u64, len: u64) -> anyhow::Result<ByteSrc> {
@@ -2027,11 +2064,8 @@ fn carved_bytes(st: &AppState, cid: &str, eid: &str, id: u32, max: u64) -> anyho
     if f.len > max {
         anyhow::bail!("carved file is {} bytes; larger than {}", f.len, max);
     }
-    let rec = case.evidence_by_id(eid)?;
-    let ev = Evidence::open(&rec.path)?;
-    let mut buf = vec![0u8; f.len as usize];
-    let n = read_at(&mut ev.reader()?, f.offset, &mut buf)?;
-    buf.truncate(n);
+    let l = st.loaded(cid, eid)?;
+    let buf = kokino_analysis::carve::read_carved(&l.evidence, &l.analysis.volumes, f.space, f.offset, f.len)?;
     Ok((f, buf, case))
 }
 
@@ -2065,7 +2099,7 @@ async fn carved_export(State(st): St, Extension(me): Me, Path((cid, eid, id)): P
     case.audit.append(
         &me.username,
         "carved.export",
-        json!({"evidence": eid, "carved_id": f.id, "kind": f.kind, "offset": f.offset, "bytes": buf.len(), "hashes": hashes, "matches_carve_hash": hashes.sha256 == f.sha256, "saved_as": name}),
+        json!({"evidence": eid, "carved_id": f.id, "kind": f.kind, "offset": f.offset, "decrypted_volume": f.space, "bytes": buf.len(), "hashes": hashes, "matches_carve_hash": hashes.sha256 == f.sha256, "saved_as": name}),
     )?;
     Ok(Response::builder()
         .header(header::CONTENT_TYPE, "application/octet-stream")

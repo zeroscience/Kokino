@@ -15,6 +15,7 @@ pub enum Fs {
     Hfs(kokino_mac::hfs::HfsVolume),
     Apfs(kokino_mac::apfs::ApfsContainer),
     Zip(crate::zipfs::ZipVolume),
+    Tar(crate::tarfs::TarVolume),
 }
 
 /// What a file-system walk produced.
@@ -28,7 +29,7 @@ pub struct FsScan {
 
 /// File systems with a parser.
 pub fn supported(k: FsKind) -> bool {
-    matches!(k, FsKind::Ntfs | FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat | FsKind::Ext | FsKind::Iso9660 | FsKind::Udf | FsKind::HfsPlus | FsKind::Apfs | FsKind::Zip)
+    matches!(k, FsKind::Ntfs | FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat | FsKind::Ext | FsKind::Iso9660 | FsKind::Udf | FsKind::HfsPlus | FsKind::Apfs | FsKind::Zip | FsKind::Tar)
 }
 
 impl Fs {
@@ -54,6 +55,7 @@ impl Fs {
             FsKind::HfsPlus => Ok(Fs::Hfs(kokino_mac::hfs::open(r, v.length)?)),
             FsKind::Apfs => Ok(Fs::Apfs(kokino_mac::apfs::open(r, v.length)?)),
             FsKind::Zip => Ok(Fs::Zip(crate::zipfs::open(r, v.length)?)),
+            FsKind::Tar => Ok(Fs::Tar(crate::tarfs::open(r, v.length)?)),
             _ => anyhow::bail!("no parser for {}", v.fs_label),
         }
     }
@@ -69,6 +71,11 @@ impl Fs {
 
     pub fn is_ext(&self) -> bool {
         matches!(self, Fs::Ext(_))
+    }
+
+    /// A triage collection read as a file system (ZIP, tar).
+    pub fn is_collection(&self) -> bool {
+        matches!(self, Fs::Zip(_) | Fs::Tar(_))
     }
 
     pub fn is_optical(&self) -> bool {
@@ -114,6 +121,11 @@ impl Fs {
                 }
                 Ok(FsScan { info: z.info(), entries, unreadable: vec![], notes })
             }
+            Fs::Tar(t) => {
+                let mut notes = vec![format!("A tar archive{}: files are read from it as stored; it has no deleted files or free space. Times are those the archive recorded (UTC).", if t.layout.is_empty() { String::new() } else { format!(" ({} collection)", t.layout) })];
+                notes.extend(t.notes.iter().cloned());
+                Ok(FsScan { info: t.info(), entries: t.entries(), unreadable: vec![], notes })
+            }
         }
     }
 
@@ -140,6 +152,8 @@ impl Fs {
             Fs::Apfs(v) => v.read(r, e, offset, len),
             Fs::Zip(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
             Fs::Zip(z) => z.read(r, e, offset, len),
+            Fs::Tar(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
+            Fs::Tar(t) => t.read(r, e, offset, len),
         }
     }
 
@@ -163,6 +177,8 @@ impl Fs {
             Fs::Apfs(v) => Ok(v.extents(r, e)),
             Fs::Zip(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
             Fs::Zip(z) => Ok(z.extents(r, e)),
+            Fs::Tar(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
+            Fs::Tar(t) => Ok(t.extents(e)),
         }
     }
 
@@ -177,7 +193,7 @@ impl Fs {
             Fs::Hfs(v) => Ok(v.free_runs(r)),
             // APFS free space (space manager) is not read yet.
             Fs::Apfs(_) => Ok(vec![]),
-            Fs::Zip(_) => Ok(vec![]),
+            Fs::Zip(_) | Fs::Tar(_) => Ok(vec![]),
         }
     }
 }

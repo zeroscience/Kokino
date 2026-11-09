@@ -21,7 +21,7 @@ pub const TARGETS: &[Target] = &[
     Target { name: "ext", run: ext, seeds: &["tests/fixtures/ext2.img", "tests/fixtures/ext3.img", "tests/fixtures/ext4.img"] },
     Target { name: "linuxlogs", run: linuxlogs, seeds: &["crates/kokino-fuzz/seeds/linux"] },
     Target { name: "journalz", run: journalz, seeds: &["crates/kokino-fuzz/seeds/linux/compressed.journal"] },
-    Target { name: "vdisk", run: vdisk, seeds: &["tests/fixtures/vd-dynamic.vhd", "tests/fixtures/vd-dynamic.vhdx", "tests/fixtures/vd-sparse.vmdk", "tests/fixtures/vd-stream.vmdk"] },
+    Target { name: "vdisk", run: vdisk, seeds: &["tests/fixtures/vd-dynamic.vhd", "tests/fixtures/vd-dynamic.vhdx", "tests/fixtures/vd-sparse.vmdk", "tests/fixtures/vd-stream.vmdk", "crates/kokino-fuzz/seeds/vdisk"] },
     Target { name: "optical", run: optical, seeds: &["tests/fixtures/iso-rr-joliet.iso", "tests/fixtures/iso-udf.iso", "tests/fixtures/iso-multisession.iso"] },
     Target { name: "mac", run: mac, seeds: &["tests/fixtures/hfsplus.img", "tests/fixtures/apfs.img"] },
     Target { name: "ewf", run: ewf, seeds: &["tests/fixtures/disk-af-odd.E01", "tests/fixtures/disk-af.E01"] },
@@ -33,6 +33,7 @@ pub const TARGETS: &[Target] = &[
     Target { name: "mail", run: mail, seeds: &["crates/kokino-fuzz/seeds/mail"] },
     Target { name: "bde", run: bde, seeds: &["crates/kokino-fuzz/seeds/bde"] },
     Target { name: "vss", run: vss, seeds: &["crates/kokino-fuzz/seeds/vss"] },
+    Target { name: "tar", run: tarfs, seeds: &["crates/kokino-fuzz/seeds/tar"] },
     Target { name: "zip", run: zipfs, seeds: &["crates/kokino-fuzz/seeds/zip", "tests/fixtures/iso-rr-joliet.iso"] },
     Target { name: "reglog", run: reglog, seeds: &["tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_UsrClass.dat.LOG1", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_UsrClass.dat"] },
     Target { name: "iecache", run: iecache, seeds: &["tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_History_History.IE5_MSHist012025031020250311_index.dat", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_History_History.IE5_index.dat", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_Temporary Internet Files_Content.IE5_index.dat", "tests/fixtures/win/Users_alice_AppData_Roaming_Microsoft_Windows_IEDownloadHistory_index.dat"] },
@@ -312,6 +313,10 @@ fn bde(d: &[u8]) {
     let Ok(info) = bde::info(&mut c, len) else { return };
     let _ = bde::unlock(&info, &bde::Secret::ClearKey);
     let _ = bde::unlock(&info, &bde::Secret::RecoveryPassword("1-2"));
+    // A startup key file: the input's last 156 bytes (the size Windows writes).
+    let bek = &d[d.len().saturating_sub(156)..];
+    let _ = bde::bek_key(bek);
+    let _ = bde::unlock(&info, &bde::Secret::StartupKey(bek));
     // The reader with a key of every method (stretching is too slow to fuzz).
     for (m, f, t) in [(0x8000u32, 16usize, 16usize), (0x8003, 32, 0), (0x8005, 64, 0)] {
         let key = bde::Key { method: m, fvek: "ab".repeat(f), tweak: "cd".repeat(t), protector: String::new() };
@@ -336,6 +341,21 @@ fn vss(d: &[u8]) {
                 let _ = r.seek(SeekFrom::Start(at));
                 let _ = r.read(&mut b);
             }
+        }
+    }
+}
+
+/// A tar or tar.gz read as a file system (UAC collections): headers, GNU
+/// long names, PAX records, hard links, reads.
+fn tarfs(d: &[u8]) {
+    let mut r = std::io::Cursor::new(d);
+    let _ = kokino_image::volume::detect_fs(&mut r, 0);
+    if let Ok(t) = kokino_analysis::tarfs::open(&mut r, d.len() as u64) {
+        let _ = t.info();
+        for e in t.entries().iter().filter(|e| !e.is_dir).take(64) {
+            let _ = t.read(&mut r, e, 0, 4096);
+            let _ = t.read(&mut r, e, e.size.saturating_sub(10), 100);
+            let _ = t.extents(e);
         }
     }
 }

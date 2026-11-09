@@ -34,7 +34,7 @@ checked against public test images with known answers where they exist
 
 ### Virtual and optical disks
 - [x] VHDX and VMDK (virtual machines and cloud disks), plus dynamic and differencing VHD and snapshot chains (1.2.7)
-- [ ] VHDX log replay (disks not shut down cleanly are read without their log)
+- [x] VHDX log replay (unreleased)
 - [ ] ESXi snapshot formats (VMFSSPARSE, SESPARSE)
 - [ ] Ex01 (EWF version 2)
 - [x] ISO 9660 (Rock Ridge, Joliet, multisession history) and UDF (1.2.7)
@@ -51,9 +51,10 @@ checked against public test images with known answers where they exist
 - [ ] macOS artifacts: property lists, unified logs, KnowledgeC, quarantine events, FSEvents
 - [ ] XFS
 - [x] BitLocker with a password or recovery password; clear key (unreleased)
-- [ ] BitLocker: TPM and startup key (.BEK) protectors, Windows Vista volumes, carving decrypted volumes
+- [x] BitLocker: startup keys (.BEK), carving decrypted volumes (unreleased)
+- [ ] BitLocker: TPM protectors (from a memory image), Windows Vista volumes
 - [x] Volume Shadow Copies (unreleased)
-- [ ] Shadow copies inside BitLocker volumes
+- [x] Shadow copies inside BitLocker volumes (unreleased)
 
 ### Deeper NTFS and Windows
 - [x] $UsnJrnl (change journal: every file change, grouped per round, paths rebuilt from the journal for folders that are gone) (1.2.8)
@@ -78,7 +79,8 @@ checked against public test images with known answers where they exist
 
 ### Workflow
 - [x] Triage collections: Velociraptor and KAPE ZIPs, KAPE VHDX output (unreleased)
-- [ ] Triage collections as plain folders; UAC
+- [x] UAC collections (tar, tar.gz) (unreleased)
+- [ ] Triage collections as plain folders (a directory added as evidence)
 - [x] JSON and CSV exports of every list, in the GUI and with `kokino export` (1.3.0)
 - [ ] Validation suite run automatically on every release
 - [ ] Signed release builds with an SBOM

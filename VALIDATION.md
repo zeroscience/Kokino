@@ -411,6 +411,20 @@ checked yet. No recovery password was available for this image, so
 unlocking with one is checked only by unit tests (the 48-digit format and
 its key) and the shared key path the password also takes.
 
+## BitLocker carving and startup keys, UAC collections, VHDX logs (unreleased)
+
+These were checked on test images made for them; no public sample of a
+real dirty VHDX, a real UAC run or a real .BEK file was used yet.
+
+| Feature | Check | Result |
+|---|---|---|
+| Carving decrypted BitLocker volumes | `bitlocker-xts.img` is `testfs1-win` encrypted (AES-128-XTS); carving it unlocked is compared with carving `testfs1-win` itself | The same 4 files at the same offsets with the same SHA-256 and the same notes; each marked with the decrypted volume it came from |
+| | dfvfs' `bdetogo.raw` unlocked | 61,417,472 bytes of decrypted free space carved; nothing found, as expected (BitLocker To Go overwrites free space when it encrypts) |
+| Startup keys | `bitlocker-xts.BEK` (156 bytes, the size Windows writes) | Opens the volume to the same key as the password and the recovery password; a key with another identifier is refused as "for another volume" |
+| Shadow copies inside BitLocker | A shadow copy volume (the VSS test layout: full, overlaid and forwarded blocks) encrypted in a BitLocker volume | Found only once unlocked; each snapshot reads back its own blocks through the decryption |
+| UAC collections | `collection-uac.tar.gz`: the files of `linux-server.img` under `[root]/` | Host, time zone, accounts, logons (times identical to the disk), persistence, USB devices and mail as from the ext4 disk; symbolic links, owners and permissions from the archive |
+| VHDX log replay | `vd-dynamic.vhdx` with a log entry written into its log region (a data page and a zeroed page), header checksum redone | The disk reads the logged page and zeros there, the next page as the file has it; the file is unchanged; a damaged entry is reported and not applied |
+
 ## Deleted registry keys: the Digital Detective hives (1.2.9)
 
 The SOFTWARE and SYSTEM hives in Digital Detective's practice files (a

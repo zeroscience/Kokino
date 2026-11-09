@@ -13,6 +13,7 @@ pub mod carve;
 pub mod doctext;
 pub mod mail;
 pub mod nested;
+pub mod tarfs;
 pub mod zipfs;
 pub mod oletext;
 pub mod fs;
@@ -712,6 +713,34 @@ mod tests {
             let sys = fs.files.iter().find(|x| x.e.name == "SYSTEM").unwrap();
             assert_eq!(&f.read(&mut r, &sys.e, "", 0, 4).unwrap(), b"regf");
         }
+    }
+
+    /// A UAC collection (tar.gz): the Linux server of linux-server.img,
+    /// collected under [root]/, gives the same findings as the disk.
+    #[test]
+    fn uac_collection() {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/collection-uac.tar.gz");
+        assert!(p.exists(), "run scripts/make_collection_fixture.py");
+        let ev = Evidence::open(&p).unwrap();
+        let a = analyze(&ev, &mut |_, _, _| true).unwrap();
+        assert_eq!(a.filesystems.len(), 1, "{:?}", a.errors);
+        let fs = &a.filesystems[0];
+        assert_eq!(fs.volume.fs, FsKind::Tar);
+        assert_eq!(fs.info.version, "tar.gz (UAC collection)");
+        assert_eq!(drive_root(&fs.files).as_deref(), Some("/[root]"));
+        let l = &fs.linux;
+        assert_eq!((l.computer.hostname.as_str(), l.computer.time_zone.as_str()), ("lab-srv", "Europe/Skopje"));
+        let ssh = l.events.iter().find(|e| e.category == "Logon" && e.user == "alice").unwrap();
+        assert_eq!(kokino_core::time::filetime_to_iso(ssh.time), "2026-10-20T08:10:01.0000000Z");
+        assert_eq!(l.events.iter().filter(|e| e.category == "Failed logon").count(), 3);
+        assert!(l.users.iter().any(|u| u.name == "toor" && u.note.contains("second root")));
+        assert_eq!(fs.mail.messages.len(), 3);
+        // Symbolic links keep their target; permissions and owners come from the archive.
+        let lt = fs.files.iter().find(|f| f.e.path == "/[root]/etc/localtime").unwrap();
+        assert_eq!(lt.e.unix.as_ref().unwrap().link_target.as_deref(), Some("../usr/share/zoneinfo/Europe/Skopje"));
+        let pw = fs.files.iter().find(|f| f.e.path == "/[root]/etc/passwd").unwrap();
+        assert_eq!(pw.e.unix.as_ref().unwrap().mode_string(), "-rw-r--r--");
+        assert!(fs.files.iter().any(|f| f.e.path == "/live_response/system/uname_-a.txt"));
     }
 
     #[test]

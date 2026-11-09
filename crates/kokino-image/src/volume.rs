@@ -32,6 +32,8 @@ pub enum FsKind {
     Udf,
     /// A ZIP file added as evidence (triage collections: Velociraptor, KAPE).
     Zip,
+    /// A tar or .tar.gz archive added as evidence (triage collections: UAC).
+    Tar,
     Unknown,
 }
 
@@ -50,6 +52,7 @@ impl FsKind {
             FsKind::Iso9660 => "ISO 9660",
             FsKind::Udf => "UDF",
             FsKind::Zip => "ZIP",
+            FsKind::Tar => "TAR",
             FsKind::Unknown => "Unknown",
         }
     }
@@ -116,6 +119,10 @@ pub fn detect_fs<R: Read + Seek>(r: &mut R, start: u64) -> FsKind {
     if start == 0 && (b.starts_with(b"PK\x03\x04") || b.starts_with(b"PK\x05\x06")) {
         return FsKind::Zip;
     }
+    // A tar archive added as evidence, plain or gzip-compressed.
+    if start == 0 && is_tar_start(r, &b) {
+        return FsKind::Tar;
+    }
     // BitLocker To Go keeps a FAT32 boot record: the GUID tells it apart.
     if crate::bde::is_bitlocker(&b) {
         return FsKind::BitLocker;
@@ -154,6 +161,26 @@ pub fn detect_fs<R: Read + Seek>(r: &mut R, start: u64) -> FsKind {
         return FsKind::Udf;
     }
     FsKind::Unknown
+}
+
+/// A tar header (checksum adds up) at the start, as stored or inside gzip.
+fn is_tar_start<R: Read + Seek>(r: &mut R, b: &[u8]) -> bool {
+    let tar_header = |h: &[u8]| {
+        if h.len() < 512 || h[0] == 0 || h[..512].iter().all(|&c| c == 0) {
+            return false;
+        }
+        let want = h[148..156].iter().skip_while(|&&c| c == b' ' || c == 0).take_while(|&&c| (b'0'..=b'7').contains(&c)).fold(0u64, |a, &c| a.saturating_mul(8).saturating_add((c - b'0') as u64));
+        let sum: u64 = h[..512].iter().enumerate().map(|(i, &c)| if (148..156).contains(&i) { 32 } else { c as u64 }).sum();
+        want == sum && want > 0
+    };
+    if b.len() >= 3 && b[0] == 0x1F && b[1] == 0x8B && b[2] == 8 {
+        let mut head = vec![0u8; 64 * 1024];
+        let n = read_at(r, 0, &mut head).unwrap_or(0);
+        let mut out = vec![];
+        let _ = std::io::Read::read_to_end(&mut std::io::Read::take(flate2::read::GzDecoder::new(&head[..n]), 512), &mut out);
+        return tar_header(&out);
+    }
+    tar_header(b)
 }
 
 pub(crate) fn mk(index: usize, kind: VolumeKind, start: u64, length: u64, description: String, fs: FsKind) -> Volume {

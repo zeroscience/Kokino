@@ -15,6 +15,9 @@
 //!
 //! Nothing is copied: results are offsets and lengths in the image, with
 //! MD5 and SHA-256 of the carved bytes. Exports read from the image.
+//! Free space of an unlocked BitLocker volume is carved in its decrypted
+//! form: those results carry the volume (`space`) and offsets within it,
+//! and are read back through `space_reader`.
 //!
 //! Internet Explorer history and cache records (index.dat `URL `, `LEAK`,
 //! `REDR`) are also recovered one by one: they keep their 128-byte
@@ -23,7 +26,7 @@
 //! does). Whole index.dat files are carved as files as well.
 
 use crate::{volume_reader, Analysis, Progress};
-use kokino_image::{read_at, BlockCache, Evidence, SubReader, VolumeKind};
+use kokino_image::{read_at, BlockCache, Evidence, FsKind, SubReader, Volume, VolumeKind};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Seek};
@@ -35,6 +38,38 @@ const MAX_RECORDS: usize = 200_000;
 const SECTOR: u64 = 512;
 const WINDOW: usize = 1 << 20;
 const MAX_FILES: usize = 100_000;
+
+pub trait ReadSeek: Read + Seek + Send {}
+impl<T: Read + Seek + Send> ReadSeek for T {}
+
+/// Where carved bytes are read from, and its size: the image (`space` None)
+/// or the decrypted volume with that index.
+pub fn space_reader(ev: &Evidence, volumes: &[Volume], space: Option<usize>) -> anyhow::Result<(Box<dyn ReadSeek>, u64)> {
+    match space {
+        None => Ok((Box::new(ev.reader()?), ev.size)),
+        Some(vi) => {
+            let v = volumes.iter().find(|v| v.index == vi).ok_or_else(|| anyhow::anyhow!("volume {} not found", vi))?;
+            Ok((Box::new(volume_reader(ev, v)?), v.length))
+        }
+    }
+}
+
+/// Reads `len` bytes of a carved file (or record) from its space.
+pub fn read_carved(ev: &Evidence, volumes: &[Volume], space: Option<usize>, offset: u64, len: u64) -> anyhow::Result<Vec<u8>> {
+    let (mut r, size) = space_reader(ev, volumes, space)?;
+    let mut buf = vec![0u8; len.min(size.saturating_sub(offset)) as usize];
+    let got = read_at(&mut r, offset, &mut buf)?;
+    buf.truncate(got);
+    Ok(buf)
+}
+
+/// "image offset 123" or "offset 123 in decrypted volume 2".
+pub fn where_label(space: Option<usize>, offset: u64) -> String {
+    match space {
+        None => format!("image offset {}", offset),
+        Some(v) => format!("offset {} in decrypted volume {}", offset, v),
+    }
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Carved {
@@ -57,6 +92,9 @@ pub struct Carved {
     pub beyond_region: bool,
     pub md5: String,
     pub sha256: String,
+    /// Set when carved from a decrypted volume: `offset` is within it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -100,11 +138,14 @@ pub struct CarvedRecord {
     pub fi: Option<usize>,
     /// Inside the carved index.dat with this id.
     pub in_file: Option<u32>,
+    /// Set when found in a decrypted volume: `offset` is within it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<usize>,
 }
 
 /// Internet Explorer records at every 128-byte boundary of `win`, which
 /// starts at image offset `p`.
-fn scan_records(src: &mut dyn Bytes, p: u64, win: &[u8], label: &str, fi: Option<usize>, res: &mut CarveResult) {
+fn scan_records(src: &mut dyn Bytes, p: u64, win: &[u8], label: &str, fi: Option<usize>, space: Option<usize>, res: &mut CarveResult) {
     if res.records_truncated {
         return;
     }
@@ -115,6 +156,7 @@ fn scan_records(src: &mut dyn Bytes, p: u64, win: &[u8], label: &str, fi: Option
             if let Some(mut rec) = ie_record(src, p + k as u64) {
                 rec.region = label.to_string();
                 rec.fi = fi;
+                rec.space = space;
                 res.records.push(rec);
                 if res.records.len() >= MAX_RECORDS {
                     res.records_truncated = true;
@@ -795,45 +837,65 @@ fn evtx_chunk(src: &mut dyn Bytes, at: u64) -> Option<Hit> {
     })
 }
 
-/// Free space to carve: (image offset, length, region label, volume index).
-fn regions(ev: &Evidence, analysis: &Analysis) -> Vec<(u64, u64, String, Option<usize>)> {
+/// Free space to carve: (space, offset, length, region label, file system
+/// index). Space None: image offsets; Some(v): offsets in decrypted volume v.
+fn regions(ev: &Evidence, analysis: &Analysis) -> Vec<(Option<usize>, u64, u64, String, Option<usize>)> {
     let mut out = vec![];
-    // Shadow copies and decrypted volumes: their bytes are not in the image as shown.
-    for (fi, fsa) in analysis.filesystems.iter().enumerate().filter(|(_, f)| !f.volume.is_virtual()) {
+    // Shadow copies are left out: their free space is the live volume's, or
+    // blocks the stores keep, both carved through the volume itself.
+    for (fi, fsa) in analysis.filesystems.iter().enumerate().filter(|(_, f)| f.volume.shadow.is_none()) {
         let Ok(mut r) = volume_reader(ev, &fsa.volume) else { continue };
         let Ok(fs) = crate::fs::Fs::open(&mut r, &fsa.volume) else { continue };
+        let decrypted = fsa.volume.bitlocker.is_some();
         for (start, len) in fs.free_runs(&mut r).unwrap_or_default() {
-            out.push((fsa.volume.start + start, len, format!("Volume {} free clusters", fsa.volume.index), Some(fi)));
+            if decrypted {
+                out.push((Some(fsa.volume.index), start, len, format!("Volume {} free clusters (decrypted)", fsa.volume.index), Some(fi)));
+            } else {
+                out.push((None, fsa.volume.start + start, len, format!("Volume {} free clusters", fsa.volume.index), Some(fi)));
+            }
         }
     }
     let parsed: std::collections::HashSet<usize> = analysis.filesystems.iter().map(|f| f.volume.index).collect();
-    for v in &analysis.volumes {
+    // Encrypted volumes that are read decrypted: their ciphertext holds nothing to carve.
+    let unlocked: std::collections::HashSet<usize> = analysis.volumes.iter().filter_map(|v| v.bitlocker.as_ref().map(|b| b.of_volume)).collect();
+    for v in analysis.volumes.iter().filter(|v| !v.is_virtual()) {
         match v.kind {
-            VolumeKind::Unallocated => out.push((v.start, v.length, "Outside partitions".into(), None)),
-            _ if !parsed.contains(&v.index) => out.push((v.start, v.length, format!("Volume {} ({}, not parsed)", v.index, v.fs_label), None)),
+            VolumeKind::Unallocated => out.push((None, v.start, v.length, "Outside partitions".into(), None)),
+            _ if v.fs == FsKind::BitLocker && unlocked.contains(&v.index) => {}
+            _ if !parsed.contains(&v.index) => out.push((None, v.start, v.length, format!("Volume {} ({}, not parsed)", v.index, v.fs_label), None)),
             _ => {}
         }
     }
-    out.sort_by_key(|r| r.0);
+    out.sort_by_key(|r| (r.0, r.1));
     out
 }
 
 pub fn carve(ev: &Evidence, analysis: &Analysis, progress: Progress) -> anyhow::Result<CarveResult> {
     let regs = regions(ev, analysis);
-    let total: u64 = regs.iter().map(|r| r.1).sum();
-    let mut src = Img { r: BlockCache::new(ev.reader()?)?, size: ev.size };
+    let total: u64 = regs.iter().map(|r| r.2).sum();
+    let open = |space: Option<usize>| -> anyhow::Result<Img<BlockCache<Box<dyn ReadSeek>>>> {
+        let (r, size) = space_reader(ev, &analysis.volumes, space)?;
+        Ok(Img { r: BlockCache::new(r)?, size })
+    };
+    let mut cur_space = None;
+    let mut src = open(None)?;
     // Deleted files whose data still starts where something is carved.
-    let mut deleted_at: HashMap<u64, String> = HashMap::new();
-    for fsa in analysis.filesystems.iter().filter(|f| !f.volume.is_virtual()) {
+    let mut deleted_at: HashMap<(Option<usize>, u64), String> = HashMap::new();
+    for fsa in analysis.filesystems.iter().filter(|f| f.volume.shadow.is_none()) {
         for f in fsa.files.iter().filter(|f| f.e.deleted && !f.e.is_dir) {
             if let Some(o) = f.e.data_offset() {
-                deleted_at.insert(fsa.volume.start + o, f.e.path.clone());
+                let key = if fsa.volume.bitlocker.is_some() { (Some(fsa.volume.index), o) } else { (None, fsa.volume.start + o) };
+                deleted_at.insert(key, f.e.path.clone());
             }
         }
     }
     let mut res = CarveResult { schema: CARVE_SCHEMA, tool_version: kokino_core::TOOL_VERSION.into(), regions: regs.len() as u64, ..Default::default() };
     let mut done = 0u64;
-    for (start, len, label, fi) in &regs {
+    for (space, start, len, label, fi) in &regs {
+        if *space != cur_space {
+            src = open(*space)?;
+            cur_space = *space;
+        }
         let end = start + len;
         let mut p = start.div_ceil(SECTOR) * SECTOR;
         while p < end {
@@ -844,7 +906,7 @@ pub fn carve(ev: &Evidence, analysis: &Analysis, progress: Progress) -> anyhow::
                 break;
             }
             let mut next = p + win.len() as u64;
-            scan_records(&mut src, p, &win, label, *fi, &mut res);
+            scan_records(&mut src, p, &win, label, *fi, *space, &mut res);
             let mut i = 0usize;
             while i < win.len() {
                 let b = &win[i..];
@@ -855,7 +917,7 @@ pub fn carve(ev: &Evidence, analysis: &Analysis, progress: Progress) -> anyhow::
                         if h.len > 0 {
                             let id = res.files.len() as u32;
                             let mut note = String::new();
-                            if let Some(path) = deleted_at.get(&at) {
+                            if let Some(path) = deleted_at.get(&(*space, at)) {
                                 note = format!("same location as deleted file {}", path);
                             }
                             let beyond = at + h.len > end;
@@ -872,6 +934,7 @@ pub fn carve(ev: &Evidence, analysis: &Analysis, progress: Progress) -> anyhow::
                                 region: label.clone(),
                                 fi: *fi,
                                 beyond_region: beyond,
+                                space: *space,
                                 ..Default::default()
                             });
                             if res.files.len() >= MAX_FILES {
@@ -903,7 +966,7 @@ pub fn carve(ev: &Evidence, analysis: &Analysis, progress: Progress) -> anyhow::
                 if b.is_empty() {
                     break;
                 }
-                scan_records(&mut src, q, &b, label, *fi, &mut res);
+                scan_records(&mut src, q, &b, label, *fi, *space, &mut res);
                 q += b.len() as u64;
             }
             done += next.min(end) - p;
@@ -917,9 +980,9 @@ pub fn carve(ev: &Evidence, analysis: &Analysis, progress: Progress) -> anyhow::
         }
     }
     // Records that lie inside a carved index.dat.
-    let dats: Vec<(u64, u64, u32)> = res.files.iter().filter(|f| f.kind == "index-dat").map(|f| (f.offset, f.offset + f.len, f.id)).collect();
+    let dats: Vec<(Option<usize>, u64, u64, u32)> = res.files.iter().filter(|f| f.kind == "index-dat").map(|f| (f.space, f.offset, f.offset + f.len, f.id)).collect();
     for rec in &mut res.records {
-        rec.in_file = dats.iter().find(|(a, b, _)| (*a..*b).contains(&rec.offset)).map(|d| d.2);
+        rec.in_file = dats.iter().find(|(s, a, b, _)| *s == rec.space && (*a..*b).contains(&rec.offset)).map(|d| d.3);
     }
     // Hashes of the carved bytes.
     let n = res.files.len() as u64;
@@ -927,7 +990,8 @@ pub fn carve(ev: &Evidence, analysis: &Analysis, progress: Progress) -> anyhow::
         if k % 64 == 0 && !progress("Hashing carved files", k as u64, n) {
             anyhow::bail!("carving cancelled");
         }
-        let rd = SubReader::new(ev.reader()?, f.offset, f.len.min(ev.size.saturating_sub(f.offset)));
+        let (r, size) = space_reader(ev, &analysis.volumes, f.space)?;
+        let rd = SubReader::new(r, f.offset, f.len.min(size.saturating_sub(f.offset)));
         let (h, _) = kokino_core::hashing::hash_reader(rd, |_| true)?;
         f.md5 = h.md5;
         f.sha256 = h.sha256;
@@ -1152,5 +1216,31 @@ pub(crate) mod tests {
         let h = identify(&mut s, 0).unwrap();
         assert!(!h.complete);
         assert_eq!(h.len, cut.len() as u64);
+    }
+
+    /// The decrypted free space of a BitLocker volume is carved: the
+    /// fixture is testfs1-win encrypted, so carving it unlocked finds what
+    /// carving testfs1-win finds, at the same offsets, with the same hashes.
+    #[test]
+    fn carves_decrypted_bitlocker_volume() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+        let (Ok(bek), true) = (std::fs::read(dir.join("bitlocker-xts.BEK")), dir.join("testfs1-win").exists()) else { return };
+        let plain_ev = Evidence::open(dir.join("testfs1-win")).unwrap();
+        let plain = carve(&plain_ev, &crate::analyze(&plain_ev, &mut |_, _, _| true).unwrap(), &mut |_, _, _| true).unwrap();
+        let (ev, res) = kokino_image::unlock_bitlocker(Evidence::open(dir.join("bitlocker-xts.img")).unwrap(), &kokino_image::bde::Secret::StartupKey(&bek));
+        assert!(res[0].2.is_ok());
+        let a = crate::analyze(&ev, &mut |_, _, _| true).unwrap();
+        assert_eq!(a.filesystems.len(), 1);
+        assert_eq!(a.filesystems[0].files.len(), crate::analyze(&plain_ev, &mut |_, _, _| true).unwrap().filesystems[0].files.len());
+        let enc = carve(&ev, &a, &mut |_, _, _| true).unwrap();
+        assert_eq!(plain.files.len(), 4);
+        let key = |f: &Carved| (f.offset, f.len, f.kind.clone(), f.sha256.clone(), f.note.clone());
+        assert_eq!(enc.files.iter().map(key).collect::<Vec<_>>(), plain.files.iter().map(key).collect::<Vec<_>>());
+        assert!(enc.files.iter().all(|f| f.space == Some(1) && f.region.contains("decrypted")));
+        assert_eq!(enc.records.iter().map(|r| (r.offset, r.url.clone(), r.in_file)).collect::<Vec<_>>(), plain.records.iter().map(|r| (r.offset, r.url.clone(), r.in_file)).collect::<Vec<_>>());
+        // Read back through the space they were carved from.
+        let f = &enc.files[0];
+        let d = read_carved(&ev, &a.volumes, f.space, f.offset, f.len).unwrap();
+        assert_eq!(kokino_core::hashing::hash_reader(&d[..], |_| true).unwrap().0.sha256, f.sha256);
     }
 }

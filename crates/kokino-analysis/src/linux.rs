@@ -893,7 +893,8 @@ fn read_file<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, f: &FileRow, cap: u6
 
 pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow], progress: crate::Progress) -> LinuxArtifacts {
     let mut a = LinuxArtifacts::default();
-    if !fs.is_ext() {
+    // An ext volume, or a collection (tar, ZIP) that may hold a Linux system.
+    if !fs.is_ext() && !fs.is_collection() {
         return a;
     }
     if let crate::fs::Fs::Ext(v) = fs {
@@ -1893,7 +1894,8 @@ pub fn impact(a: &LinuxArtifacts) -> Vec<String> {
     let c = &a.computer;
     let iso = |t: u64| if t == 0 { "unknown".to_string() } else { kokino_core::time::filetime_to_iso(t) };
     if !c.hostname.is_empty() || !c.os.is_empty() {
-        out.push(format!("Linux computer {} running {}; file system created {}.", if c.hostname.is_empty() { "(no hostname)" } else { &c.hostname }, if c.os.is_empty() { "an unknown distribution" } else { &c.os }, iso(c.fs_created)));
+        let created = if c.fs_created == 0 { String::new() } else { format!("; file system created {}", iso(c.fs_created)) };
+        out.push(format!("Linux computer {} running {}{}.", if c.hostname.is_empty() { "(no hostname)" } else { &c.hostname }, if c.os.is_empty() { "an unknown distribution" } else { &c.os }, created));
     }
     let can_login: Vec<&str> = a.users.iter().filter(|u| u.login_shell && !u.password.starts_with("locked")).map(|u| u.name.as_str()).collect();
     if !can_login.is_empty() {

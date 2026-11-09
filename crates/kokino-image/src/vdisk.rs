@@ -5,8 +5,10 @@
 //! Each format becomes a map from the virtual disk's byte offsets to places
 //! in its files: data at a file offset, zeros, a compressed grain, or "ask
 //! the parent" for differencing disks and snapshots, whose parents are found
-//! next to them from the names the child records. Everything is read-only;
-//! a VHDX log that was not replayed is reported, not applied.
+//! next to them from the names the child records. Everything is read-only:
+//! a VHDX log holding writes that were never applied (the disk was not
+//! shut down cleanly) is replayed into memory, as Hyper-V would replay it
+//! on the next mount, and the files are read through it.
 
 use anyhow::{bail, Context};
 use std::collections::HashMap;
@@ -37,7 +39,7 @@ fn le64(b: &[u8], o: usize) -> u64 {
     b.get(o..o + 8).map(|x| u64::from_le_bytes(x.try_into().unwrap())).unwrap_or(0)
 }
 
-fn rd(f: &mut File, off: u64, n: usize) -> io::Result<Vec<u8>> {
+fn rd<R: Read + Seek>(f: &mut R, off: u64, n: usize) -> io::Result<Vec<u8>> {
     f.seek(SeekFrom::Start(off))?;
     let mut b = Vec::with_capacity(n.min(1 << 20));
     f.take(n as u64).read_to_end(&mut b)?;
@@ -102,6 +104,79 @@ pub struct VDisk {
     /// Plain-language remarks (unreplayed log, parent mismatch, ...).
     pub notes: Vec<String>,
     chain: Vec<Disk>,
+    /// VHDX log writes replayed in memory, per file.
+    overlays: HashMap<usize, Arc<Overlay>>,
+}
+
+/// Writes from a VHDX log, applied over a file when it is read.
+#[derive(Debug, Default)]
+struct Overlay {
+    /// 4 KiB pages by file offset, with the log sequence that wrote them.
+    pages: HashMap<u64, (u64, Arc<Vec<u8>>)>,
+    /// Zeroed ranges (start, length, sequence).
+    zeros: Vec<(u64, u64, u64)>,
+    /// The file's size after the log (it may grow).
+    len: u64,
+}
+
+/// A file read through its replayed log.
+struct OvFile {
+    f: File,
+    ov: Option<Arc<Overlay>>,
+    pos: u64,
+}
+
+impl Read for OvFile {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let Some(ov) = self.ov.clone() else {
+            self.f.seek(SeekFrom::Start(self.pos))?;
+            let n = self.f.read(buf)?;
+            self.pos += n as u64;
+            return Ok(n);
+        };
+        let end = ov.len.max(self.f.metadata()?.len());
+        if self.pos >= end || buf.is_empty() {
+            return Ok(0);
+        }
+        // At most up to the next 4 KiB boundary, so one page decides.
+        let page = self.pos / 4096 * 4096;
+        let n = buf.len().min((page + 4096 - self.pos) as usize).min((end - self.pos) as usize);
+        let out = &mut buf[..n];
+        self.f.seek(SeekFrom::Start(self.pos))?;
+        let mut got = 0;
+        while got < n {
+            let k = self.f.read(&mut out[got..])?;
+            if k == 0 {
+                break;
+            }
+            got += k;
+        }
+        out[got..].fill(0);
+        let page_seq = ov.pages.get(&page).map(|(s, _)| *s);
+        let zero_seq = ov.zeros.iter().filter(|(z, l, _)| self.pos >= *z && self.pos < z.saturating_add(*l)).map(|(_, _, s)| *s).max();
+        match (page_seq, zero_seq) {
+            (Some(ps), z) if z.is_none_or(|zs| ps > zs) => {
+                let d = &ov.pages[&page].1;
+                let w = (self.pos - page) as usize;
+                out.copy_from_slice(&d[w..w + n]);
+            }
+            (_, Some(_)) => out.fill(0),
+            _ => {}
+        }
+        self.pos += n as u64;
+        Ok(n)
+    }
+}
+
+impl Seek for OvFile {
+    fn seek(&mut self, p: SeekFrom) -> io::Result<u64> {
+        self.pos = match p {
+            SeekFrom::Start(x) => x,
+            SeekFrom::End(x) => (self.f.metadata()?.len() as i64).saturating_add(x).max(0) as u64,
+            SeekFrom::Current(x) => (self.pos as i64).saturating_add(x).max(0) as u64,
+        };
+        Ok(self.pos)
+    }
 }
 
 /// Opens a virtual disk if `path` is one (`Ok(None)` otherwise).
@@ -118,7 +193,7 @@ pub fn open(path: &Path) -> anyhow::Result<Option<VDisk>> {
     } else {
         return Ok(None);
     };
-    let mut v = VDisk { label: String::new(), size: 0, files: vec![], notes: vec![], chain: vec![] };
+    let mut v = VDisk { label: String::new(), size: 0, files: vec![], notes: vec![], chain: vec![], overlays: HashMap::new() };
     let mut next = Some(path.to_path_buf());
     let mut labels = vec![];
     while let Some(p) = next.take() {
@@ -255,6 +330,105 @@ fn crc32c(data: &[u8]) -> u32 {
     !crc
 }
 
+/// The active sequence of a VHDX log (MS-VHDX 2.3.3), as writes to apply
+/// over the file, and how many entries it has.
+fn replay_log(f: &mut File, header: &[u8], file_len: u64) -> anyhow::Result<(Overlay, usize)> {
+    let log_guid = &header[48..64];
+    let (log_len, log_off) = (le32(header, 68), le64(header, 72));
+    if log_len == 0 || !log_len.is_multiple_of(1 << 20) || log_len > 256 << 20 || log_off.checked_add(log_len).is_none_or(|e| e > file_len) {
+        bail!("log region out of range");
+    }
+    let log = rd(f, log_off, log_len as usize)?;
+    if log.len() as u64 != log_len {
+        bail!("log region cut short");
+    }
+    // Bytes of the circular log from `at`, wrapping around.
+    let wrap = |at: u64, n: u64| -> Vec<u8> { (0..n).map(|i| log[((at + i) % log_len) as usize]).collect() };
+    // Every valid entry: offset -> (sequence, bytes, tail).
+    let mut valid: HashMap<u64, (u64, Vec<u8>, u64)> = HashMap::new();
+    for at in (0..log_len).step_by(4096) {
+        let h = &log[at as usize..at as usize + 64];
+        if !h.starts_with(b"loge") || &h[32..48] != log_guid {
+            continue;
+        }
+        let elen = le32(h, 8);
+        if elen < 4096 || !elen.is_multiple_of(4096) || elen > log_len {
+            continue;
+        }
+        let mut e = wrap(at, elen);
+        let want = le32(&e, 4) as u32;
+        e[4..8].fill(0);
+        if crc32c(&e) != want {
+            continue;
+        }
+        e[4..8].copy_from_slice(&want.to_le_bytes());
+        let (seq, tail) = (le64(&e, 16), le32(&e, 12));
+        valid.insert(at, (seq, e, tail));
+    }
+    // The active sequence: from the newest entry's tail, consecutive
+    // sequence numbers up to that entry.
+    let mut heads: Vec<(u64, u64)> = valid.iter().map(|(&at, (seq, ..))| (*seq, at)).collect();
+    heads.sort_unstable_by(|a, b| b.cmp(a));
+    let mut chain: Vec<u64> = vec![];
+    for (head_seq, head_at) in heads {
+        let tail = valid[&head_at].2;
+        let mut at = tail;
+        let mut seq = None;
+        let mut c = vec![];
+        loop {
+            let Some((s, e, _)) = valid.get(&at) else { break };
+            if seq.is_some_and(|p: u64| *s != p + 1) || c.len() > valid.len() {
+                break;
+            }
+            c.push(at);
+            seq = Some(*s);
+            if at == head_at {
+                break;
+            }
+            at = (at + le32(e, 8)) % log_len;
+        }
+        if c.last() == Some(&head_at) && seq == Some(head_seq) {
+            chain = c;
+            break;
+        }
+    }
+    if chain.is_empty() {
+        bail!("no complete sequence of log entries");
+    }
+    let mut ov = Overlay { len: file_len, ..Default::default() };
+    for at in &chain {
+        let (seq, e, _) = &valid[at];
+        let dc = le32(e, 24) as usize;
+        let last = le64(e, 56);
+        ov.len = ov.len.max(last);
+        let mut sector = (64 + 32 * dc).div_ceil(4096) * 4096;
+        for k in 0..dc {
+            let Some(d) = e.get(64 + 32 * k..96 + 32 * k) else { bail!("descriptor {} outside its entry", k) };
+            let file_off = le64(d, 16);
+            if le64(d, 24) != *seq {
+                bail!("descriptor sequence does not match its entry");
+            }
+            if d.starts_with(b"zero") {
+                ov.zeros.push((file_off, le64(d, 8), *seq));
+            } else if d.starts_with(b"desc") {
+                let Some(ds) = e.get(sector..sector + 4096) else { bail!("data sector outside its entry") };
+                if !ds.starts_with(b"data") || (le32(ds, 4) << 32 | le32(ds, 4092)) != *seq || !file_off.is_multiple_of(4096) {
+                    bail!("data sector does not match its descriptor");
+                }
+                let mut page = Vec::with_capacity(4096);
+                page.extend_from_slice(&d[8..16]);
+                page.extend_from_slice(&ds[8..4092]);
+                page.extend_from_slice(&d[4..8]);
+                ov.pages.insert(file_off, (*seq, Arc::new(page)));
+                sector += 4096;
+            } else {
+                bail!("unknown log descriptor");
+            }
+        }
+    }
+    Ok((ov, chain.len()))
+}
+
 /// GUID text ("2DC27766-F623-4200-9D64-115E9BFD4A08") to its on-disk bytes.
 fn guid(s: &str) -> [u8; 16] {
     let h: Vec<u8> = s.split('-').flat_map(|p| (0..p.len()).step_by(2).map(move |i| u8::from_str_radix(&p[i..i + 2], 16).unwrap_or(0))).collect();
@@ -300,12 +474,24 @@ fn open_vhdx(p: &Path, v: &mut VDisk) -> anyhow::Result<Opened> {
         }
     }
     let header = header.ok_or_else(|| anyhow::anyhow!("no valid VHDX header"))?;
+    let mut overlay = None;
     if header[48..64].iter().any(|&b| b != 0) {
-        v.notes.push(format!(
-            "{}: the VHDX log holds writes that were never applied (the disk was not shut down cleanly); Kokino reads the disk without them, so the newest changes may be missing",
-            p.display()
-        ));
+        match replay_log(&mut f, &header, len) {
+            Ok((ov, entries)) => {
+                v.notes.push(format!(
+                    "{}: the disk was not shut down cleanly; the {} write{} left in its VHDX log {} replayed in memory, as Hyper-V would on the next mount (the file itself is not changed)",
+                    p.display(),
+                    entries,
+                    if entries == 1 { "" } else { "s" },
+                    if entries == 1 { "was" } else { "were" }
+                ));
+                overlay = Some(Arc::new(ov));
+            }
+            Err(e) => v.notes.push(format!("{}: the VHDX log holds writes that were never applied, and it could not be replayed ({}); the disk is read without them, so the newest changes may be missing", p.display(), e)),
+        }
     }
+    // Everything below is read through the replayed log.
+    let mut f = OvFile { f, ov: overlay.clone(), pos: 0 };
     let data_write = guid_text(&header[32..48]);
     // Region table: BAT and metadata.
     let mut regions = HashMap::new();
@@ -358,6 +544,9 @@ fn open_vhdx(p: &Path, v: &mut VDisk) -> anyhow::Result<Opened> {
     let raw = rd(&mut f, bat_off, (entries * 8) as usize)?;
     let bat: Vec<u64> = raw.chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap())).collect();
     let file = add_file(v, p);
+    if let Some(ov) = overlay {
+        v.overlays.insert(file, ov);
+    }
     let mut parent = None;
     if has_parent {
         let loc = item("A8D35F2D-B30B-454D-ABF7-D3D84834AB0C");
@@ -525,7 +714,7 @@ impl VDisk {
 pub struct VDiskReader {
     disk: Arc<VDisk>,
     pos: u64,
-    files: HashMap<usize, File>,
+    files: HashMap<usize, OvFile>,
     /// Bitmaps, grain tables and decompressed grains: (kind, file, offset).
     cache: HashMap<(u8, usize, u64), Arc<Vec<u8>>>,
     order: Vec<(u8, usize, u64)>,
@@ -534,10 +723,10 @@ pub struct VDiskReader {
 const CACHE_ITEMS: usize = 256;
 
 impl VDiskReader {
-    fn file(&mut self, i: usize) -> io::Result<&mut File> {
+    fn file(&mut self, i: usize) -> io::Result<&mut OvFile> {
         if !self.files.contains_key(&i) {
             let p = self.disk.files.get(i).ok_or_else(|| io::Error::other("bad file index"))?;
-            self.files.insert(i, File::open(p)?);
+            self.files.insert(i, OvFile { f: File::open(p)?, ov: self.disk.overlays.get(&i).cloned(), pos: 0 });
         }
         Ok(self.files.get_mut(&i).unwrap())
     }
@@ -778,5 +967,87 @@ mod tests {
         assert!(open(&fixture("disk-fat.img")).unwrap().is_none());
         assert_eq!(crc32c(b"123456789"), 0xE306_9283);
         assert_eq!(guid_text(&guid("2DC27766-F623-4200-9D64-115E9BFD4A08")), "2DC27766-F623-4200-9D64-115E9BFD4A08");
+    }
+
+    /// A VHDX whose log holds writes never applied: a data page and a
+    /// zeroed page in the first payload block. Read through the replayed
+    /// log; the file itself is not changed. A damaged log is reported.
+    #[test]
+    fn vhdx_log_is_replayed() {
+        let src = fixture("vd-dynamic.vhdx");
+        let orig = std::fs::read(&src).unwrap();
+        let d = open(&src).unwrap().unwrap();
+        let Layer::Vhdx { bat, block, chunk_ratio, .. } = &d.chain[0].layer else { panic!() };
+        let (bi, entry) = (0..bat.len() as u64).map(|b| (b, bat.get((b + b / chunk_ratio) as usize).copied().unwrap_or(0))).find(|(_, e)| e & 7 == 6).unwrap();
+        let (file_off, virt) = ((entry >> 20) << 20, bi * block);
+        // The current header (highest sequence) and its log region.
+        let hdr_at = [64usize << 10, 128 << 10].into_iter().max_by_key(|&o| le64(&orig[o..], 8)).unwrap();
+        let (log_len, log_off) = (le32(&orig[hdr_at..], 68), le64(&orig[hdr_at..], 72) as usize);
+        assert!(log_len >= 1 << 20);
+        let log_guid = [0x4Cu8; 16];
+        let seq = 0x0000_0001_0000_0005u64;
+        let mut e = vec![0u8; 8192];
+        e[0..4].copy_from_slice(b"loge");
+        e[8..12].copy_from_slice(&8192u32.to_le_bytes());
+        e[12..16].copy_from_slice(&0u32.to_le_bytes()); // tail: this entry
+        e[16..24].copy_from_slice(&seq.to_le_bytes());
+        e[24..28].copy_from_slice(&2u32.to_le_bytes());
+        e[32..48].copy_from_slice(&log_guid);
+        e[48..56].copy_from_slice(&(orig.len() as u64).to_le_bytes());
+        e[56..64].copy_from_slice(&(orig.len() as u64).to_le_bytes());
+        let page: Vec<u8> = (0..4096u32).map(|i| (i * 13 + 7) as u8).collect();
+        // Data descriptor: trailing 4 bytes, leading 8 bytes, file offset, sequence.
+        e[64..68].copy_from_slice(b"desc");
+        e[68..72].copy_from_slice(&page[4092..4096]);
+        e[72..80].copy_from_slice(&page[0..8]);
+        e[80..88].copy_from_slice(&file_off.to_le_bytes());
+        e[88..96].copy_from_slice(&seq.to_le_bytes());
+        // Zero descriptor: the block's second page.
+        e[96..100].copy_from_slice(b"zero");
+        e[104..112].copy_from_slice(&4096u64.to_le_bytes());
+        e[112..120].copy_from_slice(&(file_off + 4096).to_le_bytes());
+        e[120..128].copy_from_slice(&seq.to_le_bytes());
+        // The data sector.
+        e[4096..4100].copy_from_slice(b"data");
+        e[4100..4104].copy_from_slice(&((seq >> 32) as u32).to_le_bytes());
+        e[4104..8188].copy_from_slice(&page[8..4092]);
+        e[8188..8192].copy_from_slice(&(seq as u32).to_le_bytes());
+        let crc = crc32c(&e);
+        e[4..8].copy_from_slice(&crc.to_le_bytes());
+        let mut img = orig.clone();
+        img[log_off..log_off + e.len()].copy_from_slice(&e);
+        img[hdr_at + 48..hdr_at + 64].copy_from_slice(&log_guid);
+        img[hdr_at + 4..hdr_at + 8].fill(0);
+        let hcrc = crc32c(&img[hdr_at..hdr_at + 4096]);
+        img[hdr_at + 4..hdr_at + 8].copy_from_slice(&hcrc.to_le_bytes());
+
+        // KOKINO_WRITE_SEEDS=1 also saves it as a fuzz seed for the log parser.
+        if std::env::var_os("KOKINO_WRITE_SEEDS").is_some() {
+            let seeds = Path::new(env!("CARGO_MANIFEST_DIR")).join("../kokino-fuzz/seeds/vdisk");
+            std::fs::create_dir_all(&seeds).unwrap();
+            std::fs::write(seeds.join("dirty-log.vhdx"), &img).unwrap();
+        }
+        let dir = std::env::temp_dir().join(format!("kokino-vhdx-log-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("dirty.vhdx");
+        std::fs::write(&p, &img).unwrap();
+        let v = Arc::new(open(&p).unwrap().unwrap());
+        assert!(v.notes.iter().any(|n| n.contains("1 write left in its VHDX log was replayed")), "{:?}", v.notes);
+        let mut r = v.reader();
+        r.seek(SeekFrom::Start(virt)).unwrap();
+        let mut got = vec![0u8; 3 * 4096];
+        r.read_exact(&mut got).unwrap();
+        assert_eq!(&got[..4096], &page[..]);
+        assert!(got[4096..8192].iter().all(|&b| b == 0));
+        // The third page is as the file has it.
+        let (whole, _) = whole("vd-dynamic.vhdx");
+        assert_eq!(&got[8192..], &whole[(virt + 8192) as usize..(virt + 12288) as usize]);
+        assert_eq!(std::fs::read(&p).unwrap(), img, "the file is never written");
+        // A damaged entry: not replayed, and said so.
+        img[log_off + 5000] ^= 1;
+        std::fs::write(&p, &img).unwrap();
+        let v = open(&p).unwrap().unwrap();
+        assert!(v.notes.iter().any(|n| n.contains("could not be replayed")), "{:?}", v.notes);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

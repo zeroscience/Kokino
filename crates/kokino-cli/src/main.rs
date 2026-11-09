@@ -18,6 +18,9 @@ struct Unlock {
     /// Unlock BitLocker volumes with this 48-digit recovery password ("-" asks for it)
     #[arg(long, value_name = "DIGITS")]
     recovery_password: Option<String>,
+    /// Unlock BitLocker volumes with this startup key file ({GUID}.BEK)
+    #[arg(long, value_name = "FILE")]
+    startup_key: Option<PathBuf>,
 }
 
 impl Unlock {
@@ -32,9 +35,16 @@ impl Unlock {
         if let Some(p) = &self.recovery_password {
             secrets.push((false, ask(p, "BitLocker recovery password: ")?));
         }
-        for (pw, s) in &secrets {
-            let secret = if *pw { kokino_image::bde::Secret::Password(s) } else { kokino_image::bde::Secret::RecoveryPassword(s) };
-            let (e, res) = kokino_image::unlock_bitlocker(ev, &secret);
+        let bek = match &self.startup_key {
+            Some(p) => Some(std::fs::read(p).map_err(|e| anyhow::anyhow!("cannot read {}: {}", p.display(), e))?),
+            None => None,
+        };
+        let mut all: Vec<kokino_image::bde::Secret> = secrets.iter().map(|(pw, s)| if *pw { kokino_image::bde::Secret::Password(s) } else { kokino_image::bde::Secret::RecoveryPassword(s) }).collect();
+        if let Some(b) = &bek {
+            all.push(kokino_image::bde::Secret::StartupKey(b));
+        }
+        for secret in &all {
+            let (e, res) = kokino_image::unlock_bitlocker(ev, secret);
             ev = e;
             if res.is_empty() {
                 eprintln!("no BitLocker volume found");
@@ -562,17 +572,22 @@ async fn main() -> anyhow::Result<()> {
             eprintln!("{} ({}, {} bytes)", image.display(), ev.format_label(), ev.size);
             let a = kokino_analysis::analyze(&ev, &mut |_, _, _| true)?;
             let c = kokino_analysis::carve::carve(&ev, &a, &mut |_, _, _| true)?;
-            let mut r = ev.reader()?;
             if !json {
                 println!("id\toffset\tlength\tkind\tcomplete\tmd5\tsha1\tsha256\tdetail");
             }
             for f in &c.files {
+                let (mut r, _) = kokino_analysis::carve::space_reader(&ev, &a.volumes, f.space)?;
                 r.seek(SeekFrom::Start(f.offset))?;
                 let (h, _) = kokino_core::hashing::hash_reader((&mut r).take(f.len), |_| true)?;
+                // Offsets in a decrypted volume are shown as "v<volume>:<offset>".
+                let at = match f.space {
+                    Some(v) => format!("v{}:{}", v, f.offset),
+                    None => f.offset.to_string(),
+                };
                 if json {
-                    println!("{}", serde_json::json!({"id": f.id, "offset": f.offset, "len": f.len, "kind": f.kind, "complete": f.complete, "md5": h.md5, "sha1": h.sha1, "sha256": h.sha256, "detail": f.detail, "region": f.region}));
+                    println!("{}", serde_json::json!({"id": f.id, "offset": f.offset, "decrypted_volume": f.space, "len": f.len, "kind": f.kind, "complete": f.complete, "md5": h.md5, "sha1": h.sha1, "sha256": h.sha256, "detail": f.detail, "region": f.region}));
                 } else {
-                    println!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}", f.id, f.offset, f.len, f.kind, f.complete, h.md5, h.sha1, h.sha256, f.detail);
+                    println!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}", f.id, at, f.len, f.kind, f.complete, h.md5, h.sha1, h.sha256, f.detail);
                 }
             }
             if !c.records.is_empty() {

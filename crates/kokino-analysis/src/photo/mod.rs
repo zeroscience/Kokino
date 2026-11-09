@@ -630,7 +630,6 @@ pub fn scan(ev: &Evidence, analysis: &Analysis, carved: Option<&crate::carve::Ca
         }
     }
     if let Some(c) = carved {
-        let mut img = ev.reader()?;
         for f in c.files.iter().filter(|f| wanted(&f.kind)) {
             if done % 16 == 0 && !progress(stage, done, total as u64) {
                 anyhow::bail!("picture analysis cancelled");
@@ -668,10 +667,13 @@ pub fn scan(ev: &Evidence, analysis: &Analysis, carved: Option<&crate::carve::Ca
                 out.skipped += 1;
                 continue;
             }
-            let mut buf = vec![0u8; f.len as usize];
-            let n = kokino_image::read_at(&mut img, f.offset, &mut buf)?;
-            buf.truncate(n);
-            out.images.push(row(&analyze(&buf, ""), base));
+            match crate::carve::read_carved(ev, &analysis.volumes, f.space, f.offset, f.len) {
+                Ok(buf) => out.images.push(row(&analyze(&buf, ""), base)),
+                Err(e) => {
+                    out.skipped += 1;
+                    out.images.push(ImageRow { error: Some(format!("not readable: {:#}", e)), ..base });
+                }
+            }
         }
     }
     progress(stage, total as u64, total as u64);

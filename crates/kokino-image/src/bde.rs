@@ -228,6 +228,19 @@ pub enum Secret<'a> {
     RecoveryPassword(&'a str),
     /// Protection suspended: the volume master key is stored unprotected.
     ClearKey,
+    /// The contents of a startup key file ({GUID}.BEK).
+    StartupKey(&'a [u8]),
+}
+
+/// The key identifier and the 256-bit key in a startup key (.BEK) file.
+pub fn bek_key(bek: &[u8]) -> Option<(String, Vec<u8>)> {
+    if bek.len() < 56 || u32le(bek, 8) != 48 {
+        return None;
+    }
+    let size = (u32le(bek, 0) as usize).clamp(48, bek.len());
+    let ext = entries(&bek[48..size]).into_iter().find(|e| e.vtype == 0x0009 && e.data.len() >= 24)?;
+    let key = entries(&ext.data[24..]).into_iter().find(|p| p.vtype == 0x0001 && p.data.len() >= 36)?;
+    Some((guid(&ext.data[0..16]), key.data[4..36].to_vec()))
 }
 
 fn sha256(d: &[u8]) -> [u8; 32] {
@@ -346,8 +359,21 @@ pub fn unlock(info: &Info, secret: &Secret) -> Result<Key, String> {
         Secret::Password(_) => (0x2000u16, "Password"),
         Secret::RecoveryPassword(_) => (0x0800, "Recovery password"),
         Secret::ClearKey => (0x0000, "Clear key"),
+        Secret::StartupKey(_) => (0x0200, "Startup key"),
     };
-    let vmks: Vec<&Entry> = info.entries.iter().filter(|e| e.etype == 0x0002 && e.vtype == 0x0008 && e.data.len() >= 28 && u16le(&e.data, 26) == want).collect();
+    let bek = match secret {
+        Secret::StartupKey(b) => Some(bek_key(b).ok_or("not a BitLocker startup key file (.BEK)")?),
+        _ => None,
+    };
+    let mut vmks: Vec<&Entry> = info.entries.iter().filter(|e| e.etype == 0x0002 && e.vtype == 0x0008 && e.data.len() >= 28 && u16le(&e.data, 26) == want).collect();
+    if let Some((id, _)) = &bek {
+        // A startup key opens the protector with its own identifier.
+        let n = vmks.len();
+        vmks.retain(|e| guid(&e.data[0..16]) == *id);
+        if vmks.is_empty() && n > 0 {
+            return Err(format!("this startup key ({}) is for another volume", id));
+        }
+    }
     if vmks.is_empty() {
         return Err(format!("this volume has no {} protector (it has: {})", label.to_lowercase(), info.protectors.iter().map(|p| p.kind.clone()).collect::<Vec<_>>().join(", ")));
     }
@@ -357,7 +383,7 @@ pub fn unlock(info: &Info, secret: &Secret) -> Result<Key, String> {
             Some(sha256(&sha256(&w)))
         }
         Secret::RecoveryPassword(p) => Some(sha256(&recovery_key(p).ok_or("a recovery password is 48 digits in 8 groups of 6, each a multiple of 11")?)),
-        Secret::ClearKey => None,
+        Secret::ClearKey | Secret::StartupKey(_) => None,
     };
     let mut vmk = None;
     for e in vmks {
@@ -368,9 +394,12 @@ pub fn unlock(info: &Info, secret: &Secret) -> Result<Key, String> {
                 Some(s) => stretch(init, &s.data[4..20]).to_vec(),
                 None => continue,
             },
-            None => match props.iter().find(|p| p.vtype == 0x0001 && p.data.len() >= 36) {
-                Some(k) => k.data[4..36].to_vec(),
-                None => continue,
+            None => match &bek {
+                Some((_, k)) => k.clone(),
+                None => match props.iter().find(|p| p.vtype == 0x0001 && p.data.len() >= 36) {
+                    Some(k) => k.data[4..36].to_vec(),
+                    None => continue,
+                },
             },
         };
         if let Some(pt) = ccm_decrypt(&key, &ccm.data) {
@@ -384,6 +413,7 @@ pub fn unlock(info: &Info, secret: &Secret) -> Result<Key, String> {
         Secret::Password(_) => "wrong password".to_string(),
         Secret::RecoveryPassword(_) => "wrong recovery password".to_string(),
         Secret::ClearKey => "the clear key does not open the volume master key".to_string(),
+        Secret::StartupKey(_) => "this startup key does not open the volume master key".to_string(),
     })?;
     let fvek = info.entries.iter().filter(|e| e.etype == 0x0003 && e.vtype == 0x0005).find_map(|e| ccm_decrypt(&vmk, &e.data)).ok_or("the volume master key does not open the volume encryption key")?;
     if fvek.len() < 12 {
@@ -618,7 +648,7 @@ impl<R: Read + Seek> Seek for BdeReader<R> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -727,54 +757,61 @@ mod tests {
         e
     }
 
-    /// A small Windows 10 style volume (AES-128-XTS, password protector) made
-    /// here, read back through the metadata, the unlock and the reader.
-    #[test]
-    fn synthetic_volume_round_trips() {
-        const LEN: usize = 4 << 20;
-        const MB: usize = 1 << 20;
-        let header_at = MB + 64 * 1024;
-        let header_len = 16 * 512;
-        // What the volume holds once decrypted: a boot sector, a pattern, and
-        // zeros where BitLocker keeps its metadata and the boot sector copy.
-        let mut plain: Vec<u8> = (0..LEN).map(|i| (i % 251) as u8 ^ (i / 512) as u8).collect();
-        plain[3..11].copy_from_slice(b"NTFS    ");
-        plain[510] = 0x55;
-        plain[511] = 0xAA;
-        for m in [MB, 2 * MB, 3 * MB] {
-            plain[m..m + 64 * 1024].fill(0);
-        }
-        plain[header_at..header_at + header_len].fill(0);
+    pub(crate) enum Prot<'a> {
+        Password(&'a str),
+        Recovery(&'a str),
+        /// Key identifier and the 256-bit external key.
+        Startup([u8; 16], [u8; 32]),
+    }
 
-        let (fvek, salt, vmk) = ([0x11u8; 32], [0x22u8; 16], [0x33u8; 32]);
-        let w: Vec<u8> = "Lab-Pa55".encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
-        let user_key = stretch(&sha256(&sha256(&w)), &salt);
+    /// A Windows 10 style BitLocker volume (AES-128-XTS) holding `plain`
+    /// decrypted. The metadata blocks and the boot sector copy go at the
+    /// given offsets, which must hold zeros in `plain` (as BitLocker's
+    /// reserved files do).
+    pub(crate) fn build(plain: &[u8], metas: [usize; 3], header_at: usize, prots: &[Prot]) -> Vec<u8> {
+        let len = plain.len();
+        let header_len = 16 * 512;
+        let (fvek, vmk) = ([0x11u8; 32], [0x33u8; 32]);
         let mut vmk_pt = vec![44, 0, 0, 0, 1, 0, 0, 0, 0, 0x20, 0, 0];
         vmk_pt.extend(vmk);
         let mut fvek_pt = vec![44, 0, 0, 0, 1, 0, 0, 0, 4, 0x80, 0, 0];
         fvek_pt.extend(fvek);
-        let mut stretch_d = 0x1000u32.to_le_bytes().to_vec();
-        stretch_d.extend(salt);
-        let mut props = entry(0, 3, &stretch_d);
-        props.extend(entry(0, 5, &seal(&user_key, [5u8; 12], &vmk_pt)));
-        let mut vmk_d = vec![0xABu8; 16];
-        vmk_d.extend(0u64.to_le_bytes());
-        vmk_d.extend(0u16.to_le_bytes());
-        vmk_d.extend(0x2000u16.to_le_bytes());
-        vmk_d.extend(props);
-        let mut es = entry(2, 8, &vmk_d);
-        es.extend(entry(3, 5, &seal(&vmk, [6u8; 12], &fvek_pt)));
+        let mut es = entry(7, 2, &"LAB-PC E: 2026-11-09\0".encode_utf16().flat_map(|c| c.to_le_bytes()).collect::<Vec<u8>>());
+        for (n, pr) in prots.iter().enumerate() {
+            let salt = [0x20 + n as u8; 16];
+            let mut stretch_d = 0x1000u32.to_le_bytes().to_vec();
+            stretch_d.extend(salt);
+            let (id, kind, key, stretched) = match pr {
+                Prot::Password(pw) => {
+                    let w: Vec<u8> = pw.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+                    ([0xA0 + n as u8; 16], 0x2000u16, stretch(&sha256(&sha256(&w)), &salt), true)
+                }
+                Prot::Recovery(rp) => ([0xA0 + n as u8; 16], 0x0800, stretch(&sha256(&recovery_key(rp).unwrap()), &salt), true),
+                Prot::Startup(id, k) => (*id, 0x0200, *k, false),
+            };
+            let mut props = if stretched { entry(0, 3, &stretch_d) } else { vec![] };
+            props.extend(entry(0, 5, &seal(&key, [5 + n as u8; 12], &vmk_pt)));
+            let mut d = id.to_vec();
+            d.extend(0x01DB_0000_0000_0000u64.to_le_bytes());
+            d.extend(0u16.to_le_bytes());
+            d.extend(kind.to_le_bytes());
+            d.extend(props);
+            es.extend(entry(2, 8, &d));
+        }
+        es.extend(entry(3, 5, &seal(&vmk, [0x40; 12], &fvek_pt)));
         let mut meta = vec![0u8; 48];
         meta[0..4].copy_from_slice(&((48 + es.len()) as u32).to_le_bytes());
         meta[4] = 1;
         meta[8] = 48;
+        meta[16..32].copy_from_slice(&[0x77; 16]);
         meta[36..40].copy_from_slice(&0x8004u32.to_le_bytes());
+        meta[40..48].copy_from_slice(&0x01DB_0000_0000_0000u64.to_le_bytes());
         meta.extend(es);
 
         let k1 = Cipher::new(&fvek[..16]).unwrap();
         let k2 = Cipher::new(&fvek[16..]).unwrap();
-        let mut disk = vec![0u8; LEN];
-        for x in (0..LEN).step_by(512) {
+        let mut disk = vec![0u8; len];
+        for x in (0..len).step_by(512) {
             if x < header_len {
                 let mut s = plain[x..x + 512].to_vec();
                 xts_encrypt(&k1, &k2, ((header_at + x) / 512) as u64, &mut s);
@@ -786,17 +823,21 @@ mod tests {
             }
         }
         disk[0..512].fill(0);
+        disk[0..3].copy_from_slice(&[0xEB, 0x58, 0x90]);
         disk[3..11].copy_from_slice(b"-FVE-FS-");
         disk[11..13].copy_from_slice(&512u16.to_le_bytes());
+        disk[13] = 8;
         disk[160..176].copy_from_slice(&GUID);
-        for (i, m) in [MB, 2 * MB, 3 * MB].into_iter().enumerate() {
+        for (i, m) in metas.into_iter().enumerate() {
             disk[176 + i * 8..184 + i * 8].copy_from_slice(&(m as u64).to_le_bytes());
             let mut b = vec![0u8; 64];
             b[0..8].copy_from_slice(b"-FVE-FS-");
             b[10] = 2;
-            b[16..24].copy_from_slice(&(LEN as u64).to_le_bytes());
+            b[12] = 4;
+            b[14] = 4;
+            b[16..24].copy_from_slice(&(len as u64).to_le_bytes());
             b[28..32].copy_from_slice(&16u32.to_le_bytes());
-            for (j, o) in [MB, 2 * MB, 3 * MB].into_iter().enumerate() {
+            for (j, o) in metas.into_iter().enumerate() {
                 b[32 + j * 8..40 + j * 8].copy_from_slice(&(o as u64).to_le_bytes());
             }
             b[56..64].copy_from_slice(&(header_at as u64).to_le_bytes());
@@ -805,17 +846,58 @@ mod tests {
         }
         disk[510] = 0x55;
         disk[511] = 0xAA;
+        disk
+    }
+
+    /// The startup key file for `Prot::Startup(id, key)`.
+    pub(crate) fn bek(id: [u8; 16], key: [u8; 32]) -> Vec<u8> {
+        let mut kd = 0x2002u32.to_le_bytes().to_vec();
+        kd.extend(key);
+        let mut props = entry(0, 2, &"ExternalKey\0".encode_utf16().flat_map(|c| c.to_le_bytes()).collect::<Vec<u8>>());
+        props.extend(entry(0, 1, &kd));
+        let mut d = id.to_vec();
+        d.extend(0x01DB_0000_0000_0000u64.to_le_bytes());
+        d.extend(props);
+        let e = entry(6, 9, &d);
+        let mut h = vec![0u8; 48];
+        h[0..4].copy_from_slice(&((48 + e.len()) as u32).to_le_bytes());
+        h[4] = 1;
+        h[8] = 48;
+        h[12..16].copy_from_slice(&((48 + e.len()) as u32).to_le_bytes());
+        h[16..32].copy_from_slice(&[0x77; 16]);
+        h[36..40].copy_from_slice(&0x2002u32.to_le_bytes());
+        h.extend(e);
+        h
+    }
+
+    /// A volume made here, read back through the metadata, the unlock and
+    /// the reader.
+    #[test]
+    fn synthetic_volume_round_trips() {
+        const LEN: usize = 4 << 20;
+        const MB: usize = 1 << 20;
+        let header_at = MB + 64 * 1024;
+        let mut plain: Vec<u8> = (0..LEN).map(|i| (i % 251) as u8 ^ (i / 512) as u8).collect();
+        plain[3..11].copy_from_slice(b"NTFS    ");
+        plain[510] = 0x55;
+        plain[511] = 0xAA;
+        for m in [MB, 2 * MB, 3 * MB] {
+            plain[m..m + 64 * 1024].fill(0);
+        }
+        plain[header_at..header_at + 8192].fill(0);
+        let disk = build(&plain, [MB, 2 * MB, 3 * MB], header_at, &[Prot::Password("Lab-Pa55")]);
 
         let mut c = std::io::Cursor::new(&disk);
         assert!(is_bitlocker(&disk[..512]));
         let i = info(&mut c, LEN as u64).unwrap();
-        assert_eq!((i.method_label.as_str(), i.header_offset, i.header_size), ("AES-128-XTS", header_at as u64, header_len as u64));
+        assert_eq!((i.method_label.as_str(), i.header_offset, i.header_size), ("AES-128-XTS", header_at as u64, 8192));
         assert_eq!(i.protectors.len(), 1);
         assert_eq!(i.protectors[0].kind, "Password");
+        assert_eq!(i.description, "LAB-PC E: 2026-11-09");
         assert!(unlock(&i, &Secret::RecoveryPassword("1")).unwrap_err().contains("no recovery password protector"));
         assert!(unlock(&i, &Secret::ClearKey).is_err());
         let k = unlock(&i, &Secret::Password("Lab-Pa55")).unwrap();
-        assert_eq!(k.fvek, hex(&fvek));
+        assert_eq!(k.fvek, hex(&[0x11u8; 32]));
         let mut r = BdeReader::new(std::io::Cursor::new(&disk), LEN as u64, &k).unwrap();
         let mut got = vec![];
         r.read_to_end(&mut got).unwrap();
@@ -826,6 +908,55 @@ mod tests {
         let mut b = [0u8; 3000];
         r.read_exact(&mut b).unwrap();
         assert_eq!(&b[..], &plain[1000..4000]);
+    }
+
+    pub(crate) const FIXTURE_PASSWORD: &str = "Lab-Pa55";
+    pub(crate) const FIXTURE_RECOVERY: &str = "111111-222222-333333-444444-555555-666666-000077-123453";
+    pub(crate) const FIXTURE_KEY_ID: [u8; 16] = [0xB0, 0x0B, 0x1E, 0x55, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB];
+    pub(crate) const FIXTURE_KEY: [u8; 32] = [0x5C; 32];
+
+    fn fixtures() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures")
+    }
+
+    /// Writes tests/fixtures/bitlocker-xts.img and its .BEK: testfs1-win
+    /// (NTFS with carving ground truth) in a BitLocker volume with a
+    /// password, a recovery password and a startup key protector; the
+    /// metadata sits in a 256 KiB tail after the NTFS volume.
+    /// Run: cargo test -p kokino-image make_bitlocker_fixture -- --ignored
+    #[test]
+    #[ignore]
+    fn make_bitlocker_fixture() {
+        let mut plain = std::fs::read(fixtures().join("testfs1-win")).unwrap();
+        let ntfs = plain.len();
+        plain.resize(ntfs + 256 * 1024, 0);
+        let disk = build(&plain, [ntfs, ntfs + 64 * 1024, ntfs + 128 * 1024], ntfs + 192 * 1024,
+            &[Prot::Password(FIXTURE_PASSWORD), Prot::Recovery(FIXTURE_RECOVERY), Prot::Startup(FIXTURE_KEY_ID, FIXTURE_KEY)]);
+        std::fs::write(fixtures().join("bitlocker-xts.img"), disk).unwrap();
+        std::fs::write(fixtures().join("bitlocker-xts.BEK"), bek(FIXTURE_KEY_ID, FIXTURE_KEY)).unwrap();
+    }
+
+    /// The committed fixture opens with each of its three protectors, to
+    /// the same key, and decrypts to testfs1-win.
+    #[test]
+    fn fixture_unlocks_every_way() {
+        let Ok(disk) = std::fs::read(fixtures().join("bitlocker-xts.img")) else { return };
+        let i = info(&mut std::io::Cursor::new(&disk), disk.len() as u64).unwrap();
+        assert_eq!(i.protectors.iter().map(|p| p.kind.as_str()).collect::<Vec<_>>(), ["Password", "Recovery password", "Startup key"]);
+        let b = std::fs::read(fixtures().join("bitlocker-xts.BEK")).unwrap();
+        assert_eq!(b.len(), 156, "the size Windows writes");
+        let k = unlock(&i, &Secret::StartupKey(&b)).unwrap();
+        assert_eq!(k.protector, "Startup key");
+        let mut other = b.clone();
+        other[56] ^= 1; // another key identifier
+        assert!(unlock(&i, &Secret::StartupKey(&other)).unwrap_err().contains("another volume"));
+        assert!(unlock(&i, &Secret::StartupKey(b"not a key")).is_err());
+        assert_eq!(unlock(&i, &Secret::RecoveryPassword(FIXTURE_RECOVERY)).unwrap().fvek, k.fvek);
+        let plain = std::fs::read(fixtures().join("testfs1-win")).unwrap();
+        let mut r = BdeReader::new(std::io::Cursor::new(&disk), disk.len() as u64, &k).unwrap();
+        let mut got = vec![0u8; plain.len()];
+        r.read_exact(&mut got).unwrap();
+        assert!(got == plain);
     }
 }
 
