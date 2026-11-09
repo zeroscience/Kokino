@@ -59,3 +59,35 @@ mod tests {
         assert!(msg.contains("stopped"), "{}", msg);
     }
 }
+
+/// Opens a database from evidence (its bytes, and its write-ahead log when
+/// there is one) as a hardened, read-only copy in a temporary folder, and
+/// runs `f` on it. `tables` must not be views (an altered database).
+pub fn with_db<T>(db: &[u8], wal: Option<&[u8]>, tables: &[&str], f: impl FnOnce(&Connection) -> anyhow::Result<T>) -> anyhow::Result<T> {
+    if !db.starts_with(b"SQLite format 3\0") {
+        anyhow::bail!("not a SQLite database (header overwritten or file wiped)");
+    }
+    let dir = std::env::temp_dir().join(format!("kokino-sqlite-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&dir)?;
+    struct Gone(std::path::PathBuf);
+    impl Drop for Gone {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _g = Gone(dir.clone());
+    let p = dir.join("db");
+    std::fs::write(&p, db)?;
+    if let Some(w) = wal {
+        std::fs::write(dir.join("db-wal"), w)?;
+    }
+    let c = Connection::open_with_flags(&p, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+    harden(&c, BUDGET)?;
+    c.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get::<_, i64>(0))?;
+    c.execute_batch("PRAGMA query_only = 1;")?;
+    let views = views_named(&c, tables);
+    if !views.is_empty() {
+        anyhow::bail!("{} defined as a view, not a table: the database was altered, so it is not read", views.join(", "));
+    }
+    f(&c).map_err(explain)
+}

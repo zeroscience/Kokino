@@ -432,6 +432,17 @@ specification and are covered only by the fuzzer. The synthetic PST in
 `crates/kokino-analysis/src/pst.rs` (two-level B-trees, a recipient
 table, an attachment spread over three blocks) is checked byte for byte.
 
+## macOS artifacts (unreleased)
+
+Checked on `collection-uac-mac.tar.gz` only, whose property lists and
+databases Python wrote in the formats macOS uses (plistlib, binary and
+XML; sqlite3 with Apple's table and column names): version, name, setup
+date, accounts, persistence, both downloads with their times, and the
+KnowledgeC durations come out as the script put them in. The binary plist
+reader is also checked against a plist built byte by byte. No image of a
+real Mac system volume has been checked yet: the Mac test images
+(`hfsplus.img`, `apfs.img`) hold user files only.
+
 ## Folders as evidence (unreleased)
 
 A KAPE collection copied out as files (the contents of

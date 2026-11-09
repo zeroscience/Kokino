@@ -210,6 +210,8 @@ pub struct MessageInfo {
     /// HTML body as stored, and its character set.
     pub html: Vec<u8>,
     pub html_charset: String,
+    /// The RTF body (decompressed), read only when there is no other body.
+    pub rtf: Vec<u8>,
     pub headers: String,
     pub attachments: Vec<Attach>,
 }
@@ -693,6 +695,7 @@ impl<R: Read + Seek> Pst<R> {
             body: s(0x1000),
             html,
             html_charset,
+            rtf: if p.contains_key(&0x1000) || p.contains_key(&0x1013) { vec![] } else { p.get(&0x1009).and_then(|x| lzfu(&x.data)).unwrap_or_default() },
             headers: s(0x007D),
             ..Default::default()
         }
@@ -779,9 +782,67 @@ impl<R: Read + Seek> Pst<R> {
     }
 }
 
+/// MS-OXRTFCP: the dictionary every compressed RTF starts from (207 bytes).
+const LZFU_DICT: &[u8] = b"{\\rtf1\\ansi\\mac\\deff0\\deftab720{\\fonttbl;}{\\f0\\fnil \\froman \\fswiss \\fmodern \\fscript \\fdecor MS Sans SerifSymbolArialTimes New RomanCourier{\\colortbl\\red0\\green0\\blue0\r\n\\par \\pard\\plain\\f0\\fs20\\b\\i\\u\\tab\\tx";
+
+/// Compressed RTF (PidTagRtfCompressed, MS-OXRTFCP): "LZFu" compressed or
+/// "MELA" stored. `None` when it is neither or damaged.
+pub fn lzfu(d: &[u8]) -> Option<Vec<u8>> {
+    if d.len() < 16 {
+        return None;
+    }
+    let (comp, raw) = (u32_at(d, 0) as usize, (u32_at(d, 4) as usize).min(64 << 20));
+    let body = d.get(16..(comp + 4).min(d.len()))?;
+    match &d[8..12] {
+        b"MELA" => return Some(body[..body.len().min(raw)].to_vec()),
+        b"LZFu" => {}
+        _ => return None,
+    }
+    let mut dict = [b' '; 4096];
+    dict[..LZFU_DICT.len()].copy_from_slice(LZFU_DICT);
+    let mut w = LZFU_DICT.len();
+    let mut out = Vec::with_capacity(raw.min(16 << 20));
+    let mut i = 0;
+    'outer: while i < body.len() {
+        let flags = body[i];
+        i += 1;
+        for bit in 0..8 {
+            if flags >> bit & 1 == 1 {
+                let Some(t) = body.get(i..i + 2) else { break 'outer };
+                i += 2;
+                let token = u16::from_be_bytes([t[0], t[1]]) as usize;
+                let (off, len) = (token >> 4, (token & 15) + 2);
+                if off == w {
+                    break 'outer;
+                }
+                for k in 0..len {
+                    let c = dict[(off + k) % 4096];
+                    out.push(c);
+                    dict[w] = c;
+                    w = (w + 1) % 4096;
+                }
+            } else {
+                let Some(&c) = body.get(i) else { break 'outer };
+                i += 1;
+                out.push(c);
+                dict[w] = c;
+                w = (w + 1) % 4096;
+            }
+            if out.len() >= raw.max(1) {
+                break 'outer;
+            }
+        }
+    }
+    out.truncate(raw);
+    Some(out)
+}
+
 impl MessageInfo {
     /// The message text: the plain body, or the HTML without its markup.
     pub fn text(&self) -> String {
+        if self.body.is_empty() && self.html.is_empty() && !self.rtf.is_empty() {
+            return crate::oletext::rtf(&self.rtf);
+        }
         if !self.body.is_empty() || self.html.is_empty() {
             return self.body.clone();
         }
@@ -885,6 +946,8 @@ pub fn render(m: &MessageInfo, parts: &[(Attach, Vec<u8>)]) -> Vec<u8> {
         part("Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n".into(), b64(m.body.as_bytes()).as_bytes(), &mut out);
     } else if !m.html.is_empty() {
         part(format!("Content-Type: text/html; charset={}\r\nContent-Transfer-Encoding: base64\r\n", m.html_charset), b64(&m.html).as_bytes(), &mut out);
+    } else if !m.rtf.is_empty() {
+        part("Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n".into(), b64(m.text().as_bytes()).as_bytes(), &mut out);
     }
     for (a, d) in parts {
         if a.mime == "message/rfc822" {
@@ -1160,6 +1223,19 @@ pub(crate) mod tests {
             f[513] = 1; // compressible encryption
             self.file
         }
+    }
+
+    #[test]
+    fn compressed_rtf() {
+        assert_eq!(LZFU_DICT.len(), 207);
+        // MS-OXRTFCP's example: compressed, then stored.
+        let c = b"-\x00\x00\x00+\x00\x00\x00LZFu\xf1\xc5\xc7\xa7\x03\x00\n\x00rcpg125B2\n\xf3 hel\t\x00 bw\x05\xb0ld}\n\x80\x0f\xa0";
+        assert_eq!(lzfu(c).unwrap(), b"{\\rtf1\\ansi\\ansicpg1252\\pard hello world}\r\n");
+        let m = b".\x00\x00\x00\"\x00\x00\x00MELA\x00\x00\x00\x00{\\rtf1\\ansi\\ansicpg1252\\pard test}";
+        assert_eq!(lzfu(m).unwrap(), b"{\\rtf1\\ansi\\ansicpg1252\\pard test}");
+        assert!(lzfu(b"short").is_none());
+        let msg = MessageInfo { rtf: lzfu(c).unwrap(), ..Default::default() };
+        assert_eq!(msg.text().trim(), "hello world");
     }
 
     pub(crate) const FT: u64 = 134_064_000_000_000_000; // 2025-10-31 (FILETIME)

@@ -48,7 +48,8 @@ checked against public test images with known answers where they exist
 - [ ] APFS snapshots, encrypted volumes (FileVault) and free space (space manager)
 - [ ] HFS+ and APFS checked on disks from real Macs (so far: images made with Apple's own tools)
 - [ ] LZFSE decompression (decmpfs types 11 and 12)
-- [ ] macOS artifacts: property lists, unified logs, KnowledgeC, quarantine events, FSEvents
+- [x] macOS artifacts: property lists, accounts, launchd persistence, quarantine events, KnowledgeC (unreleased)
+- [ ] macOS artifacts: unified logs, FSEvents, Safari history, checked on a real Mac image
 - [ ] XFS
 - [x] BitLocker with a password or recovery password; clear key (unreleased)
 - [x] BitLocker: startup keys (.BEK), carving decrypted volumes (unreleased)
@@ -74,7 +75,8 @@ checked against public test images with known answers where they exist
 ### Content
 - [x] Email: mbox mailboxes (Thunderbird, /var/mail) and .eml files (1.3.0)
 - [x] Email: Outlook PST and OST (unreleased)
-- [ ] Email: deleted PST items (recovered from the file's free blocks), RTF-only message bodies, Apple Mail .emlx
+- [x] Email: RTF-only Outlook message bodies (unreleased)
+- [ ] Email: deleted PST items (recovered from the file's free blocks), Apple Mail .emlx
 - [x] Text from legacy Office files (DOC, XLS, PPT), Outlook .msg and RTF (1.3.0)
 - [ ] Carving of fragmented files
 

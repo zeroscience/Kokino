@@ -60,6 +60,10 @@ impl Fs {
         }
     }
 
+    pub fn is_mac(&self) -> bool {
+        matches!(self, Fs::Hfs(_) | Fs::Apfs(_))
+    }
+
     pub fn is_fat(&self) -> bool {
         matches!(self, Fs::Fat(_))
     }

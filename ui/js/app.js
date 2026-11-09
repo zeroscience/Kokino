@@ -1437,7 +1437,10 @@ const LINUX_SECTIONS = [["overview", "Overview"], ["exec", "Commands"], ["logons
 // System summary of a Linux (ext) volume.
 function linuxSystem(ctx, r) {
   const L = r.linux;
-  const intro = h("div.hd", h("div", h("h1", "System summary"), h("div.muted", "Accounts, logons, shell histories, logs, the journal, packages and persistence of this Linux volume. " + zoneSentence())), h("span.sp"), fsPicker(ctx, "system"));
+  const mac = L.computer.os_id === "macos";
+  const intro = h("div.hd", h("div", h("h1", "System summary"), h("div.muted", (mac
+    ? "Accounts (dslocal), shell histories, launchd persistence, downloads (quarantine events) and application use (KnowledgeC) of this Mac. "
+    : "Accounts, logons, shell histories, logs, the journal, packages and persistence of this Linux volume. ") + zoneSentence())), h("span.sp"), fsPicker(ctx, "system"));
   const fileOf = (i) => (i == null ? "" : r.files[i] || "");
   const open = (i) => (i != null ? fileDrawer(ctx, i) : null);
   let section = LINUX_SECTIONS.some(([k]) => k === ctx.q.sec) ? ctx.q.sec : "overview";
@@ -1465,11 +1468,11 @@ function linuxSystem(ctx, r) {
       return [
         h("div.grid.g4",
           tile("Commands recorded", L.commands.length, `${num(flagged.length)} notable`, flagged.length ? ".bad" : ""),
-          tile("Logons", L.logons.filter((x) => x.kind === "logon").length, `${num(failed)} failed`),
+          mac ? tile("Downloads", L.events.filter((e) => e.category === "Download").length, "quarantine events") : tile("Logons", L.logons.filter((x) => x.kind === "logon").length, `${num(failed)} failed`),
           tile("Persistence entries", L.persistence.length, `${num(odd.length)} stand out`, odd.length ? ".bad" : ""),
-          tile("Packages", L.packages.length, L.usb.length ? `${L.usb.length} USB device(s) seen` : "")),
+          mac ? tile("App use records", L.events.filter((e) => e.category === "App use").length, "KnowledgeC") : tile("Packages", L.packages.length, L.usb.length ? `${L.usb.length} USB device(s) seen` : "")),
         h("div.grid.g2",
-          card("Computer", kv([["Host name", c.hostname], ["Distribution", c.os], ["Time zone", c.time_zone], ["Machine id", c.machine_id], ["File system created", t16(c.fs_created)],
+          card("Computer", kv([[mac ? "Computer name" : "Host name", c.hostname], [mac ? "macOS" : "Distribution", c.os], ["Time zone", c.time_zone], ["Machine id", c.machine_id], [mac ? "Set up" : "File system created", t16(c.fs_created)],
             ["Last mounted", [c.last_mounted, t16(c.last_mount_time)].filter(Boolean).join(" at ")], ["Last boot", t16(c.last_boot)], ["Last shutdown", t16(c.last_shutdown)], ["Kernels in /boot", c.kernels.join(", ")]])),
           card("Highlights", flagged.length || odd.length || notes.length
             ? h("ul.impact", [
@@ -1502,7 +1505,7 @@ function linuxSystem(ctx, r) {
         L.logons.slice().reverse().slice(0, 5000).map((x) => h("tr", { onclick: () => open(x.file), title: fileOf(x.file) }, h("td.mono", t16(x.time)),
           h("td", h("span.pill" + (x.kind === "failed" ? ".bad" : x.kind === "logon" ? ".ok" : ""), x.kind), x.how ? h("span.muted", ` ${x.how}`) : null), h("td", h("b", x.user)), h("td.mono", x.from), h("td.mono", x.tty), h("td.mono", t16(x.end)), h("td.muted", x.source))),
         "No logon records (wtmp, btmp, auth log and journal may be missing or emptied).")),
-      card("Accounts (passwd, shadow, group, lastlog)", users()),
+      card(mac ? "Accounts (dslocal, admin group)" : "Accounts (passwd, shadow, group, lastlog)", users()),
     ],
     events: () => {
       const cats = ["", ...new Set(L.events.map((e) => e.category))];
@@ -1553,7 +1556,7 @@ async function systemTab(ctx) {
   const r = await api(`/cases/${ctx.cid}/evidence/${ctx.eid}/fs/${ctx.fi}/windows`);
   // What this page reads depends on the volume: Windows files on NTFS,
   // Linux files on ext, either (usually neither) on a FAT or exFAT drive.
-  const what = isMac(r.fs) ? "macOS system artifacts (property lists, unified logs, KnowledgeC, quarantine events) are not read yet; the files themselves are in the Explorer."
+  const what = isMac(r.fs) ? "Accounts, shell histories, launchd persistence, downloads (quarantine events) and application use (KnowledgeC) of this Mac. Unified logs and FSEvents are not read yet."
     : isExt(r.fs) ? "Accounts, logons, shell histories, logs, the journal, packages and persistence of this Linux volume."
     : isFat(r.fs) || isOptical(r.fs) ? "Windows or Linux system files found on this volume (a removable drive or disc usually has none)."
     : "Registry, event logs, Prefetch, shortcuts, Jump Lists, ShellBags and the change journal of this Windows volume.";

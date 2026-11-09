@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>B</key>
+	<data>
+	AAFsYWI=
+	</data>
+	<key>D</key>
+	<date>2026-10-20T08:05:30Z</date>
+	<key>Label</key>
+	<string>com.lab.x</string>
+	<key>Long</key>
+	<string>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</string>
+	<key>N</key>
+	<integer>1099511627776</integer>
+	<key>Nested</key>
+	<dict>
+		<key>a</key>
+		<array>
+			<integer>1</integer>
+			<dict>
+				<key>b</key>
+				<array>
+					<true/>
+					<false/>
+				</array>
+			</dict>
+		</array>
+	</dict>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>-c</string>
+		<string>echo</string>
+	</array>
+	<key>R</key>
+	<real>1.5</real>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>U</key>
+	<string>café</string>
+</dict>
+</plist>

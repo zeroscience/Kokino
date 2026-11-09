@@ -232,7 +232,11 @@ fn home_user(path: &str) -> String {
     let p: Vec<&str> = path.split('/').collect();
     match p.get(1).copied() {
         Some("root") => "root".into(),
-        Some("home") => p.get(2).map(|s| s.to_string()).unwrap_or_default(),
+        // /Users on macOS.
+        Some("home") | Some("Users") => p.get(2).filter(|u| **u != "Shared").map(|s| s.to_string()).unwrap_or_default(),
+        // macOS root's home, /private/var/root (seen with /private dropped).
+        Some("private") if p.get(2) == Some(&"var") && p.get(3) == Some(&"root") => "root".into(),
+        Some("var") if p.get(2) == Some(&"root") => "root".into(),
         _ => String::new(),
     }
 }
@@ -243,6 +247,10 @@ pub fn notable_command(c: &str) -> Option<&'static str> {
     let words: Vec<&str> = l.split(|ch: char| ch.is_whitespace() || ch == ';' || ch == '|' || ch == '&').filter(|w| !w.is_empty()).collect();
     let has = |w: &str| words.iter().any(|x| *x == w || x.rsplit('/').next() == Some(w));
     if has("shred") || has("wipe") || has("srm") || has("bleachbit") || has("sfill") || has("sswap") || has("secure-delete") {
+        return Some("secure deletion");
+    }
+    // macOS: rm -P overwrites files before removing them; diskutil secureErase.
+    if (has("rm") && words.iter().any(|w| w.starts_with('-') && !w.starts_with("--") && w.contains('p'))) || (has("diskutil") && l.contains("secureerase")) {
         return Some("secure deletion");
     }
     if l.contains("history -c") || l.contains("history -w /dev/null") || l.contains("unset histfile") || l.contains("histfile=/dev/null") || l.contains("histsize=0") || l.contains("set +o history") {
@@ -788,7 +796,11 @@ fn base_log(name: &str) -> &str {
 }
 
 fn classify_path(path: &str) -> Option<Kind> {
-    let p = path;
+    // macOS keeps /etc and /var under /private.
+    let p = match path.strip_prefix("/private") {
+        Some(rest) if rest.starts_with("/etc/") || rest.starts_with("/var/") => rest,
+        _ => path,
+    };
     let name = p.rsplit('/').next().unwrap_or("");
     let dir = p.rsplit_once('/').map(|x| x.0).unwrap_or("");
     match p {
@@ -858,7 +870,7 @@ fn classify_path(path: &str) -> Option<Kind> {
     let user = !home_user(p).is_empty();
     let in_home = |rest: &str| -> bool {
         let parts: Vec<&str> = p.split('/').collect();
-        let tail = if parts.get(1) == Some(&"root") { parts[2..].join("/") } else if parts.get(1) == Some(&"home") && parts.len() > 3 { parts[3..].join("/") } else { return false };
+        let tail = if parts.get(1) == Some(&"root") { parts[2..].join("/") } else if matches!(parts.get(1), Some(&"home") | Some(&"Users")) && parts.len() > 3 { parts[3..].join("/") } else if parts.get(1) == Some(&"var") && parts.get(2) == Some(&"root") && parts.len() > 3 { parts[3..].join("/") } else { return false };
         tail == rest
     };
     if user {
@@ -894,7 +906,7 @@ fn read_file<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, f: &FileRow, cap: u6
 pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow], progress: crate::Progress) -> LinuxArtifacts {
     let mut a = LinuxArtifacts::default();
     // An ext volume, or a collection (tar, ZIP) that may hold a Linux system.
-    if !fs.is_ext() && !fs.is_collection() {
+    if !fs.is_ext() && !fs.is_collection() && !fs.is_mac() {
         return a;
     }
     if let crate::fs::Fs::Ext(v) = fs {
@@ -1356,6 +1368,9 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
         } else {
             a.computer.last_shutdown = a.computer.last_shutdown.max(e.time);
         }
+    }
+    if crate::macos::is_mac(files) {
+        crate::macos::collect(fs, r, files, &mut a);
     }
     a.events.sort_by_key(|e| e.time);
     a.logons.sort_by_key(|l| l.time);
@@ -1894,8 +1909,9 @@ pub fn impact(a: &LinuxArtifacts) -> Vec<String> {
     let c = &a.computer;
     let iso = |t: u64| if t == 0 { "unknown".to_string() } else { kokino_core::time::filetime_to_iso(t) };
     if !c.hostname.is_empty() || !c.os.is_empty() {
-        let created = if c.fs_created == 0 { String::new() } else { format!("; file system created {}", iso(c.fs_created)) };
-        out.push(format!("Linux computer {} running {}{}.", if c.hostname.is_empty() { "(no hostname)" } else { &c.hostname }, if c.os.is_empty() { "an unknown distribution" } else { &c.os }, created));
+        let mac = c.os_id == "macos";
+        let created = if c.fs_created == 0 { String::new() } else { format!("; {} {}", if mac { "set up" } else { "file system created" }, iso(c.fs_created)) };
+        out.push(format!("{} {} running {}{}.", if mac { "Mac" } else { "Linux computer" }, if c.hostname.is_empty() { "(no hostname)" } else { &c.hostname }, if c.os.is_empty() { if mac { "an unknown macOS version" } else { "an unknown distribution" } } else { &c.os }, created));
     }
     let can_login: Vec<&str> = a.users.iter().filter(|u| u.login_shell && !u.password.starts_with("locked")).map(|u| u.name.as_str()).collect();
     if !can_login.is_empty() {
@@ -1920,7 +1936,8 @@ pub fn impact(a: &LinuxArtifacts) -> Vec<String> {
     }
     let odd = a.persistence.iter().filter(|p| p.unusual).count();
     if odd > 0 {
-        out.push(format!("{} persistence entr{} stand out (cron, systemd, SSH keys, sudoers, preload).", odd, if odd == 1 { "y" } else { "ies" }));
+        let kinds: std::collections::BTreeSet<&str> = a.persistence.iter().filter(|p| p.unusual).map(|p| p.kind.as_str()).collect();
+        out.push(format!("{} persistence entr{} stand out ({}).", odd, if odd == 1 { "y" } else { "ies" }, kinds.into_iter().collect::<Vec<_>>().join(", ")));
     }
     if !a.usb.is_empty() {
         out.push(format!("{} USB device(s) seen by the kernel: {}.", a.usb.len(), a.usb.iter().map(|u| u.name.clone()).collect::<Vec<_>>().join(", ")));
@@ -1928,6 +1945,7 @@ pub fn impact(a: &LinuxArtifacts) -> Vec<String> {
     if a.logs.iter().any(|l| l.note.contains("year inferred")) {
         out.push(format!("Classic syslog lines carry no year or time zone: years were inferred from each file's modification time and times converted from {}.", if c.time_zone.is_empty() { "UTC" } else { &c.time_zone }));
     }
+    out.extend(crate::macos::impact(a));
     out
 }
 

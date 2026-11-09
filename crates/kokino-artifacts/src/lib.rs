@@ -12,6 +12,7 @@ pub mod evtx;
 pub mod iecache;
 pub mod jumplist;
 pub mod lnk;
+pub mod plist;
 pub mod prefetch;
 pub mod reglog;
 pub mod registry;

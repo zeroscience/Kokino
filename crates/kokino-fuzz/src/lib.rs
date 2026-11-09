@@ -35,6 +35,7 @@ pub const TARGETS: &[Target] = &[
     Target { name: "vss", run: vss, seeds: &["crates/kokino-fuzz/seeds/vss"] },
     Target { name: "tar", run: tarfs, seeds: &["crates/kokino-fuzz/seeds/tar"] },
     Target { name: "pst", run: pst, seeds: &["crates/kokino-fuzz/seeds/pst"] },
+    Target { name: "plist", run: plist, seeds: &["crates/kokino-fuzz/seeds/plist"] },
     Target { name: "zip", run: zipfs, seeds: &["crates/kokino-fuzz/seeds/zip", "tests/fixtures/iso-rr-joliet.iso"] },
     Target { name: "reglog", run: reglog, seeds: &["tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_UsrClass.dat.LOG1", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_UsrClass.dat"] },
     Target { name: "iecache", run: iecache, seeds: &["tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_History_History.IE5_MSHist012025031020250311_index.dat", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_History_History.IE5_index.dat", "tests/fixtures/win/Users_alice_AppData_Local_Microsoft_Windows_Temporary Internet Files_Content.IE5_index.dat", "tests/fixtures/win/Users_alice_AppData_Roaming_Microsoft_Windows_IEDownloadHistory_index.dat"] },
@@ -372,6 +373,26 @@ fn pst(d: &[u8]) {
         if let Ok(eml) = p.eml(nid) {
             let _ = kokino_analysis::mail::parse(&eml);
         }
+    }
+}
+
+/// Apple property lists, binary and XML, and every value walked.
+fn plist(d: &[u8]) {
+    fn walk(v: &kokino_artifacts::plist::Value, n: &mut usize) {
+        *n += 1;
+        let _ = (v.str(), v.int(), v.bool(), v.time());
+        if *n > 100_000 {
+            return;
+        }
+        match v {
+            kokino_artifacts::plist::Value::Array(a) => a.iter().for_each(|x| walk(x, n)),
+            kokino_artifacts::plist::Value::Dict(m) => m.values().for_each(|x| walk(x, n)),
+            _ => {}
+        }
+    }
+    if let Some(v) = kokino_artifacts::plist::parse(d) {
+        walk(&v, &mut 0);
+        let _ = v.path("System/System/ComputerName");
     }
 }
 

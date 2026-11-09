@@ -11,6 +11,7 @@ pub mod binview;
 pub mod signatures;
 pub mod carve;
 pub mod doctext;
+pub mod macos;
 pub mod mail;
 pub mod nested;
 pub mod pst;
@@ -266,7 +267,7 @@ fn analyze_fs(ev: &Evidence, v: &Volume, progress: Progress) -> anyhow::Result<F
 /// "uploads/auto/C:" or "uploads/ntfs/\\.\C:". Found by the system files
 /// below it; `None` when they are at the root, as on a disk.
 pub fn drive_root(files: &[FileRow]) -> Option<String> {
-    const MARKS: &[&str] = &["/windows/system32/config/system", "/windows/system32/config/software", "/etc/passwd", "/etc/os-release"];
+    const MARKS: &[&str] = &["/windows/system32/config/system", "/windows/system32/config/software", "/private/etc/passwd", "/system/library/coreservices/systemversion.plist", "/etc/passwd", "/etc/os-release"];
     let mut best: Option<String> = None;
     for f in files.iter().filter(|f| !f.e.is_dir && !f.e.deleted) {
         let p = f.e.path.to_ascii_lowercase();
@@ -762,6 +763,40 @@ mod tests {
         let pw = fs.files.iter().find(|f| f.e.path == "/[root]/etc/passwd").unwrap();
         assert_eq!(pw.e.unix.as_ref().unwrap().mode_string(), "-rw-r--r--");
         assert!(fs.files.iter().any(|f| f.e.path == "/live_response/system/uname_-a.txt"));
+    }
+
+    /// A Mac collected by UAC (scripts/make_mac_collection.py): the system,
+    /// accounts, launchd persistence, quarantine downloads, KnowledgeC and
+    /// the zsh history, at the paths they had on the Mac.
+    #[test]
+    fn mac_collection() {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/collection-uac-mac.tar.gz");
+        assert!(p.exists(), "run scripts/make_mac_collection.py");
+        let ev = Evidence::open(&p).unwrap();
+        let a = analyze(&ev, &mut |_, _, _| true).unwrap();
+        let fs = &a.filesystems[0];
+        assert_eq!(drive_root(&fs.files).as_deref(), Some("/[root]"));
+        let l = &fs.linux;
+        let c = &l.computer;
+        assert_eq!((c.os_id.as_str(), c.hostname.as_str(), c.os.as_str()), ("macos", "LAB-MAC", "macOS 14.4.1 (23E224)"));
+        // From the /private/etc/localtime link (the zone data itself was not collected).
+        assert!(c.time_zone.starts_with("Europe/Skopje"), "{}", c.time_zone);
+        assert_eq!(kokino_core::time::filetime_to_iso(c.fs_created), "2026-10-01T08:05:30.0000000Z");
+        let users: Vec<(&str, u32, bool)> = l.users.iter().map(|u| (u.name.as_str(), u.uid, u.admin)).collect();
+        assert!(users.contains(&("alice", 501, true)) && users.contains(&("bob", 502, false)) && users.iter().any(|u| u.0 == "root" && u.2), "{:?}", users);
+        assert!(!users.iter().any(|u| u.0.starts_with('_')));
+        let odd: Vec<&str> = l.persistence.iter().filter(|p| p.unusual).map(|p| p.name.as_str()).collect();
+        assert_eq!(odd, ["com.apple.sysmond"]);
+        assert!(l.persistence.iter().any(|p| p.name == "com.lab.updater" && !p.unusual));
+        let dl: Vec<(&str, &str)> = l.events.iter().filter(|e| e.category == "Download").map(|e| (e.program.as_str(), e.user.as_str())).collect();
+        assert_eq!(dl, [("Safari", "alice"), ("Mail", "alice")]);
+        let safari = l.events.iter().find(|e| e.category == "Download" && e.program == "Safari").unwrap();
+        assert!(safari.summary.contains("https://downloads.lab.test/tools.dmg"));
+        assert_eq!(kokino_core::time::filetime_to_iso(safari.time), "2026-10-20T08:15:30.0000000Z");
+        let apps: Vec<&str> = l.events.iter().filter(|e| e.category == "App use").map(|e| e.summary.as_str()).collect();
+        assert_eq!(apps, ["com.apple.Safari in front for 10 min 0 s", "com.apple.Terminal in front for 6 min 30 s"]);
+        assert!(l.commands.iter().any(|x| x.command.contains("rm -P") && x.flag == "secure deletion" && x.user == "alice"));
+        assert!(l.timeline.iter().any(|t| t.what.contains("tools.dmg")), "downloads on the timeline");
     }
 
     /// An Outlook PST on a volume (here in a tar collection): every message
