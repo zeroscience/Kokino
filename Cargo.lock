@@ -1001,7 +1001,7 @@ dependencies = [
 
 [[package]]
 name = "kokino-analysis"
-version = "1.2.9"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1025,7 +1025,7 @@ dependencies = [
 
 [[package]]
 name = "kokino-artifacts"
-version = "1.2.9"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "rusqlite",
@@ -1036,7 +1036,7 @@ dependencies = [
 
 [[package]]
 name = "kokino-cli"
-version = "1.2.9"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1056,7 +1056,7 @@ dependencies = [
 
 [[package]]
 name = "kokino-core"
-version = "1.2.9"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1074,7 +1074,7 @@ dependencies = [
 
 [[package]]
 name = "kokino-ext"
-version = "1.2.9"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "kokino-core",
@@ -1083,7 +1083,7 @@ dependencies = [
 
 [[package]]
 name = "kokino-fat"
-version = "1.2.9"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1093,7 +1093,7 @@ dependencies = [
 
 [[package]]
 name = "kokino-fuzz"
-version = "1.2.9"
+version = "1.3.0"
 dependencies = [
  "kokino-analysis",
  "kokino-artifacts",
@@ -1107,7 +1107,7 @@ dependencies = [
 
 [[package]]
 name = "kokino-image"
-version = "1.2.9"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "flate2",
@@ -1119,7 +1119,7 @@ dependencies = [
 
 [[package]]
 name = "kokino-iso"
-version = "1.2.9"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1129,7 +1129,7 @@ dependencies = [
 
 [[package]]
 name = "kokino-mac"
-version = "1.2.9"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "flate2",
@@ -1139,7 +1139,7 @@ dependencies = [
 
 [[package]]
 name = "kokino-ntfs"
-version = "1.2.9"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "kokino-core",
@@ -1150,7 +1150,7 @@ dependencies = [
 
 [[package]]
 name = "kokino-server"
-version = "1.2.9"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "axum",

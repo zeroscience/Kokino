@@ -2,7 +2,7 @@
 <!--
   Windows installer for Kokino Forensic Toolkit (WiX Toolset v4).
 
-    wix build packaging/windows/kokino.wxs -arch x64 -d Version=1.2.9 -d Root=<repository> -d Bin=<folder with kokino.exe> -o kokino.msi
+    wix build packaging/windows/kokino.wxs -arch x64 -d Version=1.3.0 -d Root=<repository> -d Bin=<folder with kokino.exe> -o kokino.msi
 
   Installs kokino.exe to Program Files, adds it to the system PATH (for the
   command line), and puts "Kokino Forensic Toolkit" in the Start menu, which

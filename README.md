@@ -22,7 +22,7 @@
   <img src="https://img.shields.io/badge/rust-1.80%2B-orange?logo=rust&logoColor=white" alt="Rust 1.80+">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey" alt="Platforms: Windows, Linux, macOS">
   <img src="https://img.shields.io/badge/GUI-browser-1f6feb" alt="Browser GUI">
-  <img src="https://img.shields.io/badge/version-1.2.9-00bcd4" alt="Version 1.2.9">
+  <img src="https://img.shields.io/badge/version-1.3.0-00bcd4" alt="Version 1.3.0">
   <img src="https://img.shields.io/badge/evidence-read--only-2ea44f" alt="Evidence read-only">
   <img src="https://img.shields.io/badge/audit%20log-hash--chained-2ea44f" alt="Hash-chained audit log">
   <a href="SECURITY.md#fuzzing-the-parsers"><img src="https://img.shields.io/badge/parsers%20fuzzed-567M%20inputs-2ea44f" alt="Parsers fuzzed: 567 million inputs"></a>
@@ -70,7 +70,7 @@ Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workben
 
 Every finding links to the exact bytes it came from, every indicator of anti-forensic activity explains itself, and every examiner action lands in a hash-chained audit log, so the results hold up in a report and in court.
 
-> Status: 1.2.9 adds scheduled tasks (with tasks hidden from the Task Scheduler flagged), Internet Explorer history, cache and downloads (index.dat, with records recovered from the free space of a formatted disk) and deleted registry keys and values, on top of 1.2.8's change journal, ShellBags, BAM/DAM and SRUM. Reads E01, raw and virtual disks, and NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF. Validated against NIST CFReDS and Digital Corpora test images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed ([SECURITY.md](SECURITY.md)). Next: Ex01, macOS artifacts and APFS snapshots (see [What's next](#whats-next)).
+> Status: 1.3.0 adds email (mbox and .eml, with attachments and messages Thunderbird deleted), CSV and JSON exports of every list, registry transaction logs applied as Windows would, text of legacy Office files and RTF in search, Windows XP event logs, Internet Explorer cookies and compressed journald fields, on top of 1.2.9's scheduled tasks, Internet Explorer history and deleted registry keys. Reads E01, raw and virtual disks, and NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF. Validated against NIST CFReDS and Digital Corpora test images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed ([SECURITY.md](SECURITY.md)). Next: Volume Shadow Copies, BitLocker with a recovery key and triage collection import (see [What's next](#whats-next)).
 
 ## Features
 
@@ -106,7 +106,8 @@ Every finding links to the exact bytes it came from, every indicator of anti-for
 ## What's next
 
 - **Ex01:** EWF version 2 (EnCase 7 and later)
-- **Later:** macOS artifacts (property lists, unified logs, KnowledgeC), APFS snapshots and encrypted volumes, BitLocker with a recovery key, Volume Shadow Copies, email stores, triage collection import
+- **Next:** Volume Shadow Copies, BitLocker with a recovery key, disk images found inside evidence, triage collection import (KAPE, Velociraptor)
+- **Later:** Outlook PST and OST, macOS artifacts (property lists, unified logs, KnowledgeC), APFS snapshots and encrypted volumes, XFS
 
 The full list, with what is already done, is in [ROADMAP.md](ROADMAP.md).
 Suggestions are welcome as GitHub issues.
