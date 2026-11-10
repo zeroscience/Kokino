@@ -22,7 +22,7 @@
   <img src="https://img.shields.io/badge/rust-1.80%2B-orange?logo=rust&logoColor=white" alt="Rust 1.80+">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey" alt="Platforms: Windows, Linux, macOS">
   <img src="https://img.shields.io/badge/GUI-browser-1f6feb" alt="Browser GUI">
-  <img src="https://img.shields.io/badge/version-1.3.2-00bcd4" alt="Version 1.3.2">
+  <img src="https://img.shields.io/badge/version-1.4.0-00bcd4" alt="Version 1.4.0">
   <img src="https://img.shields.io/badge/evidence-read--only-2ea44f" alt="Evidence read-only">
   <img src="https://img.shields.io/badge/audit%20log-hash--chained-2ea44f" alt="Hash-chained audit log">
   <a href="SECURITY.md#fuzzing-the-parsers"><img src="https://img.shields.io/badge/parsers%20fuzzed-567M%20inputs-2ea44f" alt="Parsers fuzzed: 567 million inputs"></a>
@@ -66,11 +66,11 @@
 
 ---
 
-Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workbench for disk images. Give it an E01, raw, VHD, VHDX or VMDK image, a disc image or a triage collection (Velociraptor, KAPE, UAC, or a plain folder), and it reads every NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF volume down to the last record, live and deleted, BitLocker volumes once unlocked and every Volume Shadow Copy included, brings back what was erased, and rebuilds what happened on the machine: Windows registry (deleted keys included), event logs, execution traces and scheduled tasks, Linux and macOS accounts, logons, shell histories and persistence, browser history (Internet Explorer's included, even from a formatted disk), email (Outlook PST and OST, Apple Mail, mbox), carved files and edited pictures, and what a case's evidence items have in common.
+Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workbench for disk images. Give it an E01, raw, VHD, VHDX or VMDK image, a disc image or a triage collection (Velociraptor, KAPE, UAC, or a plain folder), and it reads every NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF volume down to the last record, live and deleted, BitLocker volumes once unlocked and every Volume Shadow Copy included, brings back what was erased, and rebuilds what happened on the machine: Windows registry (deleted keys included), event logs, execution traces and scheduled tasks, Linux and macOS accounts, logons, shell histories and persistence, browser history (Internet Explorer's included, even from a formatted disk), email (Outlook PST and OST, Apple Mail, mbox), carved files and edited pictures, and what a case's evidence items have in common, on one case timeline and against a watchlist of known indicators.
 
 Every finding links to the exact bytes it came from, every indicator of anti-forensic activity explains itself, and every examiner action lands in a hash-chained audit log, so the results hold up in a report and in court.
 
-> Status: 1.3.2 (1.3.1 with its wiki brought up to date) reads what is encrypted, shadowed and collected: BitLocker volumes unlocked with a password, recovery password or startup key (and their free space carved decrypted), Volume Shadow Copies, disk images found inside evidence, triage collections (Velociraptor, KAPE, UAC, plain folders), Outlook PST and OST, Apple Mail, macOS system artifacts with Safari and FSEvents, WebCache of Internet Explorer 10 and 11, and VHDX disks with their log replayed; a Correlation page shows what a case's evidence items have in common. Reads E01, raw and virtual disks, and NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF. Validated against NIST CFReDS, Digital Corpora and dfvfs test images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed with 656 million inputs ([SECURITY.md](SECURITY.md)). Releases carry an SBOM and signed build provenance. See [What's next](#whats-next).
+> Status: 1.4.0 works on a whole case at once: a case timeline merges every evidence item into one, and a watchlist sweeps every item for hashes, IP addresses, domains, email addresses and file names. It reads what is encrypted, shadowed and collected: BitLocker volumes unlocked with a password, recovery password or startup key (and their free space carved decrypted), Volume Shadow Copies, disk images found inside evidence, triage collections (Velociraptor, KAPE, UAC, plain folders), Outlook PST and OST, Apple Mail, macOS system artifacts with Safari and FSEvents, WebCache of Internet Explorer 10 and 11, and VHDX disks with their log replayed; a Correlation page shows what a case's evidence items have in common. Reads E01, raw and virtual disks, and NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF. Validated against NIST CFReDS, Digital Corpora and dfvfs test images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed with 670 million inputs ([SECURITY.md](SECURITY.md)). Releases carry an SBOM and signed build provenance. See [What's next](#whats-next).
 
 ## Features
 
@@ -104,13 +104,17 @@ Every finding links to the exact bytes it came from, every indicator of anti-for
 - **Updates:** Kokino never contacts anything on its own. "Check for updates" on the About page (or `kokino version --check`) asks GitHub for the latest release when you click it, shows its notes and checksums and links to the download; the check is recorded in the system audit log.
 - **Built-in help:** a searchable Wiki (getting started, roles, evidence, every view, browser history, hex, reports, LAN mode, command line, troubleshooting) and an About page with version and contact.
 - **Correlation:** a case page listing what its evidence items have in common: users, computer names, email addresses, IP addresses, USB serials, wireless networks, web domains and identical files.
+- **Case timeline:** every evidence item and volume of a case on one timeline, in time order, each row opening in its item.
+- **Watchlist:** paste indicators (hashes, IP addresses, domains and URLs, email addresses, file names and paths; defanged forms too) and search every evidence item of the case at once; the list can be kept with the case.
 - **Cases and accounts:** cases can be renamed, handed to another lead examiner, deleted and restored, all audit-logged. Every examiner signs in. Admins manage accounts and assign people to cases as examiner or reviewer (read-only). Every case action is attributed to the account in the audit log, and sign-ins are recorded in a hash-chained system audit log. Optional LAN mode serves HTTPS to a whole lab.
 
 ## What's next
 
-- **Ex01:** EWF version 2 (EnCase 7 and later)
-- **Next:** Ex01, deleted PST items, LZFSE (compressed macOS files)
-- **Later:** macOS unified logs, APFS snapshots and encrypted volumes, XFS
+After 1.4, development pauses for a few months; security reports and wrong
+results are still fixed. [ROADMAP.md](ROADMAP.md) lists what comes after
+the pause, in order, with what each item needs: first checks on real Mac
+disks, then APFS encryption, snapshots and LZFSE, Windows Search, XFS and
+Ex01.
 
 The full list, with what is already done, is in [ROADMAP.md](ROADMAP.md).
 Suggestions are welcome as GitHub issues.
@@ -216,7 +220,7 @@ Headless, using the same engine:
 - Every action is logged to `<case>/audit.jsonl` under the examiner's account, with the SHA-256 of the previous entry.
 - Analysis is deterministic for a given image and Kokino version, and the version is stored with the results.
 - Results are checked against public test images with ground truth, NIST CFReDS (61 deleted-file recovery images) and Digital Corpora: 99.8% of deleted-file blocks recovered correctly, image hashes matching the published values. See [VALIDATION.md](VALIDATION.md).
-- Every parser that reads evidence is fuzzed (656 million inputs so far, 37 problems found and fixed) and `unsafe` Rust is forbidden in every crate. See [SECURITY.md](SECURITY.md), which is also where to report a vulnerability.
+- Every parser that reads evidence is fuzzed (670 million inputs so far, 38 problems found and fixed) and `unsafe` Rust is forbidden in every crate. See [SECURITY.md](SECURITY.md), which is also where to report a vulnerability.
 - The GUI needs a signed-in session (Argon2id passwords, HttpOnly SameSite=Strict cookies, login backoff), a CSRF header on every change and a known Host, which blocks other browser tabs and DNS rebinding. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#3-accounts-and-access).
 
 ## Development

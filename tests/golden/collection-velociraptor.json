@@ -1,0 +1,166 @@
+{
+  "errors": 0,
+  "filesystems": [
+    {
+      "files": 70,
+      "listing": "6883f095e6fe674c",
+      "lists": {
+        "indicators": 6,
+        "web.cache": 2,
+        "web.downloads": 1,
+        "web.searches": 1,
+        "web.sources": 4,
+        "web.visits": 5,
+        "windows.access": 13,
+        "windows.autoruns": 7,
+        "windows.event_counts": 17,
+        "windows.events": 23,
+        "windows.execution": 19,
+        "windows.interfaces": 1,
+        "windows.logs": 4,
+        "windows.networks": 2,
+        "windows.programs": 3,
+        "windows.reg_deleted_keys": 4,
+        "windows.reg_deleted_values": 2,
+        "windows.shellbags": 10,
+        "windows.sources": 22,
+        "windows.srum.apps": 3,
+        "windows.srum.connections": 1,
+        "windows.srum.network": 303,
+        "windows.srum.usage": 3,
+        "windows.tasks": 4,
+        "windows.timeline": 81,
+        "windows.usb": 2,
+        "windows.users": 4
+      },
+      "score": {
+        "band": "Very high",
+        "drivers": [
+          "Windows recorded that an event log was cleared",
+          "Prefetch shows an anti-forensic tool was executed",
+          "Scheduled task hidden from the Task Scheduler"
+        ],
+        "likelihood": 0.952
+      },
+      "stats": {
+        "ads": 0,
+        "by_category": [
+          [
+            "Windows artifacts",
+            16
+          ],
+          [
+            "Databases",
+            1
+          ],
+          [
+            "Documents",
+            1
+          ]
+        ],
+        "bytes": 671692,
+        "deleted_bytes": 0,
+        "deleted_dirs": 0,
+        "deleted_files": 0,
+        "dirs": 41,
+        "files": 28,
+        "histogram": [
+          {
+            "created": 27,
+            "day": "2026-10-19",
+            "modified": 0
+          },
+          {
+            "created": 0,
+            "day": "2026-10-20",
+            "modified": 27
+          },
+          {
+            "created": 0,
+            "day": "2026-10-21",
+            "modified": 1
+          }
+        ],
+        "impact": [
+          "A triage collection: files collected from a computer, not a whole volume; user profiles: alice.",
+          "28 files (655.9 KiB) in 41 directories.",
+          "File timestamps span 2026-10-19 to 2026-10-21.",
+          "1 databases identified by signature.",
+          "1 documents identified by signature.",
+          "Anti-forensics likelihood is Very high (95%), driven by: Windows recorded that an event log was cleared (2); Prefetch shows an anti-forensic tool was executed (1); Scheduled task hidden from the Task Scheduler (1).",
+          "A ZIP file (Velociraptor collection): files are read from it as stored; it has no deleted files or free space.",
+          "Triage collection: the collected drive's files are under /uploads/auto/C:. Windows and Linux artifacts, browser history and email were read with the paths they had on the drive; checks that need a whole volume (a missing change journal or event log) are not made from them.",
+          "Internet Explorer history, day 2025-03-10 of user alice: 3 visits, 1 search, from 2025-03-10 to 2025-03-10; 1 deleted entry recovered from inside the file.",
+          "Internet Explorer history of user alice: 2 visits, from 2025-02-20 to 2025-03-10.",
+          "Internet Explorer cache of user alice: 2 cached files, from 2025-03-10 to 2025-03-10.",
+          "Internet Explorer downloads of user alice: 1 download, from 2025-03-10 to 2025-03-10.",
+          "Computer LAB-PC running Windows 10 Pro 22H2 (build 19045.4170), installed 2025-03-02T08:00:00.0000000Z.",
+          "Security log cleared by alice at 2026-10-20T10:30:02.0000000Z (Security).",
+          "Windows PowerShell log cleared by alice at 2026-10-20T10:31:00.0000000Z (System).",
+          "Execution records show anti-forensic tools ran: sdelete64.exe (Amcache), sdelete64.exe (BAM), sdelete64.exe (Prefetch), sdelete64.exe (UserAssist).",
+          "2 USB storage device(s) connected: SanDisk Cruzer Blade USB Device, Kingston DataTraveler 3.0 USB Device.",
+          "3 remote desktop event(s) from 203.0.113.50.",
+          "1 scheduled task(s) hidden by removing their security descriptor (Tarrask technique): \\Microsoft\\Windows\\WinUpdate\\Sync (C:\\ProgramData\\winupd\\svch.exe).",
+          "2 scheduled task(s) run programs from unusual places: \\OneDrive Cleanup (C:\\Users\\alice\\AppData\\Local\\Temp\\clean.cmd), \\Updater Check (C:\\Users\\Public\\updsvc.exe -silent).",
+          "5 failed logon(s) recorded.",
+          "User account(s) created: svc_backup.",
+          "Service(s) installed: Windows Update Helper.",
+          "5 autostart entries run from unusual locations.",
+          "SRUM covers 2026-10-07T22:00:00.0000000Z to 2026-10-20T12:00:00.0000000Z: 3 program(s); most data sent by rclone.exe (2048 MiB).",
+          "ShellBags record 10 folder(s) users opened in Explorer, including 4 drive or network location(s).",
+          "4 deleted registry key(s) and 2 deleted value(s) recovered from free space in the hives; 1 of the keys recorded user activity: Software\\Microsoft\\Internet Explorer\\TypedURLs (addresses typed in Internet Explorer)."
+        ],
+        "orphans": 0,
+        "os": null,
+        "time_max": 134370234000000000,
+        "time_min": 134368740000000000,
+        "top_ext": [
+          [
+            "dat",
+            7
+          ],
+          [
+            "evtx",
+            4
+          ],
+          [
+            "pf",
+            3
+          ],
+          [
+            "lnk",
+            2
+          ],
+          [
+            "hve",
+            1
+          ],
+          [
+            "json",
+            1
+          ],
+          [
+            "log1",
+            1
+          ],
+          [
+            "xml",
+            1
+          ]
+        ],
+        "users": [
+          "alice"
+        ]
+      },
+      "volume": {
+        "fs": "ZIP",
+        "index": 0,
+        "length": 44430,
+        "start": 0
+      }
+    }
+  ],
+  "image_format": "Raw (dd)",
+  "image_size": 44430,
+  "volumes": 1
+}

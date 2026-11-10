@@ -1,0 +1,65 @@
+{
+  "errors": 0,
+  "filesystems": [
+    {
+      "files": 12,
+      "listing": "f9268fbd9fd8ee9c",
+      "lists": {},
+      "score": {
+        "band": "Low",
+        "drivers": [],
+        "likelihood": 0.0
+      },
+      "stats": {
+        "ads": 0,
+        "by_category": [],
+        "bytes": 44168,
+        "deleted_bytes": 94,
+        "deleted_dirs": 0,
+        "deleted_files": 2,
+        "dirs": 3,
+        "files": 8,
+        "histogram": [
+          {
+            "created": 11,
+            "day": "2026-10-20",
+            "modified": 11
+          }
+        ],
+        "impact": [
+          "Data volume (no Windows installation found).",
+          "8 files (43.1 KiB) in 3 directories.",
+          "2 deleted files (94 B) and 0 deleted directories still have file system entries; content may be recoverable unless clusters were reused.",
+          "1 entries are orphaned (parent directory missing or reused).",
+          "File timestamps span 2026-10-20 to 2026-10-20.",
+          "No anti-forensics indicators were triggered.",
+          "2 deleted file(s) were recovered through older copies of their inodes kept in the ext journal."
+        ],
+        "orphans": 1,
+        "os": null,
+        "time_max": 134369572001234567,
+        "time_min": 134369535300000000,
+        "top_ext": [
+          [
+            "txt",
+            5
+          ],
+          [
+            "bin",
+            1
+          ]
+        ],
+        "users": []
+      },
+      "volume": {
+        "fs": "ext2/3/4",
+        "index": 0,
+        "length": 4194304,
+        "start": 0
+      }
+    }
+  ],
+  "image_format": "Raw (dd)",
+  "image_size": 4194304,
+  "volumes": 1
+}

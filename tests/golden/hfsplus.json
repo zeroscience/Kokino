@@ -1,0 +1,65 @@
+{
+  "errors": 0,
+  "filesystems": [
+    {
+      "files": 19,
+      "listing": "d732ae2a50c1b3c4",
+      "lists": {},
+      "score": {
+        "band": "Low",
+        "drivers": [],
+        "likelihood": 0.0
+      },
+      "stats": {
+        "ads": 0,
+        "by_category": [],
+        "bytes": 601597,
+        "deleted_bytes": 55,
+        "deleted_dirs": 0,
+        "deleted_files": 1,
+        "dirs": 7,
+        "files": 11,
+        "histogram": [
+          {
+            "created": 8,
+            "day": "2026-10-20",
+            "modified": 8
+          },
+          {
+            "created": 10,
+            "day": "2026-11-04",
+            "modified": 10
+          }
+        ],
+        "impact": [
+          "Data volume (no Windows installation found).",
+          "11 files (587.5 KiB) in 7 directories.",
+          "1 deleted files (55 B) and 0 deleted directories still have file system entries; content may be recoverable unless clusters were reused.",
+          "File timestamps span 2026-10-20 to 2026-11-04.",
+          "No anti-forensics indicators were triggered.",
+          "1 deleted file(s) found in old copies of catalog nodes (the journal and unused nodes)."
+        ],
+        "orphans": 0,
+        "os": null,
+        "time_max": 134382966350000000,
+        "time_min": 134369571300000000,
+        "top_ext": [
+          [
+            "txt",
+            7
+          ]
+        ],
+        "users": []
+      },
+      "volume": {
+        "fs": "HFS+",
+        "index": 0,
+        "length": 8388608,
+        "start": 0
+      }
+    }
+  ],
+  "image_format": "Raw (dd)",
+  "image_size": 8388608,
+  "volumes": 1
+}

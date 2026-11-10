@@ -1,0 +1,114 @@
+{
+  "errors": 0,
+  "filesystems": [
+    {
+      "files": 49,
+      "listing": "b7452275c67f770c",
+      "lists": {
+        "indicators": 2,
+        "linux.commands": 3,
+        "linux.events": 8,
+        "linux.hits": 1,
+        "linux.persistence": 2,
+        "linux.sources": 12,
+        "linux.timeline": 7,
+        "linux.users": 5,
+        "web.downloads": 1,
+        "web.searches": 1,
+        "web.sources": 1,
+        "web.visits": 4
+      },
+      "score": {
+        "band": "Moderate",
+        "drivers": [
+          "Shell history or sudo log shows evidence being destroyed",
+          "Anti-forensic tools downloaded or researched"
+        ],
+        "likelihood": 0.356
+      },
+      "stats": {
+        "ads": 0,
+        "by_category": [
+          [
+            "Databases",
+            3
+          ],
+          [
+            "Archives",
+            1
+          ]
+        ],
+        "bytes": 52406,
+        "deleted_bytes": 0,
+        "deleted_dirs": 0,
+        "deleted_files": 0,
+        "dirs": 28,
+        "files": 20,
+        "histogram": [
+          {
+            "created": 0,
+            "day": "2026-10-01",
+            "modified": 1
+          },
+          {
+            "created": 0,
+            "day": "2026-10-20",
+            "modified": 20
+          }
+        ],
+        "impact": [
+          "A triage collection: files collected from a computer, not a whole volume; user profiles: alice.",
+          "20 files (51.2 KiB) in 28 directories.",
+          "File timestamps span 2026-10-01 to 2026-10-20.",
+          "3 databases identified by signature.",
+          "Anti-forensics likelihood is Moderate (36%), driven by: Shell history or sudo log shows evidence being destroyed (1); Anti-forensic tools downloaded or researched (1).",
+          "A tar archive (UAC collection): files are read from it as stored; it has no deleted files or free space. Times are those the archive recorded (UTC).",
+          "A gzip-compressed tar archive (71680 bytes uncompressed), decompressed in memory to be read.",
+          "Triage collection: the collected drive's files are under /[root]. Windows and Linux artifacts, browser history and email were read with the paths they had on the drive; checks that need a whole volume (a missing change journal or event log) are not made from them.",
+          "Safari history of user alice: 3 visits, 1 download, 1 search, from 2026-10-20 to 2026-10-20.",
+          "Mac LAB-MAC running macOS 14.4.1 (23E224); set up 2026-10-01T08:05:30.0000000Z.",
+          "Accounts that can log in: root, alice, bob.",
+          "Notable commands typed: secure deletion (alice, zsh).",
+          "1 persistence entry stand out (launchd agent (user)).",
+          "2 download(s) recorded in quarantine events (by Mail, Safari).",
+          "4 file change(s) recorded in FSEvents, 1 of them removals (paths of files that existed even if they are gone now).",
+          "2 application use record(s) in KnowledgeC, 2 application(s)."
+        ],
+        "orphans": 0,
+        "os": null,
+        "time_max": 134369661300000000,
+        "time_min": 134353155300000000,
+        "top_ext": [
+          [
+            "plist",
+            10
+          ],
+          [
+            "db",
+            2
+          ],
+          [
+            "log",
+            1
+          ],
+          [
+            "txt",
+            1
+          ]
+        ],
+        "users": [
+          "alice"
+        ]
+      },
+      "volume": {
+        "fs": "TAR",
+        "index": 0,
+        "length": 4002,
+        "start": 0
+      }
+    }
+  ],
+  "image_format": "Raw (dd)",
+  "image_size": 4002,
+  "volumes": 1
+}

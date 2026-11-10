@@ -1,0 +1,116 @@
+{
+  "errors": 0,
+  "filesystems": [
+    {
+      "files": 565,
+      "listing": "573f36b0d84df45a",
+      "lists": {
+        "indicators": 13,
+        "unreadable": 1,
+        "web.downloads": 2,
+        "web.searches": 3,
+        "web.sources": 3,
+        "web.visits": 9
+      },
+      "score": {
+        "band": "Very high",
+        "drivers": [
+          "Prefetch shows an anti-forensic tool was executed",
+          "Executable or archive hidden in an alternate data stream",
+          "Security event log missing or reset"
+        ],
+        "likelihood": 0.984
+      },
+      "stats": {
+        "ads": 1,
+        "by_category": [
+          [
+            "Databases",
+            3
+          ],
+          [
+            "Executables",
+            1
+          ]
+        ],
+        "bytes": 539002,
+        "deleted_bytes": 1000,
+        "deleted_dirs": 22,
+        "deleted_files": 2,
+        "dirs": 527,
+        "files": 14,
+        "histogram": [
+          {
+            "created": 1,
+            "day": "2009-07-14",
+            "modified": 0
+          },
+          {
+            "created": 0,
+            "day": "2021-01-01",
+            "modified": 1
+          },
+          {
+            "created": 518,
+            "day": "2023-01-23",
+            "modified": 518
+          }
+        ],
+        "impact": [
+          "Windows (system volume) with 1 user profile(s): alice.",
+          "14 files (526.4 KiB) in 527 directories.",
+          "2 deleted files (1000 B) and 22 deleted directories still have file system entries; content may be recoverable unless clusters were reused.",
+          "File timestamps span 2009-07-14 to 2023-01-23.",
+          "3 databases identified by signature.",
+          "Anti-forensics likelihood is Very high (98%), driven by: Prefetch shows an anti-forensic tool was executed (1); Executable or archive hidden in an alternate data stream (1); Security event log missing or reset (1).",
+          "1 MFT record(s) could not be parsed (corrupt, partially wiped or split across clusters) and are listed separately.",
+          "Chrome history of user alice (Default): 4 visits, 1 download, 2 searches, from 2026-10-20 to 2026-10-20.",
+          "Edge history of user alice (Default) is empty: cleared, or the profile was never used.",
+          "Firefox history of user alice (k3x9w2qe.default-release): 4 visits, 1 download, 1 search, from 2026-10-20 to 2026-10-20; includes changes still in the -wal file."
+        ],
+        "orphans": 0,
+        "os": "Windows (system volume)",
+        "time_max": 133189803127440326,
+        "time_min": 128920032000000000,
+        "top_ext": [
+          [
+            "exe",
+            2
+          ],
+          [
+            "jpg",
+            1
+          ],
+          [
+            "pf",
+            1
+          ],
+          [
+            "sqlite",
+            1
+          ],
+          [
+            "sqlite-wal",
+            1
+          ],
+          [
+            "txt",
+            1
+          ]
+        ],
+        "users": [
+          "alice"
+        ]
+      },
+      "volume": {
+        "fs": "NTFS",
+        "index": 1,
+        "length": 2097152,
+        "start": 1048576
+      }
+    }
+  ],
+  "image_format": "EWF (E01)",
+  "image_size": 5242880,
+  "volumes": 3
+}

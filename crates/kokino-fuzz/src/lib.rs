@@ -36,6 +36,7 @@ pub const TARGETS: &[Target] = &[
     Target { name: "tar", run: tarfs, seeds: &["crates/kokino-fuzz/seeds/tar"] },
     Target { name: "pst", run: pst, seeds: &["crates/kokino-fuzz/seeds/pst"] },
     Target { name: "plist", run: plist, seeds: &["crates/kokino-fuzz/seeds/plist"] },
+    Target { name: "ioc", run: ioc, seeds: &["crates/kokino-fuzz/seeds/ioc"] },
     Target { name: "fsevents", run: fsevents, seeds: &["crates/kokino-fuzz/seeds/fsevents"] },
     Target { name: "webcache", run: webcache, seeds: &["tests/fixtures/win/WebCacheV01.dat"] },
     Target { name: "zip", run: zipfs, seeds: &["crates/kokino-fuzz/seeds/zip", "tests/fixtures/iso-rr-joliet.iso"] },
@@ -379,6 +380,24 @@ fn pst(d: &[u8]) {
 }
 
 /// Apple property lists, binary and XML, and every value walked.
+fn ioc(d: &[u8]) {
+    use kokino_analysis::ioc::*;
+    let text = String::from_utf8_lossy(d);
+    let (list, _) = parse(&text);
+    assert!(list.len() <= MAX_INDICATORS);
+    for i in &list {
+        assert!(!i.value.is_empty());
+        assert!(matches!(i.kind.as_str(), "md5" | "sha1" | "sha256" | "ip" | "email" | "domain" | "path" | "name"));
+        if i.kind == "domain" {
+            assert!(in_domain(&i.value, &i.value));
+        }
+        if i.kind == "ip" {
+            assert!(ip_eq(&i.value, &i.value));
+        }
+        let _ = host(&i.value);
+    }
+}
+
 fn plist(d: &[u8]) {
     fn walk(v: &kokino_artifacts::plist::Value, n: &mut usize) {
         *n += 1;

@@ -1,0 +1,200 @@
+{
+  "errors": 0,
+  "filesystems": [
+    {
+      "files": 590,
+      "listing": "64b5a5d2071a5abb",
+      "lists": {
+        "indicators": 16,
+        "unreadable": 1,
+        "web.cache": 2,
+        "web.downloads": 3,
+        "web.searches": 4,
+        "web.sources": 7,
+        "web.visits": 14,
+        "windows.access": 13,
+        "windows.autoruns": 7,
+        "windows.event_counts": 17,
+        "windows.events": 23,
+        "windows.execution": 19,
+        "windows.interfaces": 1,
+        "windows.journal.changes": 33,
+        "windows.logs": 4,
+        "windows.networks": 2,
+        "windows.programs": 3,
+        "windows.reg_deleted_keys": 4,
+        "windows.reg_deleted_values": 2,
+        "windows.shellbags": 10,
+        "windows.sources": 22,
+        "windows.srum.apps": 3,
+        "windows.srum.connections": 1,
+        "windows.srum.network": 303,
+        "windows.srum.usage": 3,
+        "windows.tasks": 4,
+        "windows.timeline": 112,
+        "windows.usb": 2,
+        "windows.users": 4
+      },
+      "score": {
+        "band": "Very high",
+        "drivers": [
+          "Prefetch shows an anti-forensic tool was executed",
+          "Windows recorded that an event log was cleared",
+          "Executable or archive hidden in an alternate data stream"
+        ],
+        "likelihood": 0.998
+      },
+      "stats": {
+        "ads": 3,
+        "by_category": [
+          [
+            "Windows artifacts",
+            16
+          ],
+          [
+            "Databases",
+            4
+          ],
+          [
+            "Documents",
+            1
+          ],
+          [
+            "Executables",
+            1
+          ],
+          [
+            "Images",
+            1
+          ]
+        ],
+        "bytes": 1211357,
+        "deleted_bytes": 1720,
+        "deleted_dirs": 47,
+        "deleted_files": 3,
+        "dirs": 523,
+        "files": 43,
+        "histogram": [
+          {
+            "created": 1,
+            "day": "2009-07-14",
+            "modified": 0
+          },
+          {
+            "created": 0,
+            "day": "2021-01-01",
+            "modified": 1
+          },
+          {
+            "created": 518,
+            "day": "2023-01-23",
+            "modified": 518
+          }
+        ],
+        "impact": [
+          "Windows (system volume) with 1 user profile(s): alice.",
+          "43 files (1.2 MiB) in 523 directories.",
+          "3 deleted files (1.7 KiB) and 47 deleted directories still have file system entries; content may be recoverable unless clusters were reused.",
+          "File timestamps span 2009-07-14 to 2023-01-23.",
+          "4 databases identified by signature.",
+          "1 documents identified by signature.",
+          "Anti-forensics likelihood is Very high (100%), driven by: Prefetch shows an anti-forensic tool was executed (2); Windows recorded that an event log was cleared (2); Executable or archive hidden in an alternate data stream (1).",
+          "1 MFT record(s) could not be parsed (corrupt, partially wiped or split across clusters) and are listed separately.",
+          "Internet Explorer history, day 2025-03-10 of user alice: 3 visits, 1 search, from 2025-03-10 to 2025-03-10; 1 deleted entry recovered from inside the file.",
+          "Chrome history of user alice (Default): 4 visits, 1 download, 2 searches, from 2026-10-20 to 2026-10-20.",
+          "Edge history of user alice (Default) is empty: cleared, or the profile was never used.",
+          "Firefox history of user alice (k3x9w2qe.default-release): 4 visits, 1 download, 1 search, from 2026-10-20 to 2026-10-20; includes changes still in the -wal file.",
+          "Internet Explorer history of user alice: 2 visits, from 2025-02-20 to 2025-03-10.",
+          "Internet Explorer cache of user alice: 2 cached files, from 2025-03-10 to 2025-03-10.",
+          "Internet Explorer downloads of user alice: 1 download, from 2025-03-10 to 2025-03-10.",
+          "Computer LAB-PC running Windows 10 Pro 22H2 (build 19045.4170), installed 2025-03-02T08:00:00.0000000Z.",
+          "Security log cleared by alice at 2026-10-20T10:30:02.0000000Z (Security).",
+          "Windows PowerShell log cleared by alice at 2026-10-20T10:31:00.0000000Z (System).",
+          "Execution records show anti-forensic tools ran: sdelete64.exe (Amcache), sdelete64.exe (BAM), sdelete64.exe (Prefetch), sdelete64.exe (UserAssist).",
+          "2 USB storage device(s) connected: SanDisk Cruzer Blade USB Device, Kingston DataTraveler 3.0 USB Device.",
+          "3 remote desktop event(s) from 203.0.113.50.",
+          "1 scheduled task(s) hidden by removing their security descriptor (Tarrask technique): \\Microsoft\\Windows\\WinUpdate\\Sync (C:\\ProgramData\\winupd\\svch.exe).",
+          "2 scheduled task(s) run programs from unusual places: \\OneDrive Cleanup (C:\\Users\\alice\\AppData\\Local\\Temp\\clean.cmd), \\Updater Check (C:\\Users\\Public\\updsvc.exe -silent).",
+          "5 failed logon(s) recorded.",
+          "User account(s) created: svc_backup.",
+          "Service(s) installed: Windows Update Helper.",
+          "5 autostart entries run from unusual locations.",
+          "The change journal covers 2026-10-20T09:30:00.0000000Z to 2026-10-20T09:33:20.0000000Z: 87 records, 33 file changes (4 deletions).",
+          "SRUM covers 2026-10-07T22:00:00.0000000Z to 2026-10-20T12:00:00.0000000Z: 3 program(s); most data sent by rclone.exe (2048 MiB).",
+          "ShellBags record 10 folder(s) users opened in Explorer, including 4 drive or network location(s).",
+          "4 deleted registry key(s) and 2 deleted value(s) recovered from free space in the hives; 1 of the keys recorded user activity: Software\\Microsoft\\Internet Explorer\\TypedURLs (addresses typed in Internet Explorer)."
+        ],
+        "orphans": 0,
+        "os": "Windows (system volume)",
+        "time_max": 133189803127440326,
+        "time_min": 128920032000000000,
+        "top_ext": [
+          [
+            "dat",
+            7
+          ],
+          [
+            "evtx",
+            4
+          ],
+          [
+            "pf",
+            4
+          ],
+          [
+            "exe",
+            2
+          ],
+          [
+            "lnk",
+            2
+          ],
+          [
+            "hve",
+            1
+          ],
+          [
+            "jpg",
+            1
+          ],
+          [
+            "log1",
+            1
+          ],
+          [
+            "png",
+            1
+          ],
+          [
+            "sqlite",
+            1
+          ],
+          [
+            "sqlite-wal",
+            1
+          ],
+          [
+            "txt",
+            1
+          ],
+          [
+            "xml",
+            1
+          ]
+        ],
+        "users": [
+          "alice"
+        ]
+      },
+      "volume": {
+        "fs": "NTFS",
+        "index": 1,
+        "length": 2097152,
+        "start": 1048576
+      }
+    }
+  ],
+  "image_format": "Raw (dd)",
+  "image_size": 5242880,
+  "volumes": 3
+}

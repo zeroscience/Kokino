@@ -1,0 +1,16 @@
+# lab report
+198.51.100.7
+hxxps://c2[.]lab[.]test:8443/a?b=c#d
+Evil.EXE # dropper
+C:\Users\Public\x.ps1
+/tmp/.x/payload
+d41d8cd98f00b204e9800998ecf8427e
+da39a3ee5e6b4b0d3255bfef95601890afd80709
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+ALICE[@]lab.test
+lab.test
+2001:db8::1
+::ffff:192.0.2.1
+http://[2001:db8::2]:80/
+ld.so.preload
+"quoted.test",

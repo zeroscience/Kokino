@@ -1,0 +1,62 @@
+{
+  "errors": 0,
+  "filesystems": [
+    {
+      "files": 544,
+      "listing": "36594abbd8d363b3",
+      "lists": {
+        "unreadable": 1
+      },
+      "score": {
+        "band": "Low",
+        "drivers": [],
+        "likelihood": 0.0
+      },
+      "stats": {
+        "ads": 0,
+        "by_category": [],
+        "bytes": 501010,
+        "deleted_bytes": 0,
+        "deleted_dirs": 1,
+        "deleted_files": 0,
+        "dirs": 513,
+        "files": 7,
+        "histogram": [
+          {
+            "created": 0,
+            "day": "2021-01-01",
+            "modified": 1
+          },
+          {
+            "created": 519,
+            "day": "2023-01-23",
+            "modified": 518
+          }
+        ],
+        "impact": [
+          "Data volume (no Windows installation found).",
+          "7 files (489.3 KiB) in 513 directories.",
+          "0 deleted files (0 B) and 1 deleted directories still have file system entries; content may be recoverable unless clusters were reused.",
+          "File timestamps span 2021-01-01 to 2023-01-23.",
+          "No anti-forensics indicators were triggered.",
+          "1 MFT record(s) could not be parsed (corrupt, partially wiped or split across clusters) and are listed separately."
+        ],
+        "orphans": 0,
+        "os": null,
+        "time_max": 133189803127440326,
+        "time_min": 132539782200000000,
+        "top_ext": [],
+        "users": []
+      },
+      "volume": {
+        "fs": "NTFS",
+        "index": 0,
+        "length": 2097152,
+        "start": 0
+      }
+    }
+  ],
+  "image_format": "Raw (dd)",
+  "image_size": 2097152,
+  "volumes": 1
+}

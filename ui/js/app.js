@@ -314,6 +314,8 @@ function caseNav(c, active, eid, helpActive = null) {
     { href: `/c/${c.info.id}`, label: "Evidence", icon: "disk", on: active === "evidence", n: c.evidence.length },
     { href: `/c/${c.info.id}/members`, label: "Members", icon: "users", on: active === "members", n: Object.keys(c.info.members || {}).length },
     { href: `/c/${c.info.id}/bookmarks`, label: "Bookmarks", icon: "star", on: active === "bookmarks", n: state.bm && state.bm.cid === c.info.id ? state.bm.list.length : null },
+    { href: `/c/${c.info.id}/timeline`, label: "Case timeline", icon: "clock", on: active === "timeline" },
+    { href: `/c/${c.info.id}/watchlist`, label: "Watchlist", icon: "search", on: active === "watchlist" },
     { href: `/c/${c.info.id}/correlate`, label: "Correlation", icon: "layers", on: active === "correlate" },
     { href: `/c/${c.info.id}/audit`, label: "Audit log", icon: "chain", on: active === "audit" },
   ];
@@ -350,6 +352,8 @@ async function caseView(cid, tab) {
   setCrumbs([{ label: "Cases", href: "/" }, { label: c.info.name }]);
   if (tab === "audit") return auditView(c);
   if (tab === "correlate") return correlateView(c);
+  if (tab === "timeline") return caseTimelineView(c);
+  if (tab === "watchlist") return watchlistView(c);
   if (tab === "bookmarks") return bookmarksView(c);
   if (tab === "members") return membersView(c);
   const jobFor = (eid) => state.jobs.find((j) => j.evidence === eid && j.state === "running") || c.jobs.find((j) => j.evidence === eid && j.state === "running");
@@ -556,6 +560,109 @@ async function correlateView(c) {
     h("div.hd", h("div", h("h1", "Correlation"), h("div.muted", "Values found in two or more evidence items of this case: user names, computer names, email addresses, IP addresses, USB serial numbers, wireless networks, web domains and, where hash analysis was run, identical files (1 KiB or more).")), h("span.sp")),
     h("p.muted", { style: { margin: 0 } }, `Compared: ${r.compared.join(", ") || "none"}.` + (r.not_analyzed.length ? ` Not analyzed yet: ${r.not_analyzed.join(", ")}.` : "") + (r.hashed.length ? ` File contents compared for: ${r.hashed.join(", ")}.` : " Run Hash analysis on each item to compare file contents too.") + (r.truncated ? " The list is cut at 5,000 values." : "")),
     h("div.row.wrap", seg, filter),
+    out));
+}
+
+// One timeline for the whole case: every analyzed item and volume, in time order.
+async function caseTimelineView(c) {
+  const cid = c.info.id;
+  setCrumbs([{ label: "Cases", href: "/" }, { label: c.info.name, href: "/c/" + cid }, { label: "Case timeline" }]);
+  const q = h("input", { placeholder: "Filter by path or text...", style: { flex: 1, minWidth: "220px" } });
+  const day = (ph) => h("input", { placeholder: ph, title: `Day as ${datePattern()} (${zoneName()})`, style: { width: "118px" } });
+  const from = day(`from ${datePattern()}`);
+  const to = day(`to ${datePattern()}`);
+  let only = "";
+  const seg = h("div.seg");
+  const opts = [["", "All"], ["web", "Web"], ["windows", "System"], ["deleted", "Deleted"], ["flagged", "Flagged"]];
+  const drawSeg = () => seg.replaceChildren(...opts.map(([k, l]) => h("button", { class: only === k ? "on" : null, onclick: () => { only = k; drawSeg(); reload(); } }, l)));
+  drawSeg();
+  const tbody = h("tbody");
+  const count = h("span.muted");
+  const note = h("p.muted", { style: { margin: 0 } });
+  const more = h("button", "Load more");
+  let offset = 0;
+  const load = async (append) => {
+    const [f, t] = [parseDay(from.value), parseDay(to.value)];
+    from.classList.toggle("bad", f === null);
+    to.classList.toggle("bad", t === null);
+    if (f === null || t === null) {
+      count.textContent = `Type days as ${datePattern()}, for example ${ts("2026-10-30")}.`;
+      return;
+    }
+    const next = (iso) => new Date(Date.parse(iso + "T00:00:00Z") + 86400000).toISOString().slice(0, 10);
+    const params = new URLSearchParams({ q: q.value, from: f ? dayStart(f) : "", to: t ? dayStart(next(t)) : "", only, offset, limit: 400 });
+    const r = await api(`/cases/${cid}/timeline?${params}`);
+    const rows = r.items.map((e) => {
+      const art = e.web || e.windows;
+      const sec = { EXEC: "exec", OPEN: "files", USB: "devices", NET: "devices", INST: "software", USN: "journal", REG: "registry" }[e.src] || "events";
+      const click = e.web ? () => go(`/c/${cid}/e/${e.evidence}/web?fi=${e.fi}`)
+        : e.windows ? () => go(`/c/${cid}/e/${e.evidence}/system?fi=${e.fi}&sec=${sec}`)
+        : () => fileDrawer({ cid, eid: e.evidence, fi: e.fi }, e.idx);
+      return h("tr", { class: e.deleted ? "deleted" : null, onclick: click },
+        h("td.mono", ts(e.t)), h("td.ell", { title: `${e.evidence_name}, volume ${e.volume}` }, e.evidence_name, h("span.muted", ` v${e.volume}`)),
+        h("td", art ? h("span.muted", e.macb) : macb(e.macb)), h("td", h("span.src." + e.src, !art && !isNtfs(e.fs) && e.src === "SI" ? "INODE" : e.src)),
+        h("td.nm", { title: art ? `${e.path}\n${e.detail}` : e.path }, e.flags.length ? h("span.flag", { title: e.flags.join(", ") }) : null, e.path, art ? h("div.muted.ell", e.detail) : null),
+        h("td.num", e.is_dir || (art && !e.size) ? "" : bytes(e.size)));
+    });
+    if (append) tbody.append(...rows); else tbody.replaceChildren(...rows);
+    offset += r.items.length;
+    count.textContent = `${num(r.total)} events`;
+    note.textContent = `From ${r.items_from} analyzed evidence item${r.items_from === 1 ? "" : "s"}.` + (r.not_analyzed.length ? ` Not analyzed yet: ${r.not_analyzed.join(", ")}.` : "") + " FAT volumes keep the device's local clock with no zone, so their place among the other items depends on that device's zone.";
+    more.style.display = offset < r.total ? "" : "none";
+  };
+  const reload = debounce(() => { offset = 0; load(false); }, 250);
+  q.addEventListener("input", reload);
+  from.addEventListener("change", reload);
+  to.addEventListener("change", reload);
+  more.onclick = () => load(true);
+  render(h("div.stack",
+    h("div.hd", h("div", h("h1", "Case timeline"), h("div.muted", "The timelines of every evidence item and volume in this case merged into one, in time order: file times, browser activity and system events. Narrow it with a day range; click a row to open it in its item.")), h("span.sp")),
+    note,
+    h("div.row.wrap", q, h("label", "From", from), h("label", "To", to), seg, count),
+    h("div.scroll", { style: { maxHeight: "calc(100vh - 320px)" } }, h("table.tbl", h("thead", h("tr", h("th", `Time (${zoneName()})`), h("th", "Evidence"), h("th", "MACB"), h("th", "Src"), h("th", "Path or event"), h("th", { style: { textAlign: "right" } }, "Size"))), tbody)),
+    h("div.row", h("span.sp"), more)));
+  load(false);
+}
+
+// Indicators of compromise searched across every analyzed item of the case.
+async function watchlistView(c) {
+  const cid = c.info.id;
+  setCrumbs([{ label: "Cases", href: "/" }, { label: c.info.name, href: "/c/" + cid }, { label: "Watchlist" }]);
+  const saved = await api(`/cases/${cid}/watchlist`);
+  const ta = h("textarea.mono", { rows: 10, style: { width: "100%" }, placeholder: "One per line: hashes (MD5, SHA-1, SHA-256), IP addresses, domains or URLs, email addresses, file names or paths.\n# comments and \"value # note\" are kept; defanged forms like hxxp and [.] are read too." });
+  ta.value = saved.text;
+  const out = h("div.stack");
+  const status = h("span.muted");
+  const KIND = { md5: "MD5", sha1: "SHA-1", sha256: "SHA-256", ip: "IP", email: "Email", domain: "Domain or name", path: "Path", name: "File name" };
+  const open = (x) => x.file != null ? fileDrawer({ cid, eid: x.evidence, fi: x.fi }, x.file)
+    : go(`/c/${cid}/e/${x.evidence}/${x.what === "web" ? "web" : x.what === "mail" ? "mail" : "system"}?fi=${x.fi}${x.what === "logon" ? "&sec=logons" : x.what === "event" ? "&sec=events" : ""}`);
+  const run = async () => {
+    status.textContent = "Searching...";
+    out.replaceChildren(h("div.card.empty", h("div.spin")));
+    let r;
+    try { r = await api(`/cases/${cid}/watchlist/sweep`, { method: "POST", body: { text: ta.value } }); } catch (e) { status.textContent = ""; out.replaceChildren(h("div.card.empty", e.message)); return; }
+    const hit = r.results.filter((x) => x.hits.length);
+    status.textContent = `${num(hit.length)} of ${num(r.results.length)} indicators found`;
+    const notes = [`Searched: ${r.searched.join(", ") || "none"}.`];
+    if (r.not_analyzed.length) notes.push(`Not analyzed yet: ${r.not_analyzed.join(", ")}.`);
+    if (r.not_hashed.length && r.results.some((x) => ["md5", "sha1", "sha256"].includes(x.indicator.kind))) notes.push(`No hash analysis on ${r.not_hashed.join(", ")}: hashes cannot match there; run Hash analysis first.`);
+    if (r.ignored.length) notes.push(`Not read: ${r.ignored.slice(0, 5).join(", ")}${r.ignored.length > 5 ? "..." : ""}.`);
+    const hitRow = (y) => h("div.ell", { class: y.deleted ? "deleted" : null },
+      h("a", { href: "javascript:void 0", onclick: () => open(y), title: y.detail }, y.detail), h("span.muted", ` ${y.evidence_name}${y.time ? ", " + ts(y.time) : ""}${y.deleted ? ", deleted" : ""}`));
+    out.replaceChildren(h("p.muted", { style: { margin: 0 } }, notes.join(" ")),
+      r.results.length ? h("div.scroll", { style: { maxHeight: "calc(100vh - 460px)" } }, h("table.tbl.sys", h("thead", h("tr", ["Indicator", "Kind", "Hits"].map((t) => h("th", t)))),
+        h("tbody", [...hit, ...r.results.filter((x) => !x.hits.length)].map((x) => h("tr",
+          h("td.mono.wrap", x.indicator.value, x.indicator.note ? h("div.muted", x.indicator.note) : null),
+          h("td", h("span.pill", KIND[x.indicator.kind] || x.indicator.kind)),
+          h("td", x.hits.length ? [...x.hits.slice(0, 50).map(hitRow), x.hits.length > 50 || x.truncated ? h("div.muted", `and ${x.truncated ? "more than " : ""}${num(x.hits.length - Math.min(50, x.hits.length))} more`) : null] : h("span.muted", "not found"))))))) : h("div.card.empty", "The list is empty."));
+  };
+  const save = async () => {
+    try { const r = await api(`/cases/${cid}/watchlist`, { method: "PUT", body: { text: ta.value } }); toast(`Saved ${num(r.indicators.length)} indicators`); } catch (e) { toast(e.message, true); }
+  };
+  render(h("div.stack",
+    h("div.hd", h("div", h("h1", "Watchlist"), h("div.muted", "Search every analyzed evidence item of the case at once for known indicators: file hashes (from Hash analysis), file names and paths (deleted files included), domains and URLs in web activity and email, email addresses, and IP addresses in logons and event logs.")), h("span.sp")),
+    ta,
+    h("div.row", h("button.primary", { onclick: run }, "Search the case"), canWrite() ? h("button", { onclick: save, title: "Keep this list with the case (recorded in the audit log)" }, "Save list") : null, status),
     out));
 }
 

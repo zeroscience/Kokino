@@ -44,6 +44,9 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/cases/{cid}", get(get_case).patch(update_case).delete(delete_case))
         .route("/cases/{cid}/audit", get(audit))
         .route("/cases/{cid}/correlate", get(correlate))
+        .route("/cases/{cid}/timeline", get(case_timeline))
+        .route("/cases/{cid}/watchlist", get(get_watchlist).put(put_watchlist))
+        .route("/cases/{cid}/watchlist/sweep", post(sweep_watchlist))
         .route("/cases/{cid}/members", axum::routing::put(set_members))
         .route("/cases/{cid}/bookmarks", get(bookmarks_list).post(bookmark_add))
         .route("/cases/{cid}/bookmarks/report", get(bookmarks_report))
@@ -600,6 +603,48 @@ async fn bitlocker_unlock(State(st): St, Extension(me): Me, Path((cid, eid, vi))
 }
 
 /// What the case's evidence items have in common (see `correlate`).
+#[derive(Deserialize)]
+struct WatchText {
+    text: String,
+}
+
+/// The case's saved watchlist (one indicator per line).
+async fn get_watchlist(State(st): St, Path(cid): Path<String>) -> R {
+    let case = st.case(&cid)?;
+    let text = std::fs::read_to_string(case.dir.join("watchlist.txt")).unwrap_or_default();
+    let (list, ignored) = crate::watchlist::parse(&text);
+    Ok(Json(json!({"text": text, "indicators": list, "ignored": ignored})))
+}
+
+async fn put_watchlist(State(st): St, Extension(me): Me, Path(cid): Path<String>, Json(b): Json<WatchText>) -> R {
+    if b.text.len() > 2_000_000 {
+        return Err(anyhow::anyhow!("the watchlist is too long (2 MB at most)").into());
+    }
+    let case = st.case(&cid)?;
+    let (list, ignored) = crate::watchlist::parse(&b.text);
+    std::fs::write(case.dir.join("watchlist.txt"), &b.text)?;
+    case.audit.append(&me.username, "watchlist.save", json!({"indicators": list.len()}))?;
+    Ok(Json(json!({"indicators": list, "ignored": ignored})))
+}
+
+/// Search every analyzed item of the case for the indicators in `text`.
+async fn sweep_watchlist(State(st): St, Extension(me): Me, Path(cid): Path<String>, Json(b): Json<WatchText>) -> R {
+    if b.text.len() > 2_000_000 {
+        return Err(anyhow::anyhow!("the watchlist is too long (2 MB at most)").into());
+    }
+    let user = me.username.clone();
+    Ok(Json(json!(tokio::task::spawn_blocking(move || -> anyhow::Result<crate::watchlist::Report> {
+        let (list, ignored) = crate::watchlist::parse(&b.text);
+        let mut rep = crate::watchlist::sweep(&st, &cid, &list)?;
+        rep.ignored = ignored;
+        let matched = rep.results.iter().filter(|r| !r.hits.is_empty()).count();
+        let hits: usize = rep.results.iter().map(|r| r.hits.len()).sum();
+        st.case(&cid)?.audit.append(&user, "watchlist.sweep", json!({"indicators": list.len(), "matched": matched, "hits": hits, "searched": rep.searched.len()}))?;
+        Ok(rep)
+    })
+    .await??)))
+}
+
 async fn correlate(State(st): St, Path(cid): Path<String>) -> R {
     Ok(Json(json!(tokio::task::spawn_blocking(move || crate::correlate::report(&st, &cid)).await??)))
 }
@@ -1364,63 +1409,122 @@ fn parse_day(s: &str) -> Option<(u64, bool)> {
     Some((kokino_core::time::datetime_to_filetime(d.and_hms_opt(0, 0, 0)?.and_utc()), true))
 }
 
-async fn timeline(State(st): St, Path((cid, eid, fi)): Path<(String, String, usize)>, Query(q): Query<TimelineQ>) -> R {
-    let l = st.loaded(&cid, &eid)?;
-    let f = fs_of(&l, fi)?;
-    let needle = q.q.unwrap_or_default().to_lowercase();
+/// Whether a timeline event matches the text and kind filters.
+fn tl_match(f: &FsAnalysis, e: &kokino_analysis::timeline::TimelineEvent, needle: &str, only: &str) -> bool {
+    if kokino_analysis::timeline::is_web(e.src) {
+        let text = web_text(f, e.src, e.idx as usize).0.to_lowercase();
+        return (needle.is_empty() || text.contains(needle)) && matches!(only, "" | "web");
+    }
+    if kokino_analysis::timeline::is_windows(e.src) {
+        let Some(w) = kokino_analysis::timeline::system_event(&f.windows, &f.linux.timeline, e.idx as usize) else { return false };
+        let hit = needle.is_empty() || w.what.to_lowercase().contains(needle) || w.detail.to_lowercase().contains(needle);
+        return hit && matches!(only, "" | "windows");
+    }
+    let Some(r) = f.files.get(e.idx as usize) else { return false };
+    (needle.is_empty() || r.e.path.to_lowercase().contains(needle))
+        && match only {
+            "flagged" => !r.flags.is_empty(),
+            "deleted" => r.e.deleted,
+            "si" => e.src == "SI" || e.src == "DEL",
+            "fn" => e.src == "FN",
+            "web" | "windows" => false,
+            _ => true,
+        }
+}
+
+/// One timeline event as the GUI shows it.
+fn tl_row(f: &FsAnalysis, e: &kokino_analysis::timeline::TimelineEvent) -> Value {
+    if kokino_analysis::timeline::is_web(e.src) {
+        let (text, detail, size) = web_text(f, e.src, e.idx as usize);
+        return json!({"t": filetime_to_iso(e.t), "macb": e.macb, "src": e.src, "idx": e.idx, "path": text, "detail": detail, "deleted": false, "flags": [], "is_dir": false, "size": size, "web": true});
+    }
+    if kokino_analysis::timeline::is_windows(e.src) {
+        let Some(w) = kokino_analysis::timeline::system_event(&f.windows, &f.linux.timeline, e.idx as usize) else { return json!({}) };
+        return json!({"t": filetime_to_iso(e.t), "macb": "", "src": e.src, "idx": e.idx, "path": w.what, "detail": w.detail, "deleted": false, "flags": [], "is_dir": false, "size": 0, "windows": true});
+    }
+    let Some(r) = f.files.get(e.idx as usize) else { return json!({}) };
+    json!({"t": filetime_to_iso(e.t), "macb": e.macb, "src": e.src, "idx": e.idx, "path": r.e.path, "deleted": r.e.deleted, "flags": r.flags, "is_dir": r.e.is_dir, "size": r.e.size})
+}
+
+fn tl_range(q: &TimelineQ) -> (u64, u64) {
     let from = q.from.as_deref().and_then(parse_day).map(|x| x.0).unwrap_or(0);
     // A bare day includes the whole day; an instant is where the range ends.
     let to = q.to.as_deref().and_then(parse_day).map(|(t, day)| if day { t + 86_400 * 10_000_000 } else { t }).unwrap_or(u64::MAX);
-    let only = q.only.unwrap_or_default();
-    let hits: Vec<&kokino_analysis::timeline::TimelineEvent> = l.fs[fi]
-        .timeline
-        .iter()
-        .filter(|e| {
-            if e.t < from || e.t >= to {
-                return false;
-            }
-            if kokino_analysis::timeline::is_web(e.src) {
-                let text = web_text(f, e.src, e.idx as usize).0.to_lowercase();
-                return (needle.is_empty() || text.contains(&needle)) && matches!(only.as_str(), "" | "web");
-            }
-            if kokino_analysis::timeline::is_windows(e.src) {
-                let Some(w) = kokino_analysis::timeline::system_event(&f.windows, &f.linux.timeline, e.idx as usize) else { return false };
-                let hit = needle.is_empty() || w.what.to_lowercase().contains(&needle) || w.detail.to_lowercase().contains(&needle);
-                return hit && matches!(only.as_str(), "" | "windows");
-            }
-            let r = &f.files[e.idx as usize];
-            (needle.is_empty() || r.e.path.to_lowercase().contains(&needle))
-                && match only.as_str() {
-                    "flagged" => !r.flags.is_empty(),
-                    "deleted" => r.e.deleted,
-                    "si" => e.src == "SI" || e.src == "DEL",
-                    "fn" => e.src == "FN",
-                    "web" | "windows" => false,
-                    _ => true,
-                }
-        })
-        .collect();
+    (from, to)
+}
+
+async fn timeline(State(st): St, Path((cid, eid, fi)): Path<(String, String, usize)>, Query(q): Query<TimelineQ>) -> R {
+    let l = st.loaded(&cid, &eid)?;
+    let f = fs_of(&l, fi)?;
+    let needle = q.q.clone().unwrap_or_default().to_lowercase();
+    let (from, to) = tl_range(&q);
+    let only = q.only.clone().unwrap_or_default();
+    let hits: Vec<&kokino_analysis::timeline::TimelineEvent> = l.fs[fi].timeline.iter().filter(|e| e.t >= from && e.t < to && tl_match(f, e, &needle, &only)).collect();
     let total = hits.len();
     let off = q.offset.unwrap_or(0);
     let lim = q.limit.unwrap_or(300).min(3000);
-    let items: Vec<Value> = hits
-        .into_iter()
-        .skip(off)
-        .take(lim)
-        .map(|e| {
-            if kokino_analysis::timeline::is_web(e.src) {
-                let (text, detail, size) = web_text(f, e.src, e.idx as usize);
-                return json!({"t": filetime_to_iso(e.t), "macb": e.macb, "src": e.src, "idx": e.idx, "path": text, "detail": detail, "deleted": false, "flags": [], "is_dir": false, "size": size, "web": true});
-            }
-            if kokino_analysis::timeline::is_windows(e.src) {
-                let Some(w) = kokino_analysis::timeline::system_event(&f.windows, &f.linux.timeline, e.idx as usize) else { return json!({}) };
-                return json!({"t": filetime_to_iso(e.t), "macb": "", "src": e.src, "idx": e.idx, "path": w.what, "detail": w.detail, "deleted": false, "flags": [], "is_dir": false, "size": 0, "windows": true});
-            }
-            let r = &f.files[e.idx as usize];
-            json!({"t": filetime_to_iso(e.t), "macb": e.macb, "src": e.src, "idx": e.idx, "path": r.e.path, "deleted": r.e.deleted, "flags": r.flags, "is_dir": r.e.is_dir, "size": r.e.size})
-        })
-        .collect();
+    let items: Vec<Value> = hits.into_iter().skip(off).take(lim).map(|e| tl_row(f, e)).collect();
     Ok(Json(json!({"total": total, "offset": off, "items": items})))
+}
+
+/// One timeline across every analyzed evidence item and volume of the
+/// case, in time order; each row says which item and volume it is from.
+async fn case_timeline(State(st): St, Path(cid): Path<String>, Query(q): Query<TimelineQ>) -> R {
+    Ok(Json(tokio::task::spawn_blocking(move || case_timeline_page(&st, &cid, &q)).await??))
+}
+
+fn case_timeline_page(st: &AppState, cid: &str, q: &TimelineQ) -> anyhow::Result<Value> {
+    {
+        let case = st.case(cid)?;
+        let needle = q.q.clone().unwrap_or_default().to_lowercase();
+        let (from, to) = tl_range(q);
+        let only = q.only.clone().unwrap_or_default();
+        let mut loaded = vec![];
+        let mut skipped = vec![];
+        for rec in case.evidence() {
+            match st.loaded(cid, &rec.id) {
+                Ok(l) => loaded.push((rec, l)),
+                Err(_) => skipped.push(rec.name.clone()),
+            }
+        }
+        // Per volume, the matching events (each list already in time order).
+        let mut lists: Vec<(usize, usize, Vec<&kokino_analysis::timeline::TimelineEvent>)> = vec![];
+        for (k, (_, l)) in loaded.iter().enumerate() {
+            for (fi, f) in l.analysis.filesystems.iter().enumerate() {
+                let Some(ix) = l.fs.get(fi) else { continue };
+                let start = ix.timeline.partition_point(|e| e.t < from);
+                let hits: Vec<_> = ix.timeline[start..].iter().take_while(|e| e.t < to).filter(|e| tl_match(f, e, &needle, &only)).collect();
+                if !hits.is_empty() {
+                    lists.push((k, fi, hits));
+                }
+            }
+        }
+        let total: usize = lists.iter().map(|x| x.2.len()).sum();
+        let off = q.offset.unwrap_or(0);
+        let lim = q.limit.unwrap_or(300).min(3000);
+        // Merge in time order up to the page wanted.
+        let mut pos = vec![0usize; lists.len()];
+        let mut items = vec![];
+        let mut n = 0usize;
+        while n < off + lim {
+            let next = (0..lists.len()).filter(|&i| pos[i] < lists[i].2.len()).min_by_key(|&i| lists[i].2[pos[i]].t);
+            let Some(i) = next else { break };
+            if n >= off {
+                let (k, fi, ref v) = lists[i];
+                let (rec, l) = &loaded[k];
+                let mut row = tl_row(&l.analysis.filesystems[fi], v[pos[i]]);
+                row["evidence"] = json!(rec.id);
+                row["evidence_name"] = json!(rec.name);
+                row["fi"] = json!(fi);
+                row["volume"] = json!(l.analysis.filesystems[fi].volume.index);
+                row["fs"] = json!(l.analysis.filesystems[fi].volume.fs_label);
+                items.push(row);
+            }
+            pos[i] += 1;
+            n += 1;
+        }
+        Ok(json!({"total": total, "offset": off, "items": items, "items_from": loaded.len(), "not_analyzed": skipped}))
+    }
 }
 
 /// (main text, detail, size) for a browser timeline event.
@@ -2640,6 +2744,47 @@ async fn report(State(st): St, Extension(me): Me, Path((cid, eid)): Path<(String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn case_timeline_merges_items_in_time_order() {
+        let fx = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+        let root = std::env::temp_dir().join(format!("kokino-ctl-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let st = AppState::new(root.clone(), 7311, false, vec![]).unwrap();
+        let case = kokino_core::case::Case::create(&root, "Timeline", "tester", "").unwrap();
+        let cid = case.info.id.clone();
+        let mut each = 0;
+        for (id, f) in [("e1", "linux-server.img"), ("e2", "collection-uac.tar.gz"), ("e3", "disk-af.img")] {
+            let p = fx.join(f);
+            let ev = kokino_image::Evidence::open(&p).unwrap();
+            let rec = kokino_core::case::EvidenceRecord { id: id.into(), name: f.into(), path: p.display().to_string(), format: ev.format_label(), size: ev.size, added: String::new(), notes: String::new(), hashes: None, hashed_at: None, expected: None, embedded: None, acquisition: None };
+            case.save_evidence(&rec).unwrap();
+            let a = kokino_analysis::analyze(&ev, &mut |_, _, _| true).unwrap();
+            let l = st.put(&cid, id, a, ev);
+            each += l.fs.iter().map(|x| x.timeline.len()).sum::<usize>();
+        }
+        let q = |text: &str, offset: usize, limit: usize| TimelineQ { q: Some(text.into()), from: None, to: None, only: None, offset: Some(offset), limit: Some(limit) };
+        let all = case_timeline_page(&st, &cid, &q("", 0, 3000)).unwrap();
+        assert_eq!(all["total"].as_u64().unwrap() as usize, each, "every event of every item");
+        assert_eq!(all["items_from"], 3);
+        let items = all["items"].as_array().unwrap();
+        let t: Vec<&str> = items.iter().map(|x| x["t"].as_str().unwrap()).collect();
+        assert!(t.windows(2).all(|w| w[0] <= w[1]), "merged in time order");
+        for e in ["e1", "e2", "e3"] {
+            assert!(items.iter().any(|x| x["evidence"] == e), "{} is in the merge", e);
+        }
+        // Paging: the second page continues where the first ended.
+        let p1 = case_timeline_page(&st, &cid, &q("", 0, 50)).unwrap();
+        let p2 = case_timeline_page(&st, &cid, &q("", 50, 50)).unwrap();
+        assert_eq!(p1["items"].as_array().unwrap()[..], items[..50]);
+        assert_eq!(p2["items"].as_array().unwrap()[..], items[50..100]);
+        // A text filter keeps only matching rows, from both Linux items.
+        let f = case_timeline_page(&st, &cid, &q("authorized_keys", 0, 300)).unwrap();
+        let fi = f["items"].as_array().unwrap();
+        assert!(fi.iter().all(|x| x["path"].as_str().unwrap().contains("authorized_keys")));
+        assert!(fi.iter().any(|x| x["evidence"] == "e1") && fi.iter().any(|x| x["evidence"] == "e2"));
+        std::fs::remove_dir_all(&root).ok();
+    }
 
     #[test]
     fn evidence_inside_the_cases_directory_is_refused() {

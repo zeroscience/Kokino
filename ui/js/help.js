@@ -82,7 +82,7 @@ export function aboutPage(info) {
     h("div.grid.g2",
       h("div.card.stack",
         h("h3", "What it is"),
-        p("Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workbench for disk images. Give it an E01, raw, VHD, VHDX or VMDK image, a disc image or a triage collection (Velociraptor, KAPE, UAC, or a plain folder), and it reads every NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF volume down to the last record, live and deleted, BitLocker volumes once unlocked and every Volume Shadow Copy included, brings back what was erased, and rebuilds what happened on the machine: Windows registry (deleted keys included), event logs, execution traces and scheduled tasks, Linux and macOS accounts, logons, shell histories and persistence, browser history (Internet Explorer's included, even from a formatted disk), email (Outlook PST and OST, Apple Mail, mbox), carved files and edited pictures, and what a case's evidence items have in common."),
+        p("Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workbench for disk images. Give it an E01, raw, VHD, VHDX or VMDK image, a disc image or a triage collection (Velociraptor, KAPE, UAC, or a plain folder), and it reads every NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF volume down to the last record, live and deleted, BitLocker volumes once unlocked and every Volume Shadow Copy included, brings back what was erased, and rebuilds what happened on the machine: Windows registry (deleted keys included), event logs, execution traces and scheduled tasks, Linux and macOS accounts, logons, shell histories and persistence, browser history (Internet Explorer's included, even from a formatted disk), email (Outlook PST and OST, Apple Mail, mbox), carved files and edited pictures, and what a case's evidence items have in common, on one case timeline and against a watchlist of known indicators."),
         p("Every finding links to the exact bytes it came from, every indicator of anti-forensic activity explains itself, and every examiner action lands in a hash-chained audit log, so the results hold up in a report and in court."),
         p("One portable binary serves this browser interface on Windows, Linux and macOS, alone on a workstation or for a whole lab over HTTPS."),
         p("The name comes from the Kokino observatory, a Bronze Age megalithic site in North Macedonia (", link("https://en.wikipedia.org/wiki/Kokino", "Wikipedia"), "); the wiki has the story."),
@@ -96,6 +96,11 @@ export function aboutPage(info) {
           "Indicators are transparent rules with weights and caveats. The score says where to look, never what happened.",
         ),
       ),
+    ),
+    h("div.card.stack",
+      h("h3", "What's next"),
+      p("1.4 is the last feature release for a few months. Security reports and wrong results (an artifact read incorrectly, a crash on real evidence) are still fixed in 1.4.x releases."),
+      p("After the pause, in order: checks on disks from real Macs; APFS encryption (FileVault), snapshots and LZFSE compression; Windows Search (Windows.edb) and NTFS $LogFile in full; XFS, Ex01 and ESXi snapshots; watchlists from STIX and MISP. Most of these wait for test data rather than code. The full list, with what each item needs, is in ", link("https://github.com/zeroscience/Kokino/blob/main/ROADMAP.md", "ROADMAP.md"), "; if one matters to a case you work on, say so: that moves it up."),
     ),
     updateCard(info),
     h("div.grid.g2",
@@ -203,7 +208,7 @@ const WIKI = [
       kv([
         ["Summary", "Disk layout, counts, the impact summary in plain sentences, the anti-forensics gauge and an activity histogram (click a day to open the timeline)."],
         ["Explorer", "The folder tree including deleted and orphaned entries. Click a file for its detail drawer: both timestamp sets side by side, data streams, signature, entropy, where its MFT record lies on disk, its timeline events and a hex preview."],
-        ["Timeline", "MACB events from $SI and $FN interleaved with browser visits, downloads and searches, Windows artifacts and, on NTFS, files created, deleted and renamed per the change journal (USN). Filter by text, date, source, deleted or flagged."],
+        ["Timeline", "MACB events from $SI and $FN interleaved with browser visits, downloads and searches, Windows artifacts and, on NTFS, files created, deleted and renamed per the change journal (USN). Filter by text, date, source, deleted or flagged. The case page Case timeline merges the timelines of all items."],
         ["Web activity", "Browser history per profile (Chrome family, Firefox, Safari, Internet Explorer and the old Edge): visits, downloads, searches and Internet Explorer's cache and cookies. Click a profile card to filter by it."],
         ["Email", "Messages in Outlook PST and OST files, mbox mailboxes and .eml files, with their text and attachments."],
         ["Anti-forensics", "Each indicator with its weight, caveat and the exact files: click Show files to list them, then a file to open it."],
@@ -336,6 +341,28 @@ const WIKI = [
     id: "correlation", title: "Correlation", icon: "layers",
     body: [
       p("The case page Correlation lists what two or more evidence items of the case have in common: user names, computer names, email addresses (senders and recipients), IP addresses (logons and events), USB serial numbers, wireless networks, web domains (visits and downloads) and identical files (the same SHA-256, files of 1 KiB or more, from the hashes taken at analysis). Each value shows the items it was found in and how often; click one to open it. Values are compared without regard to case. Items not analyzed yet are left out and named at the top."),
+    ],
+  },
+  {
+    id: "case-timeline", title: "Case timeline", icon: "clock",
+    body: [
+      p("The case page Case timeline merges the timelines of every analyzed evidence item and volume of the case into one, in time order: the laptop, the USB stick and the server side by side. Each row names its item and volume (v0, v1, ...); click it to open the file, the web activity or the system summary of that item. Filter by text, day range and kind (web, system, deleted, flagged) as on an item's own timeline."),
+      p("Times from NTFS, ext, HFS+, APFS and the artifacts are UTC and line up across items. FAT stores the device's local clock with no zone, so a FAT volume's place among the other items depends on that device's time zone: check it before reading order across items."),
+    ],
+  },
+  {
+    id: "watchlist", title: "Watchlist (IOC sweep)", icon: "search",
+    body: [
+      p("The case page Watchlist searches every analyzed evidence item of the case at once for a list of indicators, one per line, recognized by their form:"),
+      ul(
+        h("span", h("b", "MD5, SHA-1, SHA-256:"), " file contents, from the hashes Hash analysis takes; run Hash analysis on each item first (items without it are named)."),
+        h("span", h("b", "IP addresses"), " (IPv4 and IPv6): Windows and Linux event records and logons."),
+        h("span", h("b", "Domains and URLs:"), " web visits, downloads, cache and cookies of the domain and its subdomains, email from or to addresses at the domain, and files of exactly that name (", code("ld.so.preload"), " looks like a domain)."),
+        h("span", h("b", "Email addresses:"), " senders and recipients (From, To, Cc)."),
+        h("span", h("b", "Anything else:"), " a file name (exact, any case) or, with a / or \\ in it, a fragment of a path; deleted files included."),
+      ),
+      p("Lines starting with # are comments; text after \" #\" on a line is kept as the indicator's note. Defanged forms from reports (hxxp://, [.], (.), [:], [@]) are read as the real thing. Up to 5,000 indicators; up to 500 hits each are listed."),
+      p("Each hit opens where it was found: a file in its details drawer, an event or logon in the system summary, a visit in web activity, a message in Email. ", h("b", "Save list"), " keeps the list with the case; saving and each sweep are recorded in the audit log with the number of indicators and hits. Reviewers can run sweeps but not change the saved list."),
     ],
   },
   {
@@ -561,6 +588,8 @@ const WIKI = [
         "Carving assumes a file is stored in one piece, so fragmented pictures with no directory entry left are not rejoined.",
       ),
       p("VALIDATION.md in the source has every image's numbers, the method and how to repeat it; ", code("kokino files"), " and ", code("kokino carve"), " are the command-line tools it uses."),
+      h("h3", "Golden results"),
+      p("Every commit is also checked against recorded results for all the test images in the source (38 analyses: every file system, image format, collection type and virtual disk Kokino reads, BitLocker locked and unlocked), on Windows, Linux and macOS: the volumes found, file statistics, the anti-forensics score, the number of entries in every artifact list and a digest of the file listing. A change in what Kokino finds in any of them stops the build until it is explained."),
     ],
   },
   {
@@ -570,7 +599,7 @@ const WIKI = [
       h("h3", "Release integrity"),
       p("Every release has ", code("SHA256SUMS.txt"), ", a CycloneDX SBOM (", code("kokino-<version>-sbom.cdx.json"), ": every third-party crate in the build with its version, checksum and license) and a build provenance attestation for every file, signed through GitHub (Sigstore), which ties the file to the workflow run and commit that built it. Check a download with ", code("gh attestation verify <file> --repo zeroscience/Kokino"), ". The Windows and macOS packages are not yet code-signed with a publisher certificate."),
       h("h3", "Fuzzing"),
-      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks, optical media, Mac disks, NTFS folder indexes and $LogFile, the change journal, ShellBags, ESE databases (SRUM), scheduled tasks, Internet Explorer index.dat, deleted registry keys, legacy Office files, registry logs, legacy event logs, email, journald compression, ZIP and tar collections, shadow copies, BitLocker, VHDX logs, Outlook PST, property lists, FSEvents, WebCache and Apple Mail ran ", h("b", "656,367,228 inputs"), " and found ", h("b", "37 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
+      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks, optical media, Mac disks, NTFS folder indexes and $LogFile, the change journal, ShellBags, ESE databases (SRUM), scheduled tasks, Internet Explorer index.dat, deleted registry keys, legacy Office files, registry logs, legacy event logs, email, journald compression, ZIP and tar collections, shadow copies, BitLocker, VHDX logs, Outlook PST, property lists, FSEvents, WebCache, Apple Mail and the watchlist ran ", h("b", "669,995,687 inputs"), " and found ", h("b", "38 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
       h("div.scroll", h("table.tbl",
         h("thead", h("tr", h("th", "Target"), h("th", "Covers"), h("th", "Inputs"), h("th", "Found"))),
         h("tbody", [
@@ -594,6 +623,7 @@ const WIKI = [
         ["plist", "Apple property lists, binary and XML", "1,229,272", "1 (overflow on a huge date; fixed)"],
         ["fsevents", "macOS FSEvents: gzip, pages of every version, records", "50,215,572", "none"],
         ["webcache", "WebCache (Internet Explorer 10 and 11, old Edge) read into web activity", "743,157", "none"],
+        ["ioc", "The watchlist parser: indicator kinds, defanged forms, URL hosts, domain and IP comparison", "13,628,459", "1 (IPv4-mapped address did not match; fixed)"],
         ["vss", "Volume Shadow Copies: catalog, block lists, overlays and forwarders, snapshot reads", "9,887,067", "2 (overflow, stack overflow; fixed)"],
         ["bde", "BitLocker: metadata, key protectors, key unwrapping, startup key files, the decrypting reader for every method", "4,459,482", "1 (overflow, fixed)"],
         ["mail", "Mailboxes and messages: MIME, encodings, attachments, Apple Mail .emlx", "12,525,090", "none"],

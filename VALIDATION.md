@@ -591,6 +591,29 @@ The validation found real problems, all fixed before these results:
 5. Deleted folders on ext3 and ext4 had no way back to their entries; the
    directory block search was added.
 
+## Golden results on every commit (1.4.0)
+
+The public images above are large and checked before releases. The small
+test images in `tests/fixtures/` (every file system, image format,
+collection type and virtual disk Kokino reads; 38 analyses with BitLocker
+locked and unlocked) are checked on every commit instead, on Windows, Linux
+and macOS, by `crates/kokino-analysis/tests/golden.rs`.
+
+Each analysis is reduced to the numbers an examiner relies on: the volumes
+found (place, size, file system), the file statistics, the anti-forensics
+score and its drivers, the number of entries in every artifact list (web
+visits, event records, logons, messages, persistence entries, ...) and a
+digest of the file listing (path, size, deleted, directory and signature of
+every file). The results are recorded in `tests/golden/`, one JSON file per
+analysis. Any difference fails the build and lists what changed, for
+example
+
+    linux-server.filesystems[0].lists.linux.logons: was 9, now 8
+
+After a deliberate change, review the differences, record the new results
+with `KOKINO_BLESS=1 cargo test -p kokino-analysis --test golden` and commit
+them with the change that explains them.
+
 ## Repeating it
 
 Download (about 240 MB) into `target/validation/` (ignored by git):

@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod ioc;
 pub mod antiforensics;
 pub mod binview;
 pub mod signatures;

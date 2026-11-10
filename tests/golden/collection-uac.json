@@ -1,0 +1,126 @@
+{
+  "errors": 0,
+  "filesystems": [
+    {
+      "files": 66,
+      "listing": "718b7803651e37f7",
+      "lists": {
+        "indicators": 3,
+        "linux.commands": 7,
+        "linux.events": 11,
+        "linux.hits": 5,
+        "linux.interfaces": 2,
+        "linux.logons": 9,
+        "linux.logs": 5,
+        "linux.networks": 3,
+        "linux.packages": 2,
+        "linux.persistence": 7,
+        "linux.sources": 27,
+        "linux.timeline": 24,
+        "linux.usb": 1,
+        "linux.users": 6,
+        "mail.mailboxes": 2,
+        "mail.messages": 3,
+        "windows.timeline": 3
+      },
+      "score": {
+        "band": "Very high",
+        "drivers": [
+          "Shell history or sudo log shows evidence being destroyed",
+          "/etc/ld.so.preload loads a library into every program",
+          "Shell history emptied or sent to /dev/null"
+        ],
+        "likelihood": 0.763
+      },
+      "stats": {
+        "ads": 0,
+        "by_category": [],
+        "bytes": 8003,
+        "deleted_bytes": 0,
+        "deleted_dirs": 0,
+        "deleted_files": 0,
+        "dirs": 31,
+        "files": 34,
+        "histogram": [
+          {
+            "created": 0,
+            "day": "2026-10-20",
+            "modified": 33
+          },
+          {
+            "created": 0,
+            "day": "2026-10-21",
+            "modified": 2
+          }
+        ],
+        "impact": [
+          "A triage collection: files collected from a computer, not a whole volume.",
+          "34 files (7.8 KiB) in 31 directories.",
+          "File timestamps span 2026-10-20 to 2026-10-21.",
+          "Anti-forensics likelihood is Very high (76%), driven by: Shell history or sudo log shows evidence being destroyed (3); /etc/ld.so.preload loads a library into every program (1); Shell history emptied or sent to /dev/null (1).",
+          "A tar archive (UAC collection): files are read from it as stored; it has no deleted files or free space. Times are those the archive recorded (UTC).",
+          "A gzip-compressed tar archive (40960 bytes uncompressed), decompressed in memory to be read.",
+          "Triage collection: the collected drive's files are under /[root]. Windows and Linux artifacts, browser history and email were read with the paths they had on the drive; checks that need a whole volume (a missing change journal or event log) are not made from them.",
+          "Linux computer lab-srv running Debian GNU/Linux 12 (bookworm).",
+          "Accounts that can log in: root, toor, alice, svc-backup.",
+          "Account toor: uid 0: a second root account.",
+          "Account svc-backup: can log in without a password.",
+          "3 logon(s) and 4 failed logon(s) recorded; SSH from 192.0.2.10, 203.0.113.9.",
+          "Notable commands typed: history disabled or cleared (alice, bash); secure deletion (alice, bash); secure deletion (alice, sudo).",
+          "5 persistence entries stand out (SSH key, cron, history disabled, ld.so.preload, systemd).",
+          "1 USB device(s) seen by the kernel: SanDisk Ultra.",
+          "Classic syslog lines carry no year or time zone: years were inferred from each file's modification time and times converted from Europe/Skopje.",
+          "3 email message(s) in 2 mailbox(es), from 2026-10-20 to 2026-10-22, with 1 attachment(s)."
+        ],
+        "orphans": 0,
+        "os": null,
+        "time_max": 134370471300000000,
+        "time_min": 134369571300000000,
+        "top_ext": [
+          [
+            "log",
+            4
+          ],
+          [
+            "txt",
+            3
+          ],
+          [
+            "eml",
+            1
+          ],
+          [
+            "journal",
+            1
+          ],
+          [
+            "leases",
+            1
+          ],
+          [
+            "nmconnection",
+            1
+          ],
+          [
+            "preload",
+            1
+          ],
+          [
+            "service",
+            1
+          ]
+        ],
+        "users": []
+      },
+      "volume": {
+        "fs": "TAR",
+        "index": 0,
+        "length": 3863,
+        "start": 0
+      }
+    }
+  ],
+  "image_format": "Raw (dd)",
+  "image_size": 3863,
+  "volumes": 1
+}

@@ -11,6 +11,7 @@
 mod api;
 mod auth;
 mod correlate;
+mod watchlist;
 pub mod exports;
 pub mod casereport;
 mod jobs;

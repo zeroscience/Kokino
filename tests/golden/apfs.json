@@ -1,0 +1,65 @@
+{
+  "errors": 0,
+  "filesystems": [
+    {
+      "files": 14,
+      "listing": "25c973052d53ea5f",
+      "lists": {},
+      "score": {
+        "band": "Low",
+        "drivers": [],
+        "likelihood": 0.0
+      },
+      "stats": {
+        "ads": 0,
+        "by_category": [],
+        "bytes": 73152,
+        "deleted_bytes": 55,
+        "deleted_dirs": 0,
+        "deleted_files": 1,
+        "dirs": 5,
+        "files": 8,
+        "histogram": [
+          {
+            "created": 7,
+            "day": "2026-10-20",
+            "modified": 7
+          },
+          {
+            "created": 6,
+            "day": "2026-11-04",
+            "modified": 6
+          }
+        ],
+        "impact": [
+          "Data volume (no Windows installation found).",
+          "8 files (71.4 KiB) in 5 directories.",
+          "1 deleted files (55 B) and 0 deleted directories still have file system entries; content may be recoverable unless clusters were reused.",
+          "File timestamps span 2026-10-20 to 2026-11-04.",
+          "No anti-forensics indicators were triggered.",
+          "1 deleted file(s) and folder(s) on \"KOKINO_APFS\" found in older copies of its file-system tree."
+        ],
+        "orphans": 0,
+        "os": null,
+        "time_max": 134382966499299263,
+        "time_min": 134369571300000000,
+        "top_ext": [
+          [
+            "txt",
+            7
+          ]
+        ],
+        "users": []
+      },
+      "volume": {
+        "fs": "APFS",
+        "index": 0,
+        "length": 33513472,
+        "start": 20480
+      }
+    }
+  ],
+  "image_format": "Raw (dd)",
+  "image_size": 33554432,
+  "volumes": 1
+}

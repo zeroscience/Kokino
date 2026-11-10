@@ -5,6 +5,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-10
+
+A whole case at once: one timeline across every evidence item, a watchlist that sweeps every item for known indicators, golden results that check what Kokino finds in every test image on every commit, and a roadmap for after a pause in development.
+
+### Added
+- Case timeline: a case page with the timelines of every analyzed evidence item and volume merged into one, in time order (file times, browser activity, system events), each row naming its item and volume and opening it there. Filter by text, day range and kind as on an item's timeline.
+- Watchlist: a case page that searches every analyzed evidence item at once for a pasted list of indicators: MD5, SHA-1 and SHA-256 (against Hash analysis), file names and path fragments (deleted files included), domains and URLs (web visits, downloads, cache, cookies, email addresses at the domain, and files of that name), email addresses, and IP addresses (Windows and Linux events, logons). Comments and notes are kept, defanged forms (hxxp, [.], [@]) are read, and each hit opens where it was found. The list can be saved with the case; saves and sweeps are recorded in the audit log. Reviewers can run sweeps.
+- Golden results: every test image (38 analyses of the images in tests/fixtures, BitLocker locked and unlocked) is reduced to the numbers an examiner relies on (volumes, file statistics, score, the size of every artifact list, a digest of the file listing) and compared with recorded results on every commit, on Windows, Linux and macOS. `KOKINO_BLESS=1 cargo test -p kokino-analysis --test golden` records new results after a deliberate change.
+- Fuzz target `ioc` for the watchlist parser (13.6 million inputs); it found that an IPv4-mapped IPv6 indicator (::ffff:192.0.2.1) matched nothing, fixed before release. In all: 670 million inputs over 40 targets, 38 problems found and fixed.
+
+### Changed
+- Roadmap rewritten: what is done, by area, and a prioritized list for after 1.4 with what each item needs (most are waiting for test data, not code).
+
 ## [1.3.2] - 2026-11-09
 
 The built-in wiki brought up to date with everything 1.3.1 added; no changes to analysis.

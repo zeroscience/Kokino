@@ -170,7 +170,13 @@ not counted in the inputs; the rounds after the fixes found nothing.
 The `vdisk` target writes each input to a file (virtual disks are opened
 by path), so it runs far fewer inputs than the others.
 
-In all: 656,367,228 inputs over 39 targets, and 37 distinct problems
+Watchlist (1.4.0):
+
+| Target | What it covers | Rounds | Inputs in all | Distinct problems found |
+|---|---|---|--:|---|
+| `ioc` | the watchlist parser: indicator kinds, defanged forms, notes, URL hosts, domain and IP comparison | 10 min | 13,628,459 | 1: an IPv4-mapped IPv6 address (::ffff:192.0.2.1) did not match itself, so such an indicator found nothing; fixed (found in a first round stopped to fix it and not counted) |
+
+In all: 669,995,687 inputs over 40 targets, and 38 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed
@@ -214,6 +220,7 @@ found by fuzzing, all fixed.
 | 35 | Outlook PST | Crash (panic in chrono) | Fuzzing | A message time far outside years 0 to 9999 was formatted as an RFC 2822 date | Such dates are left out of the rendered headers |
 | 36 | Outlook PST | Crash (read past the end) | Fuzzing | A subnode block one byte long was read for its level | Short blocks read as empty |
 | 37 | Property lists | Integer overflow | Fuzzing | A date of about 10^30 seconds converted to Windows time | Saturating arithmetic; such dates read as unknown |
+| 38 | Watchlist | Wrong result | Fuzzing | Only one side of an IP comparison was unmapped, so an IPv4-mapped IPv6 indicator never matched | Both sides normalized before comparing |
 
 Before the fixes, every one of these could stop or slow an ingest, a carving
 job or a picture scan, or exhaust the examiner's memory, on purpose-made

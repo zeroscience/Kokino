@@ -213,7 +213,8 @@ pub async fn guard(State(st): State<Arc<AppState>>, mut req: Request, next: Next
         let Some(access) = access else { return err(StatusCode::NOT_FOUND, "no such case") };
         let exports = path.ends_with("/export") || path.ends_with("/carve");
         // Reviewers may bookmark and tag; the handlers limit them to their own bookmarks.
-        let bookmarking = rest.split('/').nth(1) == Some("bookmarks");
+        // Running a watchlist sweep only reads, though it is a POST (the list can be long).
+        let bookmarking = rest.split('/').nth(1) == Some("bookmarks") || rest.ends_with("/watchlist/sweep");
         if ((writes && !bookmarking) || exports) && !access.can_write() {
             return err(StatusCode::FORBIDDEN, "read-only access to this case");
         }

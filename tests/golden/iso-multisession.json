@@ -1,0 +1,60 @@
+{
+  "errors": 0,
+  "filesystems": [
+    {
+      "files": 17,
+      "listing": "c5142a6787271b36",
+      "lists": {},
+      "score": {
+        "band": "Low",
+        "drivers": [],
+        "likelihood": 0.0
+      },
+      "stats": {
+        "ads": 0,
+        "by_category": [],
+        "bytes": 9169,
+        "deleted_bytes": 55,
+        "deleted_dirs": 0,
+        "deleted_files": 1,
+        "dirs": 9,
+        "files": 7,
+        "histogram": [
+          {
+            "created": 0,
+            "day": "2026-10-20",
+            "modified": 16
+          }
+        ],
+        "impact": [
+          "Data volume (no Windows installation found).",
+          "7 files (9.0 KiB) in 9 directories.",
+          "1 deleted files (55 B) and 0 deleted directories still have file system entries; content may be recoverable unless clusters were reused.",
+          "File timestamps span 2026-10-20 to 2026-10-20.",
+          "No anti-forensics indicators were triggered.",
+          "This disc was written in 2 sessions. The newest session is shown as the live file system; 1 file(s) and folder(s) only older sessions list are shown as deleted."
+        ],
+        "orphans": 0,
+        "os": null,
+        "time_max": 134369538900000000,
+        "time_min": 134369535300000000,
+        "top_ext": [
+          [
+            "txt",
+            7
+          ]
+        ],
+        "users": []
+      },
+      "volume": {
+        "fs": "ISO 9660",
+        "index": 0,
+        "length": 1380352,
+        "start": 0
+      }
+    }
+  ],
+  "image_format": "Raw (dd)",
+  "image_size": 1380352,
+  "volumes": 1
+}
