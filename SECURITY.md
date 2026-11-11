@@ -32,6 +32,7 @@ are no separate patches for older versions.
 | Signed-in examiners and reviewers | Honest but limited to their cases and role | Per-case membership and roles enforced on the server; every action in a hash-chained audit log |
 | Other machines on the lab network | Untrusted | LAN mode is HTTPS only; sign-in required; CSRF header and Host check on every request |
 | Other tabs in the examiner's browser | Untrusted | Strict Content-Security-Policy; HttpOnly, SameSite=Strict session cookies |
+| Plugins | Trusted code chosen by whoever runs the server | Off unless the server is started with `--plugins <folder>`; started only by examiners with write access; given a copy of one file at a time, never the evidence; no input, a reduced environment, a time limit (the whole process tree is stopped) and limits on output; every run audited with the SHA-256 of the plugin's files. A plugin can still do anything the server's account can: install only plugins you have read |
 
 ## Fuzzing the parsers
 
@@ -202,7 +203,14 @@ UDF sparable and virtual partitions, ESXi snapshots (after 1.4.0):
 | `optical` | again, with a sparable partition (sparing table) and a virtual partition (VAT found from the end of the image) as seeds | 10 min | 1,335,667 | none |
 | `vdisk` | again, with ESXi VMFSSPARSE and SESPARSE extents (opened through a descriptor naming them) as seeds | 10 min | 45,992 | none |
 
-In all: 715,423,132 inputs over 40 targets, and 40 distinct problems
+Plugins and UDF sessions (after 1.4.0):
+
+| Target | What it covers | Rounds | Inputs in all | Distinct problems found |
+|---|---|---|--:|---|
+| `plugin` | what a plugin prints (one object with rows and notes, or one row per line) and the patterns that choose its files | 10 min | 32,622,403 | none |
+| `optical` | again, with a CD-R image holding two sessions' VATs (files of the earlier session walked through its own VAT) | 10 min | 1,140,617 | none |
+
+In all: 749,186,152 inputs over 41 targets, and 40 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed

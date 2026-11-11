@@ -1,0 +1,9 @@
+{
+  "name": "Internet shortcuts",
+  "version": "1.0",
+  "description": "Windows Internet Shortcut files (.url): the address, the icon file and the Modified time some browsers store. An example of a Kokino plugin; needs Python 3.",
+  "match": ["*.url"],
+  "command": ["python", "parse.py", "{file}", "{path}"],
+  "timeout": 30,
+  "max_file_size": 1048576
+}

@@ -2,8 +2,8 @@
   "errors": 0,
   "filesystems": [
     {
-      "files": 5,
-      "listing": "6f27fae3605fa1c2",
+      "files": 6,
+      "listing": "c0997e143fcf3dc0",
       "lists": {},
       "score": {
         "band": "Low",
@@ -13,24 +13,26 @@
       "stats": {
         "ads": 0,
         "by_category": [],
-        "bytes": 5088,
-        "deleted_bytes": 0,
+        "bytes": 5144,
+        "deleted_bytes": 56,
         "deleted_dirs": 0,
-        "deleted_files": 0,
+        "deleted_files": 1,
         "dirs": 1,
-        "files": 3,
+        "files": 4,
         "histogram": [
           {
             "created": 0,
             "day": "2026-10-20",
-            "modified": 4
+            "modified": 5
           }
         ],
         "impact": [
           "Data volume (no Windows installation found).",
-          "3 files (5.0 KiB) in 1 directories.",
+          "4 files (5.0 KiB) in 1 directories.",
+          "1 deleted files (56 B) and 0 deleted directories still have file system entries; content may be recoverable unless clusters were reused.",
           "File timestamps span 2026-10-20 to 2026-10-20.",
-          "No anti-forensics indicators were triggered."
+          "No anti-forensics indicators were triggered.",
+          "1 file(s) and folder(s) are only in earlier sessions of this disc (found through their VATs): a later session removed them."
         ],
         "orphans": 0,
         "os": null,
@@ -39,7 +41,7 @@
         "top_ext": [
           [
             "txt",
-            3
+            4
           ]
         ],
         "users": []

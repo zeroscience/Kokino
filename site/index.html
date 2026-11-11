@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; connect-src https://api.github.com; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Kokino Forensic Toolkit</title>
+<meta name="description" content="Kokino Forensic Toolkit (Kokino FTK): open-source disk forensics by Zero Science Lab. One portable binary with a browser GUI for Windows, Linux and macOS. Every finding, traceable to the byte.">
+<link rel="icon" href="img/favicon.png" type="image/png">
+<link rel="stylesheet" href="css/site.css">
+<script src="js/site.js" defer></script>
+</head>
+<body>
+<div class="ambient" id="ambient" aria-hidden="true"></div>
+
+<header class="top">
+  <a class="brand" href="#top" aria-label="Kokino Forensic Toolkit">
+    <span class="eyes" role="img" aria-label="Kokino logo: detail of a painting by Siebe Boersma"></span>
+    <span class="wordmark" role="img" aria-label="Kokino Forensic Toolkit"><i class="wm-main"></i><i class="wm-sub"></i><i class="wm-acc"></i></span>
+  </a>
+  <nav class="nav" id="nav">
+    <a href="#features">Features</a>
+    <a href="#download">Download</a>
+    <a href="#start">Get started</a>
+    <a href="#docs">Docs</a>
+    <a href="#faq">FAQ</a>
+    <a href="#about">About</a>
+    <a href="https://github.com/zeroscience/Kokino" rel="noopener">GitHub</a>
+  </nav>
+  <button class="ghost theme" id="theme" type="button" title="Light or dark">Theme</button>
+  <button class="ghost menu" id="menu" type="button" aria-controls="nav" aria-expanded="false">Menu</button>
+</header>
+
+<main id="top">
+
+<section class="hero">
+  <div class="hero-text">
+    <span class="pill" id="version">Open source, Apache-2.0</span>
+    <h1>Every finding, traceable to the byte.</h1>
+    <p class="lead">Kokino Forensic Toolkit is an open-source digital forensics workbench for disk images. One portable program with a browser interface, on Windows, Linux and macOS, alone on a workstation or for a whole lab.</p>
+    <p class="muted">Give it an E01, raw or virtual disk, a disc image or a triage collection, and it reads every volume down to the last record, live and deleted, brings back what was erased, and rebuilds what happened on the machine. Every finding links to the bytes it came from, and every examiner action lands in a hash-chained audit log.</p>
+    <div class="row">
+      <a class="btn primary" href="#download">Download</a>
+      <a class="btn" href="https://github.com/zeroscience/Kokino" rel="noopener">Source on GitHub</a>
+    </div>
+  </div>
+  <figure class="painting">
+    <div class="frame"><img src="img/painting.jpg" alt="Painting by Siebe Boersma: a face in sweeping strokes of ochre, olive and brown, with blue skin and green eyes looking out" width="900" height="1182"></div>
+    <figcaption>Painting by <a href="https://siebeboersma.nl/" rel="noopener">Siebe Boersma</a> (NL)</figcaption>
+  </figure>
+</section>
+
+<section id="features">
+  <h2>What it reads</h2>
+  <div class="grid">
+    <div class="card"><h3>Images and volumes</h3><p>E01 (with its stored hash checked), raw and split raw, VHD, VHDX and VMDK with snapshot chains, ISO and UDF discs. BitLocker volumes unlocked with a password, recovery password or startup key; every Volume Shadow Copy as a volume of its own.</p></div>
+    <div class="card"><h3>File systems</h3><p>NTFS, FAT12/16/32, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF: every record, live and deleted, with deleted names recovered from slack, journals and old tree nodes.</p></div>
+    <div class="card"><h3>Windows</h3><p>Registry (deleted keys too), event logs, Prefetch, LNK, Jump Lists, ShellBags, ShimCache, Amcache, BAM, SRUM, scheduled tasks and the NTFS change journal.</p></div>
+    <div class="card"><h3>Linux and macOS</h3><p>Accounts, logons, auth and system logs, journald, cron, systemd, shell histories and SSH keys; macOS accounts, launchd persistence, quarantine events, KnowledgeC, FSEvents and Safari.</p></div>
+    <div class="card"><h3>Web and email</h3><p>Chrome, Edge, Firefox, Safari and Internet Explorer history, downloads and cookies, records carved from free space; Outlook PST and OST, Apple Mail, mbox and .eml.</p></div>
+    <div class="card"><h3>Collections</h3><p>Velociraptor, KAPE and UAC triage collections, and plain folders, read as file systems with every artifact found where it was on the collected system.</p></div>
+    <div class="card"><h3>Analysis</h3><p>Timelines (one per item and one for the whole case), full-text search, file carving, picture forensics, hash sets and hash analysis, anti-forensics indicators with a scored likelihood that explains itself.</p></div>
+    <div class="card"><h3>Case work</h3><p>Correlation across evidence items, a watchlist that sweeps a case for known indicators, bookmarks and tags, case reports in HTML and Word, CSV and JSON exports.</p></div>
+    <div class="card"><h3>Built to be trusted</h3><p>Evidence opened read-only; accounts, roles and a hash-chained audit log; checked against NIST and Digital Corpora test images; every parser fuzzed; no unsafe Rust; a signed SBOM and build provenance with every release.</p></div>
+  </div>
+</section>
+
+<section id="download">
+  <h2>Download</h2>
+  <p class="muted" id="dl-intro">The latest release, with its notes and every file, is on <a href="https://github.com/zeroscience/Kokino/releases/latest" rel="noopener">GitHub Releases</a>.</p>
+  <div class="grid three">
+    <div class="card dl">
+      <h3>Windows 10 and 11</h3>
+      <p class="muted">64-bit (x64). The installer adds Kokino to the Start menu and upgrades an installed version in place.</p>
+      <div class="row" data-assets="windows"><a class="btn primary" href="https://github.com/zeroscience/Kokino/releases/latest" rel="noopener">Releases</a></div>
+    </div>
+    <div class="card dl">
+      <h3>Linux</h3>
+      <p class="muted">x86_64. A .deb for Debian, Ubuntu and Kali, or a .tar.gz for anything else. Start with <code>kokino serve</code>.</p>
+      <div class="row" data-assets="linux"><a class="btn primary" href="https://github.com/zeroscience/Kokino/releases/latest" rel="noopener">Releases</a></div>
+    </div>
+    <div class="card dl">
+      <h3>macOS 12 and later</h3>
+      <p class="muted">One universal DMG for Intel and Apple Silicon. Double-click "Start Kokino".</p>
+      <div class="row" data-assets="macos"><a class="btn primary" href="https://github.com/zeroscience/Kokino/releases/latest" rel="noopener">Releases</a></div>
+    </div>
+  </div>
+  <div class="card note">
+    <p><b>Check what you downloaded.</b> Every release has <code>SHA256SUMS.txt</code>, a CycloneDX SBOM listing every component, and a signed build provenance attestation for every file, which ties it to the build that made it:</p>
+    <pre>gh attestation verify kokino-&lt;version&gt;-windows-x64.msi --repo zeroscience/Kokino</pre>
+    <p class="muted">The packages are not code-signed yet. On Windows choose "More info", then "Run anyway"; on macOS right-click "Start Kokino", choose Open, then Open again.</p>
+  </div>
+</section>
+
+<section id="start">
+  <h2>Get started</h2>
+  <ol class="steps">
+    <li><b>Install and start.</b> Kokino starts a small server on this machine (127.0.0.1) and opens your browser. Nothing is reachable from the network unless you ask for it.</li>
+    <li><b>Create the first account.</b> On first start Kokino shows a one-time setup link that creates the administrator account. Examiners and reviewers are added under Users.</li>
+    <li><b>Open a case and add evidence.</b> Pick an image, a disc, a collection or a folder. Kokino hashes it, checks it against the acquisition hash, and analyzes every volume.</li>
+    <li><b>Work through it.</b> Summary, Explorer, Timeline, System summary, Search, Carved files, Pictures, Web activity, Email and Hex, then bookmarks and the case report.</li>
+  </ol>
+  <h3>Command line</h3>
+  <p class="muted">The same engine without the browser, for scripting and batch work:</p>
+<pre>kokino analyze disk.E01 --json analysis.json   # summary on screen, everything as JSON
+kokino hash disk.E01                           # MD5, SHA-1, SHA-256; checks the E01 stored hash
+kokino files disk.E01 --extract out/           # every file, live and deleted, with hashes
+kokino carve disk.E01                          # carved files with offset, length and hashes
+kokino verify-audit &lt;case folder&gt;              # checks the hash chain of a case's audit log</pre>
+  <h3>A lab server</h3>
+  <p class="muted">For examiners working from their own machines. LAN mode always uses HTTPS, with your certificate or a self-signed one:</p>
+<pre>kokino serve --listen 0.0.0.0 --port 8443 --hostname forensics.lab</pre>
+</section>
+
+<section id="docs">
+  <h2>Documentation</h2>
+  <div class="grid">
+    <div class="card"><h3>Built-in wiki</h3><p>Every page of Kokino is explained in its own wiki (Help, then Wiki): what each view shows, where it comes from and what it cannot tell you. It ships with the program and works offline.</p></div>
+    <div class="card"><h3>On GitHub</h3>
+      <ul class="links">
+        <li><a href="https://github.com/zeroscience/Kokino#readme" rel="noopener">README</a>: features, install, build</li>
+        <li><a href="https://github.com/zeroscience/Kokino/blob/main/VALIDATION.md" rel="noopener">Validation</a>: results on public test images</li>
+        <li><a href="https://github.com/zeroscience/Kokino/blob/main/SECURITY.md" rel="noopener">Security</a>: threat model, fuzzing, reporting</li>
+        <li><a href="https://github.com/zeroscience/Kokino/blob/main/docs/ARCHITECTURE.md" rel="noopener">Architecture</a>: how it is built</li>
+        <li><a href="https://github.com/zeroscience/Kokino/blob/main/ROADMAP.md" rel="noopener">Roadmap</a> and <a href="https://github.com/zeroscience/Kokino/blob/main/CHANGELOG.md" rel="noopener">changelog</a></li>
+      </ul>
+    </div>
+    <div class="card"><h3>Coming next</h3><p>Already built and on its way to the next release: STIX 2.1 and MISP watchlists with new-hit comparison, plugins for artifacts Kokino does not read itself, CD-R and DVD-RW discs (UDF virtual and sparable partitions), ESXi snapshots, JPEGs carved from two pieces, and more from SRUM.</p></div>
+  </div>
+</section>
+
+<section id="faq">
+  <h2>FAQ</h2>
+  <div class="faq">
+    <details><summary>Is it free?</summary><p>Yes. Kokino is open source under the Apache License 2.0, for any use, including commercial casework.</p></details>
+    <details><summary>Does it send anything anywhere?</summary><p>No. Kokino never contacts anything on its own. The only request it can make is the update check on the About page, and only when you press the button; it is recorded in the system audit log.</p></details>
+    <details><summary>Can it change the evidence?</summary><p>No. Evidence is only ever opened read-only. Edits in the hex view are an overlay kept in the case and applied only when you export.</p></details>
+    <details><summary>How do I know the results are right?</summary><p>They are checked against public test images that come with independent ground truth: NIST CFReDS deleted-file recovery images, Digital Corpora disks, and test images from the dfvfs and libyal projects. Every number is in VALIDATION.md, with the steps to repeat the check. Every parser is also fuzzed, and every commit is checked against recorded results on Windows, Linux and macOS.</p></details>
+    <details><summary>Can several examiners work on the same case?</summary><p>Yes. Run Kokino as a lab server: examiners sign in from their own browsers, each case has its members with their roles (examiner or reviewer), and every action is in the case's hash-chained audit log.</p></details>
+    <details><summary>Where are cases kept?</summary><p>In a folder on the machine that runs Kokino (KokinoCases in your home folder, or the one you choose). Images stay where they are; the case keeps the analysis, bookmarks, exports and the audit log.</p></details>
+    <details><summary>Why do Windows and macOS warn about the download?</summary><p>The packages are not code-signed with a publisher certificate yet. Check them against SHA256SUMS.txt or verify their signed build provenance with gh attestation verify.</p></details>
+    <details><summary>How do I report a bug or a security issue?</summary><p>Bugs and ideas: a GitHub issue, or lab@zeroscience.mk. Security issues: privately to lab@zeroscience.mk, not in a public issue. A small sample that shows the problem helps most.</p></details>
+  </div>
+</section>
+
+<section id="about">
+  <h2>About</h2>
+  <div class="grid two">
+    <div class="card">
+      <h3>The name</h3>
+      <p>Kokino Forensic Toolkit is named after the Kokino observatory, a Bronze Age megalithic site from around the 19th century BC near Kumanovo, in the northeast of North Macedonia. Stone markers cut into the rock there follow the Sun and the Moon on the horizon: people reading time from traces, as this toolkit does from the bytes on a disk.</p>
+      <p>The logo is a detail of a painting by <a href="https://siebeboersma.nl/" rel="noopener">Siebe Boersma</a>, used with thanks.</p>
+    </div>
+    <div class="card">
+      <h3>Zero Science Lab</h3>
+      <p>Kokino is made by <a href="https://www.zeroscience.mk" rel="noopener">Zero Science Lab</a> in North Macedonia <img class="flag" src="img/flag-mk.svg" alt="North Macedonia" width="21" height="11">.</p>
+      <ul class="links">
+        <li>Email: <a href="mailto:lab@zeroscience.mk">lab@zeroscience.mk</a></li>
+        <li>GitHub: <a href="https://github.com/zeroscience/Kokino" rel="noopener">zeroscience/Kokino</a></li>
+        <li>License: Apache License 2.0</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <span>Kokino Forensic Toolkit by Zero Science Lab</span>
+  <span class="muted">This site sets no cookies and loads nothing from other sites; the download buttons ask GitHub for the latest release.</span>
+</footer>
+</body>
+</html>

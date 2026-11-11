@@ -21,6 +21,10 @@ with their checksums and CRCs).
                                       sector maps them to physical blocks,
                                       which are not in order. File data is
                                       in the physical partition (long_ad).
+                                      An earlier session's VAT is still on
+                                      the disc: its root listed
+                                      draft-old.txt, which the last session
+                                      removed.
 
 The tree on both (invented data):
 
@@ -205,6 +209,7 @@ REPORT = (b"Quarterly report line, lab.test internal.\n" * 120)[:5000]
 MOVED = b"This block was moved to the spare area (test data).\n"
 STALE = b"STALE COPY left where the packet used to be (test data).\n"
 SESSION = b"Written in the last session of a CD-R (test data).\n"
+DRAFT = b"Early draft, removed in the second session (test data).\n"
 
 
 def common_vds(disc, label, part_start, part_len, access, maps, fsd_lbn, fsd_part):
@@ -269,10 +274,24 @@ def vat():
         phys(20 + i, pad(REPORT[i * BS:(i + 1) * BS]))
     v(5, file_entry(5, 5, len(SESSION), long_ad(len(SESSION), 30, 0), 1, 20))
     phys(30, pad(SESSION))
+    # Session 1: an older root (physical block 35) that also listed
+    # draft-old.txt (virtual block 6, file entry at 36, data at 31), and
+    # its VAT (data at 37, file entry at 38). Session 2 rewrote the root.
+    old_root = fid("", 1, 1, is_dir=True, parent=True) + fid("README.TXT", 3, 1) + fid("docs", 2, 1, is_dir=True) + fid("draft-old.txt", 6, 1)
+    phys(35, file_entry(1, 4, len(old_root), old_root, 3, 16, links=2))
+    phys(36, file_entry(6, 5, len(DRAFT), long_ad(len(DRAFT), 31, 0), 1, 22))
+    phys(31, pad(DRAFT))
+    old_where = dict(where)
+    old_where.update({1: 35, 5: 0xFFFFFFFF, 6: 36})
+    hdr1 = struct.pack("<HH", 152, 0) + dstring("KOKINO_CDR", 128) + struct.pack("<IIIHHHH", 0xFFFFFFFF, 3, 2, 0x0201, 0x0201, 0x0201, 0)
+    table1 = hdr1 + b"".join(struct.pack("<I", old_where[i]) for i in range(7))
+    phys(37, pad(table1))
+    phys(38, file_entry(38, 248, len(table1), struct.pack("<II", len(table1), 37), 0, 23))
+    where[6] = 0xFFFFFFFF
     # VAT (UDF 2.00): header, then one entry per virtual block.
     hdr = struct.pack("<HH", 152, 0) + dstring("KOKINO_CDR", 128) + struct.pack("<IIIHHHH", 0xFFFFFFFF, 3, 2, 0x0201, 0x0201, 0x0201, 0)
     assert len(hdr) == 152
-    table = hdr + b"".join(struct.pack("<I", where[i]) for i in range(6))
+    table = hdr + b"".join(struct.pack("<I", where[i]) for i in range(7))
     last = total - 1
     phys(last - 1 - PSTART, pad(table))
     disc.put(last, file_entry(last - PSTART, 248, len(table), struct.pack("<II", len(table), last - 1 - PSTART), 0, 21))

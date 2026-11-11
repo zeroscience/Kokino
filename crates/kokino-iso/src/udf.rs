@@ -12,7 +12,10 @@
 //! (CD-R and DVD-R written incrementally: blocks are numbered through the
 //! VAT, the virtual allocation table recorded at the end of the last
 //! session, in the UDF 1.50 and 2.00 layouts); and the metadata partition
-//! of UDF 2.50 and later. VATs of earlier sessions are not followed.
+//! of UDF 2.50 and later. Every session of a write-once disc ends with its
+//! own VAT: the older ones still describe the disc as it was, so files
+//! that a later session removed are listed as deleted, from the session
+//! that still had them.
 
 use crate::{civil_ft, le16, le32, le64, rd, ROOT_RECORD};
 use kokino_ntfs::{Extent, FsEntry, NtfsVolumeInfo, Stream, Times, UnixMeta};
@@ -43,6 +46,7 @@ enum Map {
 const MAX_VAT_ENTRIES: usize = 1 << 22;
 const MAX_SPARING_ENTRIES: usize = 1 << 16;
 
+#[derive(Clone)]
 pub struct UdfVolume {
     pub block: u64,
     pub label: String,
@@ -52,7 +56,17 @@ pub struct UdfVolume {
     root: (u64, u16),
     pub notes: Vec<String>,
     pub created: u64,
+    /// The file set descriptor: (block, partition reference).
+    fsd: (u64, usize),
+    /// The virtual map, and the VATs of earlier sessions (sector, table),
+    /// newest first.
+    virt: Option<usize>,
+    old_vats: Vec<(u64, Vec<u32>)>,
 }
+
+/// How much of a disc is searched for the VATs of earlier sessions.
+const MAX_VAT_SEARCH: u64 = 8 << 30;
+const MAX_OLD_VATS: usize = 64;
 
 fn tag(b: &[u8]) -> u16 {
     le16(b, 0) as u16
@@ -219,13 +233,20 @@ pub fn open<R: Read + Seek>(r: &mut R, size: u64) -> anyhow::Result<UdfVolume> {
         root: (0, 0),
         notes,
         created,
+        fsd: (le32(fsd_ad, 4), le16(fsd_ad, 8) as usize),
+        virt: None,
+        old_vats: vec![],
     };
     // Virtual partitions: the VAT is recorded last, so it is looked for from
     // the end of the image back.
     for (mi, pn) in virtual_pn {
         let phys = (0..v.maps.len()).find(|&i| i != mi && matches!(v.maps[i], Map::Physical { .. }) && parts.iter().any(|x| x.0 == pn)).unwrap_or(0);
         match find_vat(&v, r, phys) {
-            Some(vat) => v.maps[mi] = Map::Virtual { phys, vat },
+            Some((at, vat)) => {
+                v.maps[mi] = Map::Virtual { phys, vat };
+                v.virt = Some(mi);
+                v.old_vats = older_vats(&v, r, phys, at);
+            }
             None => v.maps[mi] = Map::Unsupported("*UDF Virtual Partition (no VAT found)".into()),
         }
     }
@@ -253,21 +274,60 @@ pub fn open<R: Read + Seek>(r: &mut R, size: u64) -> anyhow::Result<UdfVolume> {
     Ok(v)
 }
 
-/// The VAT: a file entry near the end of the image whose file type is 248
-/// (UDF 2.00 and later), or whose data ends with "*UDF Virtual Alloc Tbl"
-/// (UDF 1.50). Its entries are blocks of the physical map `phys`.
-fn find_vat<R: Read + Seek>(v: &UdfVolume, r: &mut R, phys: usize) -> Option<Vec<u32>> {
+/// The VAT of the last session: the VAT file entry nearest the end of the
+/// image. Returns its sector and its entries.
+fn find_vat<R: Read + Seek>(v: &UdfVolume, r: &mut R, phys: usize) -> Option<(u64, Vec<u32>)> {
     let last = (v.size / v.block).checked_sub(1)?;
     for back in 0..256u64 {
         let Some(at) = last.checked_sub(back) else { break };
-        let Ok(fe) = rd(r, at * v.block, v.block as usize) else { continue };
+        if let Some(vat) = vat_at(v, r, phys, at) {
+            return Some((at, vat));
+        }
+    }
+    None
+}
+
+/// VATs of earlier sessions: VAT file entries (type 248) before the
+/// current one, newest first.
+fn older_vats<R: Read + Seek>(v: &UdfVolume, r: &mut R, phys: usize, current: u64) -> Vec<(u64, Vec<u32>)> {
+    let mut out = vec![];
+    let bs = v.block as usize;
+    let end = current.min(MAX_VAT_SEARCH / v.block);
+    let chunk = ((1u64 << 20) / v.block).max(1);
+    let mut s = 0u64;
+    while s < end {
+        let n = chunk.min(end - s);
+        let Ok(buf) = rd(r, s * v.block, (n * v.block) as usize) else { break };
+        for (i, b) in buf.chunks_exact(bs).enumerate() {
+            if matches!(tag(b), 261 | 266) && b.get(27) == Some(&248) {
+                if let Some(vat) = vat_at(v, r, phys, s + i as u64) {
+                    out.push((s + i as u64, vat));
+                }
+            }
+        }
+        if buf.len() < (n * v.block) as usize {
+            break;
+        }
+        s += n;
+    }
+    out.reverse();
+    out.truncate(MAX_OLD_VATS);
+    out
+}
+
+/// The VAT whose file entry is at sector `at`: a file entry whose file type
+/// is 248 (UDF 2.00 and later), or whose data ends with "*UDF Virtual Alloc
+/// Tbl" (UDF 1.50). Its entries are blocks of the physical map `phys`.
+fn vat_at<R: Read + Seek>(v: &UdfVolume, r: &mut R, phys: usize, at: u64) -> Option<Vec<u32>> {
+    {
+        let fe = rd(r, at * v.block, v.block as usize).ok()?;
         if fe.len() < 176 || !matches!(tag(&fe), 261 | 266) {
-            continue;
+            return None;
         }
         let ftype = fe[27];
         let (exts, size) = v.map_file(r, at * v.block, phys);
         if size < 4 || size > MAX_VAT_ENTRIES as u64 * 4 + 4096 {
-            continue;
+            return None;
         }
         let mut d = vec![];
         for x in exts {
@@ -289,17 +349,16 @@ fn find_vat<R: Read + Seek>(v: &UdfVolume, r: &mut R, phys: usize) -> Option<Vec
         let entries: &[u8] = if ftype == 248 {
             let hd = le16(&d, 0) as usize;
             if hd < 152 || hd > d.len() {
-                continue;
+                return None;
             }
             &d[hd..]
         } else if d.len() >= 36 && d[d.len() - 36..].windows(22).any(|w| w == b"*UDF Virtual Alloc Tbl") {
             &d[..d.len() - 36]
         } else {
-            continue;
+            return None;
         };
-        return Some(entries.chunks_exact(4).take(MAX_VAT_ENTRIES).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect());
+        Some(entries.chunks_exact(4).take(MAX_VAT_ENTRIES).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
     }
-    None
 }
 
 /// One allocation descriptor, resolved to a partition reference.
@@ -470,9 +529,73 @@ pub fn scan<R: Read + Seek>(v: &UdfVolume, r: &mut R, mut progress: impl FnMut(u
     let root_fe = rd(r, root_off, v.block as usize)?;
     out.push(file_entry(&root_fe, ROOT_RECORD, ROOT_RECORD, "/".into(), ".".into(), root_off, v.root.1 as usize, true, false, None));
     let mut next = FIRST_RECORD;
-    let mut seen = HashSet::from([root_off]);
-    let mut queue = vec![(ROOT_RECORD, String::new(), root_off, v.root.1 as usize, false)];
+    let deleted_count = walk(v, r, (ROOT_RECORD, String::new(), root_off, v.root.1 as usize), &mut next, &mut out, &mut progress, None)?;
+    let mut notes = v.notes.clone();
+    // Earlier sessions: their trees, through their own VATs; what the
+    // current tree no longer has is listed as deleted.
+    let mut from_sessions = 0usize;
+    if let Some(mi) = v.virt {
+        let now: HashSet<String> = out.iter().map(|e| e.path.to_lowercase()).collect();
+        for (k, (at, vat)) in v.old_vats.iter().enumerate() {
+            let mut ov = v.clone();
+            if let Map::Virtual { phys, .. } = v.maps[mi] {
+                ov.maps[mi] = Map::Virtual { phys, vat: vat.clone() };
+            }
+            let Ok(fsd) = ov.block_read(r, ov.fsd.1, ov.fsd.0) else { continue };
+            if tag(&fsd) != 256 {
+                continue;
+            }
+            let (rl, rp) = (le32(&fsd, 404), le16(&fsd, 408) as usize);
+            let Some(ro) = ov.locate(rp, rl) else { continue };
+            let mut old = vec![];
+            let label = format!("session {} before the last (VAT at sector {})", k + 1, at);
+            let _ = walk(&ov, r, (ROOT_RECORD, String::new(), ro, rp), &mut 0, &mut old, &mut |_, _| true, Some(&label));
+            // Parents by path, so a name under a folder that is gone hangs off it.
+            let mut by_path: std::collections::HashMap<String, u64> = out.iter().map(|e| (e.path.to_lowercase(), e.record)).collect();
+            for mut e in old {
+                let key = e.path.to_lowercase();
+                if now.contains(&key) || by_path.contains_key(&key) {
+                    continue;
+                }
+                let parent_path = e.path.rsplit_once('/').map(|x| x.0).filter(|p| !p.is_empty()).unwrap_or("/").to_lowercase();
+                e.parent = by_path.get(&parent_path).copied().unwrap_or(ROOT_RECORD);
+                e.record = next;
+                next += 1;
+                e.deleted = true;
+                by_path.insert(key, e.record);
+                from_sessions += 1;
+                out.push(e);
+                if out.len() > MAX_ENTRIES {
+                    break;
+                }
+            }
+        }
+    }
+    progress(out.len() as u64, out.len() as u64);
+    if deleted_count > 0 {
+        notes.push(format!(
+            "{} deleted UDF directory {} still {} a name; content is shown when the file entry it points to is intact, which cannot be guaranteed.",
+            deleted_count,
+            if deleted_count == 1 { "entry" } else { "entries" },
+            if deleted_count == 1 { "holds" } else { "hold" }
+        ));
+    }
+    if from_sessions > 0 {
+        notes.push(format!("{} file(s) and folder(s) are only in earlier sessions of this disc (found through their VATs): a later session removed them.", from_sessions));
+    }
+    let info = v.info(out.len() as u64);
+    Ok(UdfScan { info, entries: out, notes })
+}
+
+/// Walks a directory tree from `start` (record, path, file entry offset,
+/// partition), adding entries to `out`. `session`: the earlier session the
+/// tree is from, noted on each entry. Returns the deleted names seen.
+#[allow(clippy::type_complexity)]
+fn walk<R: Read + Seek>(v: &UdfVolume, r: &mut R, start: (u64, String, u64, usize), next: &mut u64, out: &mut Vec<FsEntry>, progress: &mut dyn FnMut(u64, u64) -> bool, session: Option<&str>) -> anyhow::Result<u64> {
+    let mut seen = HashSet::from([start.2]);
+    let mut queue = vec![(start.0, start.1, start.2, start.3, false)];
     let mut deleted_count = 0u64;
+    let base = out.len();
     while let Some((parent, path, fe_off, part, parent_deleted)) = queue.pop() {
         if out.len() % 4096 == 0 && !progress(out.len() as u64, out.len() as u64 + queue.len() as u64) {
             anyhow::bail!("scan cancelled");
@@ -517,12 +640,14 @@ pub fn scan<R: Read + Seek>(v: &UdfVolume, r: &mut R, mut progress: impl FnMut(u
             let fe = rd(r, child_off, v.block as usize)?;
             let is_dir_fid = ch & 2 != 0;
             let fe_ok = matches!(tag(&fe), 261 | 266);
-            let record = next;
-            next += 1;
+            let record = *next;
+            *next += 1;
             if deleted {
                 deleted_count += 1;
             }
-            let note = if deleted && !fe_ok {
+            let note = if let Some(s) = session {
+                Some(format!("only in an earlier session of the disc ({}); the current session no longer lists it", s))
+            } else if deleted && !fe_ok {
                 Some("deleted entry: its file entry has been reused or cleared, so only the name is left".to_string())
             } else if deleted {
                 Some("deleted entry still in its directory; the file entry it points to may since belong to another file".to_string())
@@ -540,12 +665,9 @@ pub fn scan<R: Read + Seek>(v: &UdfVolume, r: &mut R, mut progress: impl FnMut(u
                 });
                 e
             };
-            if e.is_dir && fe_ok && seen.insert(child_off) && !deleted {
+            // Deleted folders are walked too: their hierarchy is still worth reading.
+            if e.is_dir && fe_ok && seen.insert(child_off) {
                 queue.push((record, child_path, child_off, ipart, deleted));
-            }
-            // Directory hierarchy of a deleted folder is still worth reading.
-            else if e.is_dir && fe_ok && deleted && seen.insert(child_off) {
-                queue.push((record, child_path, child_off, ipart, true));
             }
             e.attributes |= part_bits(ipart);
             // Where the content starts, for the hex view.
@@ -556,23 +678,12 @@ pub fn scan<R: Read + Seek>(v: &UdfVolume, r: &mut R, mut progress: impl FnMut(u
                 }
             }
             out.push(e);
-            if out.len() > MAX_ENTRIES {
-                break;
+            if out.len() - base > MAX_ENTRIES {
+                return Ok(deleted_count);
             }
         }
     }
-    progress(out.len() as u64, out.len() as u64);
-    let mut notes = v.notes.clone();
-    if deleted_count > 0 {
-        notes.push(format!(
-            "{} deleted UDF directory {} still {} a name; content is shown when the file entry it points to is intact, which cannot be guaranteed.",
-            deleted_count,
-            if deleted_count == 1 { "entry" } else { "entries" },
-            if deleted_count == 1 { "holds" } else { "hold" }
-        ));
-    }
-    let info = v.info(out.len() as u64);
-    Ok(UdfScan { info, entries: out, notes })
+    Ok(deleted_count)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -686,19 +797,36 @@ mod tests {
         assert!(v.notes.is_empty(), "{:?}", v.notes);
         let s = scan(&v, &mut f, |_, _| true).unwrap();
         let paths: Vec<&str> = s.entries.iter().map(|e| e.path.as_str()).collect();
-        assert_eq!(paths.len(), 5, "{:?}", paths);
+        assert_eq!(paths.len(), 6, "{:?}", paths);
         let by = |p: &str| s.entries.iter().find(|e| e.path == p).unwrap_or_else(|| panic!("{} missing in {:?}", p, paths));
         assert_eq!(v.read(&mut f, by("/session.txt"), 0, 100).unwrap(), b"Written in the last session of a CD-R (test data).
 ");
         assert_eq!(v.read(&mut f, by("/docs/report.txt"), 0, 5000).unwrap().len(), 5000);
         assert!(by("/docs").is_dir);
-        // Without its VAT the virtual partition cannot be read, and says so.
+        assert!(s.entries.iter().filter(|e| e.path != "/draft-old.txt").all(|e| !e.deleted));
+        // Removed by the last session; the earlier session's VAT still has it.
+        let draft = by("/draft-old.txt");
+        assert!(draft.deleted && draft.error.as_deref().unwrap_or("").starts_with("only in an earlier session of the disc (session 1 before the last"), "{:?}", draft.error);
+        assert_eq!(v.read(&mut f, draft, 0, 100).unwrap(), b"Early draft, removed in the second session (test data).\n");
+        assert!(s.notes.iter().any(|n| n.starts_with("1 file(s) and folder(s) are only in earlier sessions")), "{:?}", s.notes);
+        // Without the last session's VAT (a session never closed), the disc
+        // reads as the earlier session left it.
         let mut cut = vec![0u8; size as usize - 2048];
         use std::io::{Read as _, Seek as _};
         f.seek(std::io::SeekFrom::Start(0)).unwrap();
         f.read_exact(&mut cut).unwrap();
         let mut c = std::io::Cursor::new(cut.clone());
-        match open(&mut c, cut.len() as u64) {
+        let v1 = open(&mut c, cut.len() as u64).unwrap();
+        let s1 = scan(&v1, &mut c, |_, _| true).unwrap();
+        let p1: Vec<&str> = s1.entries.iter().filter(|e| !e.deleted).map(|e| e.path.as_str()).collect();
+        assert!(p1.contains(&"/draft-old.txt") && !p1.contains(&"/session.txt"), "{:?}", p1);
+        // With no VAT at all, the virtual partition cannot be read, and says so.
+        let mut none = cut.clone();
+        for k in [37usize, 38] {
+            none[(300 + k) * 2048..(301 + k) * 2048].fill(0);
+        }
+        let mut c = std::io::Cursor::new(none.clone());
+        match open(&mut c, none.len() as u64) {
             Ok(v) => assert!(v.notes.iter().any(|n| n.contains("no VAT found")), "{:?}", v.notes),
             Err(e) => assert!(e.to_string().contains("outside"), "{}", e),
         }

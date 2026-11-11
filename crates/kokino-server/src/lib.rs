@@ -70,6 +70,8 @@ pub struct ServerConfig {
     pub tls: Tls,
     /// DNS names examiners use to reach the server (LAN mode).
     pub hostnames: Vec<String>,
+    /// Folder of plugins examiners may run (none: plugins are off).
+    pub plugins: Option<PathBuf>,
 }
 
 pub struct Running {
@@ -96,7 +98,9 @@ pub async fn start(cfg: ServerConfig) -> anyhow::Result<Running> {
     listener.set_nonblocking(true)?;
     let port = listener.local_addr()?.port();
     let hostnames: Vec<String> = cfg.hostnames.iter().map(|h| h.trim().to_ascii_lowercase()).filter(|h| !h.is_empty()).collect();
-    let st = Arc::new(AppState::new(cfg.cases_root.clone(), port, !matches!(tls, Tls::Off), hostnames.clone())?);
+    let mut state = AppState::new(cfg.cases_root.clone(), port, !matches!(tls, Tls::Off), hostnames.clone())?;
+    state.plugins = cfg.plugins.clone();
+    let st = Arc::new(state);
 
     let app = Router::new()
         .nest("/api", api::routes().merge(auth::routes()).layer(middleware::from_fn_with_state(st.clone(), auth::guard)))

@@ -1,0 +1,2 @@
+Users/*/AppData/**/*.db
+/Users/alice/AppData/Local/x/y/z.db

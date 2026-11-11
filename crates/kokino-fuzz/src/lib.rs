@@ -37,6 +37,7 @@ pub const TARGETS: &[Target] = &[
     Target { name: "pst", run: pst, seeds: &["crates/kokino-fuzz/seeds/pst"] },
     Target { name: "plist", run: plist, seeds: &["crates/kokino-fuzz/seeds/plist"] },
     Target { name: "ioc", run: ioc, seeds: &["crates/kokino-fuzz/seeds/ioc"] },
+    Target { name: "plugin", run: plugin, seeds: &["crates/kokino-fuzz/seeds/plugin"] },
     Target { name: "fsevents", run: fsevents, seeds: &["crates/kokino-fuzz/seeds/fsevents"] },
     Target { name: "webcache", run: webcache, seeds: &["tests/fixtures/win/WebCacheV01.dat"] },
     Target { name: "zip", run: zipfs, seeds: &["crates/kokino-fuzz/seeds/zip", "tests/fixtures/iso-rr-joliet.iso"] },
@@ -403,6 +404,17 @@ fn pst(d: &[u8]) {
 }
 
 /// Apple property lists, binary and XML, and every value walked.
+/// What a plugin prints, and the patterns that pick its files.
+fn plugin(d: &[u8]) {
+    let text = String::from_utf8_lossy(d);
+    let _ = kokino_analysis::plugins::parse_output(&text);
+    let mut lines = text.lines();
+    if let (Some(p), Some(t)) = (lines.next(), lines.next()) {
+        let _ = kokino_analysis::plugins::glob(p, t);
+        let _ = kokino_analysis::plugins::glob(t, p);
+    }
+}
+
 fn ioc(d: &[u8]) {
     use kokino_analysis::ioc::*;
     let text = String::from_utf8_lossy(d);

@@ -261,6 +261,68 @@ pub fn spawn_carve(st: Arc<AppState>, user: &str, cid: String, eid: String) -> A
     job
 }
 
+/// Runs the chosen plugins over analyzed evidence.
+pub fn spawn_plugins(st: Arc<AppState>, user: &str, cid: String, eid: String, chosen: Vec<kokino_analysis::plugins::Plugin>) -> Arc<Job> {
+    let job = new_job(&st, "plugins", user, &cid, &eid);
+    let j = job.clone();
+    tokio::task::spawn_blocking(move || {
+        let user = j.view.lock().unwrap().user.clone();
+        let res = guarded(|| run_plugins(&st, &j, &user, &cid, &eid, &chosen));
+        j.finish(&res);
+    });
+    job
+}
+
+pub fn load_plugins(case: &kokino_core::case::Case, eid: &str) -> Option<kokino_analysis::plugins::PluginResults> {
+    let p = case.plugins_path(eid).ok()?;
+    kokino_core::case::read_json::<kokino_analysis::plugins::PluginResults>(&p).ok().filter(|c| c.schema == kokino_analysis::plugins::PLUGIN_SCHEMA)
+}
+
+/// SHA-256 of every file of a plugin's folder (up to 200 files, 64 MiB
+/// each), as "name sha256" lines: what exactly ran.
+pub fn plugin_fingerprint(dir: &std::path::Path) -> Vec<String> {
+    let mut out = vec![];
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if out.len() >= 200 {
+                return out;
+            }
+            if p.is_dir() {
+                stack.push(p);
+            } else if e.metadata().map(|m| m.len() <= 64 << 20).unwrap_or(false) {
+                if let Ok(f) = std::fs::File::open(&p) {
+                    if let Ok((h, _)) = kokino_core::hashing::hash_reader(f, |_| true) {
+                        out.push(format!("{} {}", p.strip_prefix(dir).unwrap_or(&p).to_string_lossy().replace('\\', "/"), h.sha256));
+                    }
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+fn run_plugins(st: &AppState, job: &Job, user: &str, cid: &str, eid: &str, chosen: &[kokino_analysis::plugins::Plugin]) -> anyhow::Result<()> {
+    let case = st.case(cid)?;
+    let l = st.loaded(cid, eid)?;
+    let res = kokino_analysis::plugins::run(&l.evidence, &l.analysis, chosen, &mut |s, d, t| job.progress(s, d, t))?;
+    let path = case.plugins_path(eid)?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    write_json(&path, &res)?;
+    let ran: Vec<serde_json::Value> = chosen
+        .iter()
+        .zip(&res.runs)
+        .map(|(p, r)| serde_json::json!({"plugin": p.id, "name": p.name, "version": p.version, "command": p.command, "files": r.files, "rows": r.rows.len(), "errors": r.errors.len(), "fingerprint": plugin_fingerprint(&p.dir)}))
+        .collect();
+    case.audit.append(user, "evidence.plugins", serde_json::json!({"evidence": eid, "plugins": ran}))?;
+    Ok(())
+}
+
 /// (Re)analyze the pictures of analyzed evidence.
 pub fn spawn_photos(st: Arc<AppState>, user: &str, cid: String, eid: String) -> Arc<Job> {
     let job = new_job(&st, "photos", user, &cid, &eid);

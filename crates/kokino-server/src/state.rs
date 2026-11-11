@@ -67,6 +67,8 @@ pub struct AppState {
     pub hashsets: kokino_analysis::hashsets::Store,
     cache: Mutex<HashMap<String, Arc<Loaded>>>,
     hash_cache: Mutex<HashMap<String, Arc<HashStatus>>>,
+    /// The folder of plugins the administrator allowed (`serve --plugins`).
+    pub plugins: Option<PathBuf>,
 }
 
 /// Hash analysis of one evidence item, indexed for file listings.
@@ -121,6 +123,7 @@ impl AppState {
             jobs: Mutex::default(),
             bookmarks: Mutex::default(),
             cache: Mutex::default(),
+            plugins: None,
         })
     }
 

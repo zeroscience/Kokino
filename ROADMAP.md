@@ -85,7 +85,7 @@ start or be trusted; most items are blocked on test data rather than code.
 ### 4. More formats
 - [ ] **XFS** (Red Hat and its derivatives default to it). Needs: test images (made with mkfs.xfs) and a parser comparable to ext's.
 - [x] **ESXi snapshots** (VMFSSPARSE, SESPARSE). Checked on images built to QEMU's reading of the formats; a check on snapshots from a real ESXi host is still to do.
-- [x] **UDF virtual (VAT) and sparable partitions** (written CDs and DVDs). Still to do: following the VATs of earlier sessions (files deleted between sessions), and a check on real discs.
+- [x] **UDF virtual (VAT) and sparable partitions** (written CDs and DVDs). Files removed between sessions are listed from the earlier sessions' VATs. Still to do: a check on real discs.
 - [x] **Older journal copies of whole directories** on ext3 and ext4 (names of files deleted long ago, also when their inode was reused).
 - [ ] **macOS unified logs** (tracev3).
 - [x] **Carving of JPEGs in two pieces** (bifragment gap carving, kept only when the joined picture decodes exactly).
@@ -94,7 +94,7 @@ start or be trusted; most items are blocked on test data rather than code.
 ### 5. Workflow
 - [x] **Watchlist from STIX 2.1 and MISP exports**, IP networks (CIDR), and each sweep compared with the previous one (what is new).
 - [ ] **Code-signed Windows and macOS packages.** Needs: a code-signing certificate and an Apple Developer ID; no code.
-- [ ] **Plugin interface** for artifacts Kokino does not read yet (a parser as a separate program reading a file and writing JSON). Needs: a stable output format first.
+- [x] **Plugin interface** for artifacts Kokino does not read yet: a separate program per plugin, given a copy of each matching file, writing JSON rows; off unless the server is started with a plugin folder, each run audited with the plugin's fingerprint. Still to do: plugin rows on the timeline and in the watchlist.
 - [ ] **Optional AI summaries** that only cite linked evidence, off by default and never sending evidence anywhere without the examiner's choice.
 
 Nothing above is promised for a date. If one of these matters to a case you

@@ -185,6 +185,11 @@ impl Case {
     }
 
     /// Picture analysis of one evidence item (findings per image, no copies).
+    /// Results of the plugins run on one evidence item.
+    pub fn plugins_path(&self, eid: &str) -> anyhow::Result<PathBuf> {
+        Ok(self.dir.join("plugins").join(format!("{}.json", safe_id(eid)?)))
+    }
+
     pub fn photos_path(&self, eid: &str) -> anyhow::Result<PathBuf> {
         Ok(self.dir.join("photos").join(format!("{}.json", safe_id(eid)?)))
     }

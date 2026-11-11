@@ -1,0 +1,137 @@
+/* Kokino Forensic Toolkit website - Zero Science Lab. The colors, logo and
+   background follow the application's own (ui/css/app.css). */
+
+:root {
+  --bg: #0b0e11;
+  --bg2: #11161b;
+  --panel: rgba(17, 22, 27, .88);
+  --line: rgba(197, 217, 232, .10);
+  --line2: rgba(197, 217, 232, .18);
+  --text: #e4ebf1;
+  --muted: #8796a3;
+  --accent: #c5d9e8;
+  --accent2: #8fb3d1;
+  --accent-ink: #0f1a24;
+  --grid: rgba(197, 217, 232, .42);
+  --scan: rgba(197, 217, 232, .6);
+  --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas, "SF Mono", Menlo, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
+  --radius: 14px;
+  --ease: cubic-bezier(.22, .8, .24, 1);
+  --shadow: 0 12px 40px rgba(0, 0, 0, .35);
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --bg: #eef2f5;
+  --bg2: #e2e8ee;
+  --panel: rgba(255, 255, 255, .92);
+  --line: rgba(21, 32, 42, .10);
+  --line2: rgba(21, 32, 42, .18);
+  --text: #15202a;
+  --muted: #5b6b78;
+  --accent: #3f6e93;
+  --accent2: #2f5677;
+  --accent-ink: #ffffff;
+  --grid: rgba(47, 86, 119, .55);
+  --scan: rgba(47, 86, 119, .8);
+  --shadow: 0 12px 34px rgba(21, 32, 42, .12);
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 76px; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15.5px/1.6 var(--sans); -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, pre { font-family: var(--mono); font-size: 13px; }
+code { background: var(--line); padding: 1px 5px; border-radius: 5px; }
+pre { background: var(--bg2); border: 1px solid var(--line2); border-radius: 10px; padding: 12px 14px; overflow-x: auto; white-space: pre; }
+h1, h2, h3 { margin: 0; letter-spacing: -.01em; }
+h1 { font-size: clamp(30px, 5vw, 48px); line-height: 1.1; font-weight: 700; }
+h2 { font-size: 26px; font-weight: 650; margin-bottom: 18px; }
+h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 650; margin-bottom: 8px; }
+p { margin: 0 0 10px; }
+.muted { color: var(--muted); }
+
+/* ---------- background: the application's perspective grid ---------- */
+.ambient { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 0; }
+.ambient svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.tunnel-g { transform-origin: 1000px 525px; animation: breathe 22s var(--ease) infinite alternate; }
+@keyframes breathe { from { transform: scale(1); } to { transform: scale(1.045); } }
+.scanline { animation: scan 9s linear infinite; }
+@keyframes scan { 0% { transform: translateY(0); opacity: 0; } 8% { opacity: 1; } 92% { opacity: 1; } 100% { transform: translateY(340px); opacity: 0; } }
+.ambient::after { content: ""; position: absolute; inset: 0; background: radial-gradient(ellipse 62% 58% at center, color-mix(in srgb, var(--bg) 90%, transparent) 0%, color-mix(in srgb, var(--bg) 45%, transparent) 55%, transparent 100%); }
+@media (prefers-reduced-motion: reduce) { .tunnel-g, .scanline { animation: none; } html { scroll-behavior: auto; } }
+
+/* ---------- header ---------- */
+.top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 18px; padding: 12px 24px; background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 12px; }
+.brand:hover { text-decoration: none; }
+.eyes { display: inline-block; flex: none; width: 38px; height: 38px; border-radius: 50%; background: #3a2c10 url(../img/logo-eyes.png) center / 100% no-repeat; box-shadow: 0 0 0 2px var(--bg2), 0 0 0 3.5px var(--accent), 0 6px 18px rgba(0, 0, 0, .35); transition: background-size .9s var(--ease), transform .9s var(--ease); }
+.brand:hover .eyes { background-size: 135%; transform: scale(1.06); }
+.wordmark { position: relative; display: inline-block; width: 128px; aspect-ratio: 640 / 157; }
+.wordmark i { position: absolute; inset: 0; -webkit-mask: center / contain no-repeat; mask: center / contain no-repeat; }
+.wordmark .wm-main { background: var(--text); -webkit-mask-image: url(../img/wordmark-main.png); mask-image: url(../img/wordmark-main.png); }
+.wordmark .wm-sub { background: var(--muted); -webkit-mask-image: url(../img/wordmark-sub.png); mask-image: url(../img/wordmark-sub.png); }
+.wordmark .wm-acc { background: var(--accent); -webkit-mask-image: url(../img/wordmark-accent.png); mask-image: url(../img/wordmark-accent.png); }
+.nav { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; }
+.nav a { color: var(--text); padding: 6px 10px; border-radius: 8px; font-size: 14.5px; }
+.nav a:hover { background: var(--line); text-decoration: none; }
+button { font: inherit; color: var(--text); cursor: pointer; }
+.ghost { background: none; border: 1px solid var(--line2); border-radius: 8px; padding: 6px 10px; font-size: 13.5px; }
+.ghost:hover { background: var(--line); }
+.menu { display: none; }
+
+/* ---------- layout ---------- */
+main { position: relative; z-index: 1; max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+section { padding: 56px 0 24px; }
+.hero { display: grid; grid-template-columns: 1.25fr .75fr; gap: 48px; align-items: center; padding-top: 64px; }
+.hero h1 { margin: 14px 0 16px; }
+.lead { font-size: 19px; line-height: 1.55; }
+.pill { display: inline-block; border: 1px solid var(--line2); border-radius: 999px; padding: 3px 12px; font-size: 13px; color: var(--muted); background: var(--panel); }
+.row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border-radius: 10px; border: 1px solid var(--line2); background: var(--panel); color: var(--text); font-weight: 600; font-size: 14.5px; }
+.btn:hover { text-decoration: none; border-color: var(--accent2); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.primary:hover { background: var(--accent2); border-color: var(--accent2); }
+.btn small { font-weight: 500; opacity: .75; }
+.painting { margin: 0; text-align: center; }
+.painting .frame { border-radius: 18px; overflow: hidden; box-shadow: var(--shadow), 0 0 0 1px var(--line2); transform: rotate(-1.5deg); }
+.painting img { display: block; width: 100%; height: auto; }
+.painting figcaption { margin-top: 12px; color: var(--muted); font-size: 13px; }
+
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.grid.two { grid-template-columns: repeat(2, 1fr); }
+.card { background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius); padding: 18px 20px; box-shadow: var(--shadow); }
+.card p:last-child { margin-bottom: 0; }
+.card.note { margin-top: 16px; }
+.dl .row { margin-top: 12px; }
+.links { margin: 0; padding-left: 18px; }
+.links li { margin: 4px 0; }
+.steps { padding-left: 22px; margin: 0 0 24px; }
+.steps li { margin: 0 0 10px; }
+#start h3 { margin-top: 22px; }
+.faq details { background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; padding: 12px 16px; margin-bottom: 10px; }
+.faq summary { cursor: pointer; font-weight: 600; }
+.faq details p { margin: 10px 0 0; color: var(--muted); }
+.flag { vertical-align: -1px; }
+.foot { position: relative; z-index: 1; max-width: 1120px; margin: 40px auto 0; padding: 24px; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; border-top: 1px solid var(--line); font-size: 13.5px; }
+
+/* ---------- small screens ---------- */
+@media (max-width: 900px) {
+  .hero { grid-template-columns: 1fr; gap: 28px; }
+  .painting { max-width: 320px; margin: 0 auto; }
+  .grid, .grid.two { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 720px) {
+  .top { padding: 10px 16px; gap: 10px; flex-wrap: wrap; }
+  .menu { display: inline-block; margin-left: auto; }
+  .theme { order: 2; }
+  .nav { display: none; width: 100%; order: 3; flex-direction: column; margin: 0; }
+  .nav.open { display: flex; }
+  main { padding: 0 16px; }
+  section { padding-top: 40px; }
+  .grid, .grid.two { grid-template-columns: 1fr; }
+  .lead { font-size: 17px; }
+  .foot { padding: 20px 16px; }
+}

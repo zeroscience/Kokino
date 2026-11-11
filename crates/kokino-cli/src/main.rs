@@ -98,6 +98,10 @@ enum Cmd {
         /// Serve HTTPS even on loopback
         #[arg(long)]
         tls: bool,
+        /// Folder of plugins examiners may run (each a folder with a
+        /// plugin.json). Without it plugins are off
+        #[arg(long)]
+        plugins: Option<PathBuf>,
         /// Do not open a browser window
         #[arg(long)]
         no_browser: bool,
@@ -147,6 +151,22 @@ enum Cmd {
     /// each with its image offset, length and hashes
     Carve {
         image: PathBuf,
+        #[command(flatten)]
+        unlock: Unlock,
+        /// One JSON object per line instead of tab-separated text
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run plugins (separate programs, each a folder with a plugin.json)
+    /// over the matching files of an image and print the rows they report
+    Plugins {
+        image: PathBuf,
+        /// Folder holding the plugins
+        #[arg(long)]
+        plugins: PathBuf,
+        /// Only this plugin (its folder name; repeatable)
+        #[arg(long = "only")]
+        only: Vec<String>,
         #[command(flatten)]
         unlock: Unlock,
         /// One JSON object per line instead of tab-separated text
@@ -537,16 +557,20 @@ fn default_cases() -> PathBuf {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_timer(DayFirst).with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).init();
     match Cli::parse().cmd {
-        Cmd::Serve { cases, port, listen, hostnames, tls_cert, tls_key, tls, no_browser } => {
+        Cmd::Serve { cases, port, listen, hostnames, tls_cert, tls_key, tls, plugins, no_browser } => {
             let cases = cases.unwrap_or_else(default_cases);
             let tls = match (tls_cert, tls_key) {
                 (Some(cert), Some(key)) => kokino_server::Tls::Files { cert, key },
                 _ if tls || !listen.is_loopback() => kokino_server::Tls::SelfSigned,
                 _ => kokino_server::Tls::Off,
             };
-            let running = kokino_server::start(kokino_server::ServerConfig { cases_root: cases.clone(), listen, port, tls, hostnames }).await?;
+            let running = kokino_server::start(kokino_server::ServerConfig { cases_root: cases.clone(), listen, port, tls, hostnames, plugins: plugins.clone() }).await?;
             println!("Kokino Forensic Toolkit {} by Zero Science Lab", kokino_core::TOOL_VERSION);
             println!("Cases: {}", cases.display());
+            if let Some(p) = &plugins {
+                let (ok, bad) = kokino_analysis::plugins::load(p);
+                println!("Plugins: {} ({} loaded{})", p.display(), ok.len(), if bad.is_empty() { String::new() } else { format!("; not loaded: {}", bad.join("; ")) });
+            }
             println!("Open:  {}   (on this machine)", running.url);
             for u in &running.lan_urls {
                 println!("       {}   (from other machines)", u);
@@ -577,6 +601,41 @@ async fn main() -> anyhow::Result<()> {
         Cmd::User { cases, cmd } => user_cmd(cases.unwrap_or_else(default_cases), cmd)?,
         Cmd::Hashset { cases, cmd } => hashset_cmd(cases.unwrap_or_else(default_cases), cmd)?,
         Cmd::Purge { cases, confirm } => purge(cases.unwrap_or_else(default_cases), confirm)?,
+        Cmd::Plugins { image, plugins, only, unlock, json } => {
+            let (mut list, bad) = kokino_analysis::plugins::load(&plugins);
+            for b in &bad {
+                eprintln!("not loaded: {}", b);
+            }
+            if !only.is_empty() {
+                list.retain(|p| only.contains(&p.id));
+            }
+            if list.is_empty() {
+                anyhow::bail!("no plugins to run in {}", plugins.display());
+            }
+            let ev = unlock.open(&image)?;
+            let a = kokino_analysis::analyze(&ev, &mut |_, _, _| true)?;
+            let res = kokino_analysis::plugins::run(&ev, &a, &list, &mut |_, _, _| true)?;
+            if !json {
+                println!("plugin\tpath\ttime\twhat\tdetail\tfields");
+            }
+            for r in &res.runs {
+                eprintln!("{} {}: {} file(s), {} row(s), {} error(s)", r.plugin, r.version, r.files, r.rows.len(), r.errors.len());
+                for (p, e) in &r.errors {
+                    eprintln!("  {}: {}", p, e);
+                }
+                for n in &r.notes {
+                    eprintln!("  note: {}", n);
+                }
+                for x in &r.rows {
+                    if json {
+                        println!("{}", serde_json::json!({"plugin": r.plugin, "path": x.path, "time": x.time, "what": x.what, "detail": x.detail, "fields": x.fields}));
+                    } else {
+                        let clean = |s: &str| s.replace(['\t', '\n', '\r'], " ");
+                        println!("{}\t{}\t{}\t{}\t{}\t{}", r.plugin, clean(&x.path), clean(&x.time), clean(&x.what), clean(&x.detail), serde_json::Value::Object(x.fields.clone()));
+                    }
+                }
+            }
+        }
         Cmd::Carve { image, json, unlock } => {
             let ev = unlock.open(&image)?;
             eprintln!("{} ({}, {} bytes)", image.display(), ev.format_label(), ev.size);

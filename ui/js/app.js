@@ -222,7 +222,7 @@ async function pollJobs() {
       if (!ended) continue;
       watchedJobs.delete(j.id);
       delete state.caseCache[j.case];
-      toast(j.state === "done" ? ({ index: "Text index ready", carve: "Carving complete", photos: "Picture analysis complete", hashes: "Hash analysis complete", hashset: "Hash set imported" }[j.kind] || "Analysis complete") : `Job ${j.state}: ${j.error || ""}`, j.state !== "done");
+      toast(j.state === "done" ? ({ index: "Text index ready", carve: "Carving complete", photos: "Picture analysis complete", hashes: "Hash analysis complete", hashset: "Hash set imported", plugins: "Plugins finished" }[j.kind] || "Analysis complete") : `Job ${j.state}: ${j.error || ""}`, j.state !== "done");
       const r = state.route;
       if (r && (r.parts[1] === j.case || (!j.case && r.parts[0] === "hashsets"))) refresh = true;
     }
@@ -338,6 +338,7 @@ function caseNav(c, active, eid, helpActive = null) {
       { href: base + "/web", label: "Web activity", icon: "globe", on: on("web"), sub: true },
       { href: base + "/mail", label: "Email", icon: "mail", on: on("mail"), sub: true },
       { href: base + "/hashes", label: "Hash analysis", icon: "hash", on: on("hashes"), sub: true },
+      { href: base + "/plugins", label: "Plugins", icon: "layers", on: on("plugins"), sub: true },
       { href: base + "/indicators", label: "Anti-forensics", icon: "alert", on: on("indicators"), sub: true },
       { href: base + "/hex", label: "Hex", icon: "hex", on: on("hex"), sub: true },
     );
@@ -740,6 +741,7 @@ async function workspace(cid, eid, tab, q) {
   if (tab === "photos") return photosTab(ctx);
   if (tab === "photo") return photoViewer(ctx);
   if (tab === "hashes") return hashesTab(ctx);
+  if (tab === "plugins") return pluginsTab(ctx);
   if (!ctx.fs) {
     return render(h("div.card.stack", h("h2", "No supported filesystem found"), h("p.muted", "Kokino parses NTFS, FAT12/16/32, exFAT, ext2/3/4, ISO 9660, UDF, HFS+ and APFS. Detected volumes:"), volumeMap(s), ...s.errors.map((e) => h("p", e)), bitlockerCard(ctx), h("a.btn", { href: `#/c/${cid}/e/${eid}/hex` }, "Open in hex")));
   }
@@ -2053,6 +2055,48 @@ async function systemTab(ctx) {
       canWrite() ? h("div", h("button.primary", { onclick: () => reingest(ctx.cid, ctx.eid, false) }, "Re-analyze now")) : h("p.muted", { style: { margin: 0 } }, "Ask an examiner on this case to re-analyze it."))
     : null;
   render(h("div.stack", intro, stale, seg, body));
+}
+
+// ---------------------------------------------------------------- plugins
+async function pluginsTab(ctx) {
+  const { cid, eid } = ctx;
+  const base = `/cases/${cid}/evidence/${eid}/plugins`;
+  const p = await api(base);
+  const filterBox = (ph, on) => { const i = h("input", { placeholder: ph, style: { flex: 1 } }); i.addEventListener("input", debounce(() => on(i.value.toLowerCase()), 150)); return i; };
+  const job = state.jobs.find((j) => j.evidence === eid && j.state === "running");
+  const intro = h("div.hd", h("div", h("h1", "Plugins"), h("div.muted", "Separate programs that read artifacts Kokino does not parse itself. Kokino copies each matching file (live or deleted) out of the evidence and shows the rows the program reports. Each run is recorded in the audit log with the SHA-256 of every file of the plugin.")), h("span.sp"));
+  if (!p.enabled) {
+    return render(h("div.stack", intro, h("div.card.stack",
+      h("p", "Plugins are off on this server. They run only from a folder the administrator names when starting Kokino:"),
+      h("pre.mono", "kokino serve --plugins <folder>"),
+      h("p.muted", { style: { margin: 0 } }, "Each plugin is a folder with a plugin.json; the wiki (Plugins) says how to write one, and the source has an example."))));
+  }
+  const chosen = new Set(p.available.map((x) => x.id));
+  const pick = p.available.length ? h("div.stack", p.available.map((x) => h("label.row", { style: { gap: "8px", alignItems: "flex-start" } },
+    h("input", { type: "checkbox", checked: true, onchange: (e) => (e.target.checked ? chosen.add(x.id) : chosen.delete(x.id)) }),
+    h("div", h("b", x.name), x.version ? h("span.muted", ` ${x.version}`) : null, h("div.muted", x.description), h("div.muted.mono", { style: { fontSize: "12px" } }, `matches ${x.match.join(", ")}; runs ${x.command.join(" ")}`))))) : h("p.muted", "The plugin folder holds no plugins.");
+  const run = () => api(base, { method: "POST", body: { plugins: [...chosen] } }).then((j) => { toast("Running plugins"); kickJobs(j); route(); }).catch((e) => toast(e.message, true));
+  const controls = h("div.card.stack", h("h3", "Available"), pick,
+    p.problems.length ? h("p.bad-text", `Not loaded: ${p.problems.join("; ")}`) : null,
+    job ? h("span", { "data-job-ev": eid }, jobPill(job)) : canWrite() && p.available.length ? h("div.row", h("button.primary", { onclick: run }, "Run on this evidence")) : null);
+  const results = p.results ? p.results.runs.map((x) => {
+    let q = "";
+    const tbody = h("tbody");
+    const fill = () => tbody.replaceChildren(...x.rows.filter((y) => !q || `${y.path} ${y.what} ${y.detail}`.toLowerCase().includes(q)).slice(0, 3000).map((y) =>
+      h("tr", { onclick: () => fileDrawer({ cid, eid, fi: y.fi }, y.file) },
+        h("td.mono", y.time ? ts(y.time) : ""), h("td.wrap", y.what), h("td.wrap", y.detail), h("td.nm", { title: y.path }, y.path),
+        h("td.mono.ell", { style: { fontSize: "12px", maxWidth: "320px" }, title: JSON.stringify(y.fields || {}, null, 1) }, Object.keys(y.fields || {}).length ? JSON.stringify(y.fields) : ""))));
+    fill();
+    return h("div.card.stack",
+      h("div.row", h("h3", { style: { margin: 0 } }, x.name), h("span.muted", `${x.version ? x.version + ", " : ""}${num(x.files)} file${x.files === 1 ? "" : "s"}, ${num(x.rows.length)} row${x.rows.length === 1 ? "" : "s"}${x.errors.length ? `, ${num(x.errors.length)} failed` : ""}`), h("span.sp"),
+        x.rows.length > 20 ? filterBox("Filter rows...", (v) => { q = v.toLowerCase(); fill(); }) : null),
+      x.notes.length ? h("p.muted", { style: { margin: 0 } }, x.notes.slice(0, 20).join("; ")) : null,
+      x.rows.length ? h("div.scroll", { style: { maxHeight: "50vh" } }, h("table.tbl", h("thead", h("tr", h("th", `Time (${zoneName()})`), h("th", "What"), h("th", "Detail"), h("th", "File"), h("th", "Fields"))), tbody)) : h("p.muted", "No rows."),
+      x.errors.length ? h("details", h("summary", `${num(x.errors.length)} file${x.errors.length === 1 ? "" : "s"} the plugin failed on`), h("ul", x.errors.slice(0, 200).map(([path, err]) => h("li", h("span.mono", path), ": ", err)))) : null);
+  }) : [];
+  render(h("div.stack", intro, controls,
+    p.results ? h("p.muted", { style: { margin: 0 } }, `Last run ${ts(p.results.ran_at, 16)}.`) : null,
+    ...results));
 }
 
 // ---------------------------------------------------------------- carved files

@@ -70,6 +70,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/cases/{cid}/evidence/{eid}/carved/{id}/export", get(carved_export))
         .route("/cases/{cid}/evidence/{eid}/carved/{id}/photo", get(carved_photo))
         .route("/cases/{cid}/evidence/{eid}/photos", get(photos_list).post(photos_start))
+        .route("/cases/{cid}/evidence/{eid}/plugins", get(plugins_list).post(plugins_start))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/file/{idx}/image", get(file_image))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/file/{idx}/photo", get(file_photo))
         .route("/cases/{cid}/evidence/{eid}/carve", get(carve))
@@ -2135,6 +2136,46 @@ async fn photos_start(State(st): St, Extension(me): Me, Path((cid, eid)): Path<(
         return Err(anyhow::anyhow!("another job is still running on this evidence").into());
     }
     let job = jobs::spawn_photos(st.clone(), &me.username, cid, eid);
+    let view = job.view.lock().unwrap().clone();
+    Ok(Json(json!(view)))
+}
+
+/// The plugins this server allows, and the results of the last run.
+async fn plugins_list(State(st): St, Path((cid, eid)): Path<(String, String)>) -> R {
+    let case = st.case(&cid)?;
+    case.evidence_by_id(&eid)?;
+    let (available, problems) = match &st.plugins {
+        Some(dir) => kokino_analysis::plugins::load(dir),
+        None => (vec![], vec![]),
+    };
+    let results = jobs::load_plugins(&case, &eid);
+    Ok(Json(json!({"enabled": st.plugins.is_some(), "available": available, "problems": problems, "results": results})))
+}
+
+#[derive(Deserialize)]
+struct PluginRun {
+    plugins: Vec<String>,
+}
+
+async fn plugins_start(State(st): St, Extension(me): Me, Path((cid, eid)): Path<(String, String)>, Json(b): Json<PluginRun>) -> R {
+    st.case(&cid)?.evidence_by_id(&eid)?;
+    st.loaded(&cid, &eid)?;
+    let Some(dir) = &st.plugins else {
+        return Err(anyhow::anyhow!("plugins are off on this server (start it with --plugins <folder>)").into());
+    };
+    let (available, _) = kokino_analysis::plugins::load(dir);
+    let chosen: Vec<_> = available.into_iter().filter(|p| b.plugins.contains(&p.id)).collect();
+    if chosen.is_empty() {
+        return Err(anyhow::anyhow!("choose at least one plugin").into());
+    }
+    let busy = st.jobs.lock().unwrap().values().any(|j| {
+        let v = j.view.lock().unwrap();
+        v.case == cid && v.evidence == eid && v.state == "running"
+    });
+    if busy {
+        return Err(anyhow::anyhow!("another job is still running on this evidence").into());
+    }
+    let job = jobs::spawn_plugins(st.clone(), &me.username, cid, eid, chosen);
     let view = job.view.lock().unwrap().clone();
     Ok(Json(json!(view)))
 }
