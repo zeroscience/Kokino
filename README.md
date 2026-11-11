@@ -7,7 +7,7 @@
 <h3 align="center">Every finding, traceable to the byte.</h3>
 
 <p align="center">
-  Open-source disk forensics by <a href="https://www.zeroscience.mk">Zero Science Lab</a>.<br>
+  Open-source disk forensics by <a href="https://www.zeroscience.mk">Zero Science Lab</a>. Website: <a href="https://zeroscience.github.io/kokino-ftk/">zeroscience.github.io/kokino-ftk</a><br>
   One portable Rust binary with a browser GUI, on Windows, Linux and macOS.
 </p>
 
