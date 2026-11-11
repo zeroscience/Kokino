@@ -13,9 +13,14 @@ Pure Python (no mkfs), 1 KiB blocks, one block group, 256-byte inodes:
                                 keeps its block pointers, ext3/4 zero them
                                 (as the kernels do)
     inode 20                    deleted with no name left anywhere (orphan)
+    /docs/old-plan.txt          deleted long ago (inode 21, cleared): its
+                                entry was overwritten by "notes", so only
+                                the journal's older copy of the /docs block
+                                (ext3, ext4) still names it
 
 ext3 and ext4 have a small journal in inode 8 holding one transaction: the
-inode-table block of the deleted inodes as it was before the delete. ext4
+inode-table block of the deleted inodes as it was before the delete, and
+the /docs directory block as it was when it still listed old-plan.txt. ext4
 uses extents and nanosecond times with creation time. Every time is a fixed
 date in October 2026 so tests can check them. Checksums are not written
 (Kokino does not verify them).
@@ -196,6 +201,9 @@ class Image:
         dl = lambda me, parent, kids, delete=None: self.dir_payload([(me, ".", FT_DIR), (parent, "..", FT_DIR)] + kids, delete)
         notes_b = self.file_blocks(dl(notes, docs, [(deep, "deep.txt", FT_REG)]))
         docs_b = self.file_blocks(dl(docs, root, [(report, "report.txt", FT_REG), (notes, "notes", FT_DIR), (hello, "hello-link.txt", FT_REG)]))
+        # Before "notes" took its place: inode 21 is cleared, its name is
+        # only in this copy (kept in the journal).
+        old_docs = dl(docs, root, [(report, "report.txt", FT_REG), (21, "old-plan.txt", FT_REG), (notes, "notes", FT_DIR), (hello, "hello-link.txt", FT_REG)])
         lost_b = self.file_blocks(dl(lost, root, []))
         root_b = self.file_blocks(dl(root, root, [(lost, "lost+found", FT_DIR), (docs, "docs", FT_DIR), (hello, "hello.txt", FT_REG),
                                                   (secret, "deleted-secret.txt", FT_REG), (big, "big.bin", FT_REG), (link, "link", FT_LNK)],
@@ -210,14 +218,15 @@ class Image:
         for n, ino in self.inodes.items():
             self.write_inode(n, ino)
         if self.journal:
-            self.write_journal(jb, alive)
+            self.write_journal(jb, alive, [(docs_b[0], old_docs)])
         self.write_meta()
         return bytes(self.data)
 
-    def write_journal(self, jb, alive):
+    def write_journal(self, jb, alive, more=()):
         """One committed transaction (sequence 5) holding the inode-table
-        block of the two deleted inodes as it was before they were deleted:
-        how ext3/ext4 deleted files are recovered."""
+        block of the two deleted inodes as it was before they were deleted
+        (how ext3/ext4 deleted files are recovered), then the blocks in
+        `more` [(block, bytes)], such as older copies of directory blocks."""
         M = 0xC03B3998
         jsb = struct.pack(">III", M, 4, 0) + struct.pack(">IIIII", BS, 64, 1, 6, 0) + bytes(36) + bytes(range(16))
         self.data[jb[0] * BS:jb[0] * BS + len(jsb)] = jsb
@@ -230,9 +239,16 @@ class Image:
             ino = dict(self.inodes[n], size=size, blocks=blocks, links=1, dtime=0, keep=True)
             o = (n - 1) * ISIZE % BS
             copy[o:o + ISIZE] = self.inode_bytes(n, ino)
-        desc = struct.pack(">III", M, 1, 5) + struct.pack(">IHH", blk, 0, 8) + bytes(range(16))   # LAST_TAG, uuid follows
+        # Tags: block number, checksum, flags (2 = same UUID, 8 = last tag);
+        # the first tag is followed by the journal's UUID.
+        blocks = [(blk, bytes(copy))] + list(more)
+        desc = struct.pack(">III", M, 1, 5)
+        for i, (b, _) in enumerate(blocks):
+            flags = (2 if i else 0) | (8 if i == len(blocks) - 1 else 0)
+            desc += struct.pack(">IHH", b, 0, flags) + (bytes(range(16)) if i == 0 else b"")
         commit = struct.pack(">III", M, 2, 5)
-        for b, payload in ((jb[1], desc), (jb[2], bytes(copy)), (jb[3], commit)):
+        out = [(jb[1], desc)] + [(jb[2 + i], payload) for i, (_, payload) in enumerate(blocks)] + [(jb[2 + len(blocks)], commit)]
+        for b, payload in out:
             self.data[b * BS:b * BS + len(payload)] = payload
 
     def write_meta(self):

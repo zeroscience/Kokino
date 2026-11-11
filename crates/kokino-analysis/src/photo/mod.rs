@@ -667,7 +667,7 @@ pub fn scan(ev: &Evidence, analysis: &Analysis, carved: Option<&crate::carve::Ca
                 out.skipped += 1;
                 continue;
             }
-            match crate::carve::read_carved(ev, &analysis.volumes, f.space, f.offset, f.len) {
+            match crate::carve::read_carved_file(ev, &analysis.volumes, f) {
                 Ok(buf) => out.images.push(row(&analyze(&buf, ""), base)),
                 Err(e) => {
                     out.skipped += 1;

@@ -13,6 +13,7 @@ Monitor). All content is invented: LAB-PC, alice, documentation networks.
   {5C8CF1C7-7257-4F13-B223-970EF5939312}    App Timeline Provider (focus, input)
   {D10CA2FE-6FCF-4F6D-848E-B2E99266FA86}    push notifications
   {FEE4E14F-02A9-4550-B5CE-5FA2DA202E37}    energy usage (battery)
+  {FEE4E14F-02A9-4550-B5CE-5FA2DA202E37}LT  long-term energy usage
 
 Ground truth (tested in kokino-artifacts and kokino-analysis):
   - rclone.exe in alice's Temp folder sent 2,147,483,648 bytes over Wi-Fi
@@ -35,7 +36,10 @@ Ground truth (tested in kokino-artifacts and kokino-analysis):
     user alice, at 10:05, 10:10 and 10:15 UTC;
   - battery: 41,000 of 48,000 mWh (design 50,000, 212 cycles) at 09:30 UTC
     with StateTransition 1, then 15,000 mWh at 10:30 UTC with
-    StateTransition 2.
+    StateTransition 2;
+  - long-term energy, one row for 2026-10-20: ActiveAcTime 14,400,
+    CsAcTime 3,600, ActiveDcTime 5,400, CsDcTime 28,800, ActiveEnergy 61,000
+    (values as stored), capacity 48,000 of 50,000, 212 cycles.
 IdBlob is a compressed column, so the engine stores the ASCII strings
 7-bit compressed, as Windows 8 and later do; the path with an umlaut it
 keeps as it is.
@@ -278,6 +282,12 @@ def srum_tables(table, L, Q, D, U16):
     table("{FEE4E14F-02A9-4550-B5CE-5FA2DA202E37}", common + [("EventTimestamp", JET_coltypLongLong, JET_bitColumnFixed), ("StateTransition", JET_coltypLong, JET_bitColumnFixed),
           ("ChargeLevel", JET_coltypLong, JET_bitColumnFixed), ("CycleCount", JET_coltypLong, JET_bitColumnFixed), ("ConfigurationHash", JET_coltypLongLong, JET_bitColumnFixed),
           ("DesignedCapacity", JET_coltypLong, JET_bitColumnFixed), ("FullChargedCapacity", JET_coltypLong, JET_bitColumnFixed)], [battery(day(9, 30), 1, 41_000), battery(day(10, 30), 2, 15_000)])
+
+    lt_cols = ["ActiveAcTime", "CsAcTime", "ActiveDcTime", "CsDcTime", "ActiveDischargeTime", "CsDischargeTime", "ActiveEnergy", "CsEnergy", "DesignedCapacity", "FullChargedCapacity", "CycleCount"]
+    lt_vals = [14_400, 3_600, 5_400, 28_800, 5_400, 28_800, 61_000, 9_000, 50_000, 48_000, 212]
+    lt = {"TimeStamp": D(day(23, 0)), "AppId": L(0), "UserId": L(0), "ConfigurationHash": Q(0x1234)}
+    lt.update({c: L(v) for c, v in zip(lt_cols, lt_vals)})
+    table("{FEE4E14F-02A9-4550-B5CE-5FA2DA202E37}LT", common + [(c, JET_coltypLong, JET_bitColumnFixed) for c in lt_cols] + [("ConfigurationHash", JET_coltypLongLong, JET_bitColumnFixed)], [lt])
 
 
 

@@ -2,8 +2,8 @@
   "errors": 0,
   "filesystems": [
     {
-      "files": 12,
-      "listing": "f9268fbd9fd8ee9c",
+      "files": 13,
+      "listing": "714850ca734d1f89",
       "lists": {},
       "score": {
         "band": "Low",
@@ -16,9 +16,9 @@
         "bytes": 44168,
         "deleted_bytes": 94,
         "deleted_dirs": 0,
-        "deleted_files": 2,
+        "deleted_files": 3,
         "dirs": 3,
-        "files": 8,
+        "files": 9,
         "histogram": [
           {
             "created": 11,
@@ -28,12 +28,14 @@
         ],
         "impact": [
           "Data volume (no Windows installation found).",
-          "8 files (43.1 KiB) in 3 directories.",
-          "2 deleted files (94 B) and 0 deleted directories still have file system entries; content may be recoverable unless clusters were reused.",
+          "9 files (43.1 KiB) in 3 directories.",
+          "3 deleted files (94 B) and 0 deleted directories still have file system entries; content may be recoverable unless clusters were reused.",
           "1 entries are orphaned (parent directory missing or reused).",
           "File timestamps span 2026-10-20 to 2026-10-20.",
           "No anti-forensics indicators were triggered.",
-          "2 deleted file(s) were recovered through older copies of their inodes kept in the ext journal."
+          "2 deleted file(s) were recovered through older copies of their inodes kept in the ext journal.",
+          "1 name(s) of deleted files and folders were found only in older copies of their folders kept in the ext journal.",
+          "1 deleted file(s) have no recoverable content: ext3 and ext4 clear the block map when a file is deleted, and the journal held no older copy. File carving over unallocated space may still find them."
         ],
         "orphans": 1,
         "os": null,
@@ -42,7 +44,7 @@
         "top_ext": [
           [
             "txt",
-            5
+            6
           ],
           [
             "bin",

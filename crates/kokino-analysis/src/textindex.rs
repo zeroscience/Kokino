@@ -587,7 +587,7 @@ pub fn build(ev: &Evidence, analysis: &Analysis, carved: Option<&crate::carve::C
         let n = docs.len() as u64;
         for (k, f) in docs.into_iter().enumerate() {
             progress("Text in carved documents", k as u64, n);
-            let Ok(data) = crate::carve::read_carved(ev, &analysis.volumes, f.space, f.offset, f.len) else { continue };
+            let Ok(data) = crate::carve::read_carved_file(ev, &analysis.volumes, f) else { continue };
             let x = crate::doctext::extract(&data);
             if x.parts.is_empty() {
                 continue;

@@ -578,7 +578,6 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Hashset { cases, cmd } => hashset_cmd(cases.unwrap_or_else(default_cases), cmd)?,
         Cmd::Purge { cases, confirm } => purge(cases.unwrap_or_else(default_cases), confirm)?,
         Cmd::Carve { image, json, unlock } => {
-            use std::io::{Read, Seek, SeekFrom};
             let ev = unlock.open(&image)?;
             eprintln!("{} ({}, {} bytes)", image.display(), ev.format_label(), ev.size);
             let a = kokino_analysis::analyze(&ev, &mut |_, _, _| true)?;
@@ -587,9 +586,8 @@ async fn main() -> anyhow::Result<()> {
                 println!("id\toffset\tlength\tkind\tcomplete\tmd5\tsha1\tsha256\tdetail");
             }
             for f in &c.files {
-                let (mut r, _) = kokino_analysis::carve::space_reader(&ev, &a.volumes, f.space)?;
-                r.seek(SeekFrom::Start(f.offset))?;
-                let (h, _) = kokino_core::hashing::hash_reader((&mut r).take(f.len), |_| true)?;
+                let (r, _) = kokino_analysis::carve::carved_reader(&ev, &a.volumes, f)?;
+                let (h, _) = kokino_core::hashing::hash_reader(r, |_| true)?;
                 // Offsets in a decrypted volume are shown as "v<volume>:<offset>".
                 let at = match f.space {
                     Some(v) => format!("v{}:{}", v, f.offset),

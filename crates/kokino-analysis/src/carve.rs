@@ -11,7 +11,12 @@
 //! partitions, and volumes whose file system is not parsed (carved whole).
 //! Files are assumed contiguous; one that runs past the end of its free
 //! region is kept but marked, because its tail may belong to another file
-//! or the original was fragmented.
+//! or the original was fragmented. JPEG pictures split in two pieces are
+//! joined again (bifragment gap carving): where the compressed data stops
+//! looking like JPEG data, the second piece is looked for further on (a run
+//! of sectors that look like JPEG data, ending with the end-of-image
+//! marker), and a join is kept only when the joined picture decodes into
+//! exactly the blocks its header promises and ends where its data ends.
 //!
 //! Nothing is copied: results are offsets and lengths in the image, with
 //! MD5 and SHA-256 of the carved bytes. Exports read from the image.
@@ -26,7 +31,7 @@
 //! does). Whole index.dat files are carved as files as well.
 
 use crate::{volume_reader, Analysis, Progress};
-use kokino_image::{read_at, BlockCache, Evidence, FsKind, SubReader, Volume, VolumeKind};
+use kokino_image::{read_at, BlockCache, Evidence, FsKind, Volume, VolumeKind};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Seek};
@@ -95,6 +100,88 @@ pub struct Carved {
     /// Set when carved from a decrypted volume: `offset` is within it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space: Option<usize>,
+    /// A file in two pieces: (start, length) of the bytes between them,
+    /// which are not part of it. `len` counts the file's own bytes only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap: Option<(u64, u64)>,
+}
+
+impl Carved {
+    /// The pieces of the file: (start, length), in order.
+    pub fn pieces(&self) -> Vec<(u64, u64)> {
+        match self.gap {
+            Some((g, glen)) if g > self.offset && g - self.offset < self.len => {
+                let first = g - self.offset;
+                vec![(self.offset, first), (g.saturating_add(glen), self.len - first)]
+            }
+            _ => vec![(self.offset, self.len)],
+        }
+    }
+
+    /// "image offset 123", with the second piece when there is one.
+    pub fn where_label(&self) -> String {
+        let w = where_label(self.space, self.offset);
+        match self.pieces().get(1) {
+            Some((at, len)) => format!("{} ({} bytes), then {} bytes at {}", w, self.len - len, len, at),
+            None => w,
+        }
+    }
+}
+
+/// A carved file's bytes, its pieces joined.
+pub struct CarvedReader {
+    r: Box<dyn ReadSeek>,
+    pieces: Vec<(u64, u64)>,
+    len: u64,
+    pos: u64,
+}
+
+impl Read for CarvedReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut skip = self.pos;
+        for &(at, n) in &self.pieces {
+            if skip >= n {
+                skip -= n;
+                continue;
+            }
+            let want = (buf.len() as u64).min(n - skip) as usize;
+            let got = read_at(&mut self.r, at + skip, &mut buf[..want]).map_err(|e| std::io::Error::other(e.to_string()))?;
+            self.pos += got as u64;
+            return Ok(got);
+        }
+        Ok(0)
+    }
+}
+
+impl Seek for CarvedReader {
+    fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
+        let p = match to {
+            std::io::SeekFrom::Start(p) => p as i128,
+            std::io::SeekFrom::End(d) => self.len as i128 + d as i128,
+            std::io::SeekFrom::Current(d) => self.pos as i128 + d as i128,
+        };
+        if p < 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "seek before start"));
+        }
+        self.pos = p as u64;
+        Ok(self.pos)
+    }
+}
+
+/// A reader over a carved file's own bytes (pieces joined), and its length.
+pub fn carved_reader(ev: &Evidence, volumes: &[Volume], f: &Carved) -> anyhow::Result<(CarvedReader, u64)> {
+    let (r, size) = space_reader(ev, volumes, f.space)?;
+    let pieces: Vec<(u64, u64)> = f.pieces().into_iter().map(|(at, n)| (at, n.min(size.saturating_sub(at)))).collect();
+    let len = pieces.iter().map(|x| x.1).sum();
+    Ok((CarvedReader { r, pieces, len, pos: 0 }, len))
+}
+
+/// A carved file's bytes, pieces joined.
+pub fn read_carved_file(ev: &Evidence, volumes: &[Volume], f: &Carved) -> anyhow::Result<Vec<u8>> {
+    let (mut r, len) = carved_reader(ev, volumes, f)?;
+    let mut buf = Vec::with_capacity(len as usize);
+    r.read_to_end(&mut buf)?;
+    Ok(buf)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -386,6 +473,165 @@ fn jpeg(src: &mut dyn Bytes, at: u64) -> Option<Hit> {
             }
         }
     }
+}
+
+/// How far the second piece of a split JPEG is looked for.
+const MAX_GAP: u64 = 16 << 20;
+
+/// What a sector of a JPEG's compressed data looks like.
+enum Look {
+    /// Possible JPEG data.
+    Data,
+    /// Holds the end-of-image marker; the picture ends this many bytes in.
+    End(u64),
+    /// Not JPEG data: a marker that cannot be there, a long run of zeros,
+    /// or text.
+    Foreign,
+}
+
+fn look(b: &[u8]) -> Look {
+    // Compressed data is about 37% printable; a sector of text is not it.
+    if b.len() >= 256 && b.iter().filter(|&&c| (0x20..0x7F).contains(&c) || matches!(c, 9 | 10 | 13)).count() * 100 >= b.len() * 94 {
+        return Look::Foreign;
+    }
+    let mut zeros = 0;
+    for i in 0..b.len() {
+        if b[i] == 0 {
+            zeros += 1;
+            if zeros >= 64 {
+                return Look::Foreign;
+            }
+        } else {
+            zeros = 0;
+        }
+        if b[i] == 0xFF {
+            match b.get(i + 1) {
+                Some(0xD9) => return Look::End(i as u64 + 2),
+                Some(0x00) | Some(0xD0..=0xD7) | Some(0xFF) | None => {}
+                Some(_) => return Look::Foreign,
+            }
+        }
+    }
+    Look::Data
+}
+
+/// A JPEG at `at` whose compressed data stops looking like JPEG data before
+/// its end: the second piece, joined. Returns (first piece length, second
+/// piece start, second piece length, dimensions).
+fn jpeg_two(src: &mut dyn Bytes, at: u64) -> Option<(u64, u64, u64, String)> {
+    // The headers, up to the start of the compressed data.
+    let head = src.read(at, 1 << 18);
+    let mut p = 2usize;
+    let mut dims = String::new();
+    let data = loop {
+        if head.get(p) != Some(&0xFF) {
+            return None;
+        }
+        let m = *head.get(p + 1)?;
+        if m == 0xFF {
+            p += 1;
+            continue;
+        }
+        let len = be16(&head, p + 2)? as usize;
+        if len < 2 || matches!(m, 0xD8 | 0xD9 | 0x00) {
+            return None;
+        }
+        if matches!(m, 0xC2 | 0xC6 | 0xCA | 0xCE) {
+            return None; // progressive: not decoded
+        }
+        if m == 0xC0 || m == 0xC1 {
+            if let (Some(hh), Some(ww)) = (be16(&head, p + 5), be16(&head, p + 7)) {
+                dims = format!("{} x {}", ww, hh);
+            }
+        }
+        p += 2 + len;
+        if m == 0xDA {
+            break at + p as u64;
+        }
+    };
+    // The first sector that is not JPEG data: where the first piece ends.
+    let mut s = data;
+    let first_end = loop {
+        if s - at > MAX_GAP * 4 {
+            return None;
+        }
+        let next = (s / SECTOR + 1) * SECTOR;
+        let b = src.read(s, (next - s) as usize);
+        if b.is_empty() {
+            return None;
+        }
+        match look(&b) {
+            Look::Data => s = next,
+            Look::End(_) => return None, // whole: the ordinary walk carves it
+            Look::Foreign => break (s / SECTOR) * SECTOR,
+        }
+    };
+    if first_end <= data {
+        return None;
+    }
+    // Further on: sectors that end the picture, after a run of JPEG data.
+    let mut tried = 0;
+    let mut run_start: Option<u64> = None;
+    let mut q = first_end + SECTOR;
+    let limit = (first_end + MAX_GAP).min(src.size());
+    while q < limit && tried < 8 {
+        let chunk = src.read(q, (limit - q).min(1 << 20) as usize);
+        if chunk.len() < SECTOR as usize {
+            break;
+        }
+        for (k, sec) in chunk.chunks_exact(SECTOR as usize).enumerate() {
+            let here = q + k as u64 * SECTOR;
+            // A new JPEG starts here: not a continuation.
+            if sec.starts_with(&[0xFF, 0xD8, 0xFF]) {
+                run_start = None;
+                continue;
+            }
+            match look(sec) {
+                Look::Data => {
+                    run_start.get_or_insert(here);
+                }
+                Look::Foreign => run_start = None,
+                Look::End(e) => {
+                    let start = run_start.unwrap_or(here);
+                    let end = here + e;
+                    tried += 1;
+                    // The first piece may end a little before the first odd sector,
+                    // and the second may start a little after the run does.
+                    for back in 0..4u64 {
+                        let fe = first_end.saturating_sub(back * SECTOR);
+                        if fe <= data {
+                            break;
+                        }
+                        for fwd in 0..4u64 {
+                            let ss = start + fwd * SECTOR;
+                            if ss >= end {
+                                break;
+                            }
+                            let mut joined = src.read(at, (fe - at) as usize);
+                            joined.extend(src.read(ss, (end - ss) as usize));
+                            if let Ok(j) = crate::photo::jpeg::parse(&joined) {
+                                if j.is_baseline() && crate::photo::jpeg::scan_fits(&joined, &j) {
+                                    return Some((fe - at, ss, end - ss, dims));
+                                }
+                            }
+                        }
+                    }
+                    run_start = None;
+                    if tried >= 8 {
+                        break;
+                    }
+                }
+            }
+        }
+        q += (chunk.len() as u64 / SECTOR) * SECTOR;
+    }
+    None
+}
+
+/// The JPEG join on raw bytes, for the fuzzer.
+pub fn fuzz_jpeg_two(d: &[u8]) {
+    let mut s: &[u8] = d;
+    let _ = jpeg_two(&mut s, 0);
 }
 
 fn png(src: &mut dyn Bytes, at: u64) -> Option<Hit> {
@@ -913,7 +1159,47 @@ pub fn carve(ev: &Evidence, analysis: &Analysis, progress: Progress) -> anyhow::
                 let candidate = CARVERS.iter().any(|(m, _)| b.starts_with(&m[..m.len().min(b.len()).min(4)])) || b.get(4..8) == Some(b"ftyp");
                 if candidate {
                     let at = p + i as u64;
-                    if let Some(h) = identify(&mut src, at) {
+                    let found = identify(&mut src, at);
+                    if b.starts_with(&[0xFF, 0xD8, 0xFF]) && found.as_ref().is_none_or(|h| h.kind == "jpeg") {
+                        if let Some((first, second, second_len, dims)) = jpeg_two(&mut src, at) {
+                            let id = res.files.len() as u32;
+                            let mut note = format!("joined from two pieces: {} bytes here, {} bytes from offset {}", first, second_len, second);
+                            if let Some(path) = deleted_at.get(&(*space, at)) {
+                                note = format!("{}; same location as deleted file {}", note, path);
+                            }
+                            res.files.push(Carved {
+                                id,
+                                offset: at,
+                                len: first + second_len,
+                                kind: "jpeg".into(),
+                                ext: "jpg".into(),
+                                label: "JPEG image".into(),
+                                complete: true,
+                                detail: dims,
+                                note,
+                                region: label.clone(),
+                                fi: *fi,
+                                beyond_region: at + first > end || second + second_len > end,
+                                space: *space,
+                                gap: Some((at + first, second - (at + first))),
+                                ..Default::default()
+                            });
+                            if res.files.len() >= MAX_FILES {
+                                res.truncated = true;
+                                break;
+                            }
+                            // The first piece is skipped; the second is not
+                            // scanned past either (it has no header of its own).
+                            let after = (at + first).div_ceil(SECTOR) * SECTOR;
+                            if after >= p + win.len() as u64 {
+                                next = after;
+                                break;
+                            }
+                            i = (after - p) as usize;
+                            continue;
+                        }
+                    }
+                    if let Some(h) = found {
                         if h.len > 0 {
                             let id = res.files.len() as u32;
                             let mut note = String::new();
@@ -990,8 +1276,7 @@ pub fn carve(ev: &Evidence, analysis: &Analysis, progress: Progress) -> anyhow::
         if k % 64 == 0 && !progress("Hashing carved files", k as u64, n) {
             anyhow::bail!("carving cancelled");
         }
-        let (r, size) = space_reader(ev, &analysis.volumes, f.space)?;
-        let rd = SubReader::new(r, f.offset, f.len.min(size.saturating_sub(f.offset)));
+        let (rd, _) = carved_reader(ev, &analysis.volumes, f)?;
         let (h, _) = kokino_core::hashing::hash_reader(rd, |_| true)?;
         f.md5 = h.md5;
         f.sha256 = h.sha256;
@@ -1206,6 +1491,52 @@ pub(crate) mod tests {
         let docx = r.files.iter().find(|f| f.kind == "docx").unwrap().id;
         assert!(kw("wire instructions").iter().any(|h| h.carved == Some(docx) && h.part.as_deref() == Some("word/document.xml")));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// camera.jpg split at 64 KiB by a sector of text and two of zeros, as a
+    /// file system that ran out of contiguous space would leave it.
+    #[test]
+    fn joins_a_jpeg_in_two_pieces() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/photo");
+        let Ok(cam) = std::fs::read(dir.join("camera.jpg")) else { return };
+        let other = std::fs::read(dir.join("edited.jpg")).unwrap();
+        let j = crate::photo::jpeg::parse(&cam).unwrap();
+        assert!(crate::photo::jpeg::scan_fits(&cam, &j), "the whole picture fits");
+        let at = 65_536usize;
+        let first = 65_536usize;
+        let mut gap = b"Meeting notes, lab.test, room 2. Nothing to see here. ".repeat(10)[..512].to_vec();
+        gap.extend(vec![0u8; 1024]);
+        let build = |second: &[u8]| {
+            let mut d = vec![0u8; at];
+            d.extend(&cam[..first]);
+            d.extend(&gap);
+            d.extend(second);
+            d.extend(vec![0u8; 8192]);
+            d
+        };
+        let disk = build(&cam[first..]);
+        let mut src: &[u8] = &disk;
+        let (f, second, second_len, dims) = jpeg_two(&mut src, at as u64).expect("joined");
+        assert_eq!((f, second, second_len), (first as u64, (at + first + gap.len()) as u64, (cam.len() - first) as u64));
+        assert_eq!(dims, format!("{} x {}", j.width, j.height));
+        // Read back through the pieces: the original file.
+        let c = Carved { offset: at as u64, len: cam.len() as u64, gap: Some(((at + first) as u64, gap.len() as u64)), ..Default::default() };
+        assert_eq!(c.pieces(), vec![(at as u64, first as u64), (second, second_len)]);
+        let mut r = CarvedReader { r: Box::new(std::io::Cursor::new(disk.clone())), pieces: c.pieces(), len: c.len, pos: 0 };
+        let mut back = vec![];
+        r.read_to_end(&mut back).unwrap();
+        assert_eq!(back, cam);
+        // Whole: left to the ordinary walk.
+        let mut whole = vec![0u8; at];
+        whole.extend(&cam);
+        whole.extend(vec![0u8; 4096]);
+        let mut src: &[u8] = &whole;
+        assert!(jpeg_two(&mut src, at as u64).is_none());
+        // A "second piece" from another picture does not fit.
+        let skip = other.len() - (cam.len() - first);
+        let wrong = build(&other[skip..]);
+        let mut src: &[u8] = &wrong;
+        assert!(jpeg_two(&mut src, at as u64).is_none());
     }
 
     #[test]

@@ -365,10 +365,38 @@ fn extend(v: i32, s: u32) -> i32 {
     }
 }
 
+/// Whether the scan data of a baseline, single-scan JPEG decodes into
+/// exactly the blocks its frame header promises and ends where the data
+/// ends: no bytes left over, none missing. Data from another file spliced
+/// in almost never does both. Used to check fragments joined by carving.
+pub fn scan_fits(d: &[u8], j: &Jpeg) -> bool {
+    if j.scans.len() != 1 {
+        return false;
+    }
+    let mut st = ScanEnd::default();
+    let mut n = 0usize;
+    let ok = walk_blocks(d, j, usize::MAX, &mut |_, _, _, _| n += 1, Some(&mut st)).is_ok();
+    ok && n > 0 && n == st.units && !st.starved && st.pos + 1 >= st.end && st.pos <= st.end
+}
+
+/// Where the decoder stopped in the (last) scan.
+#[derive(Default)]
+struct ScanEnd {
+    units: usize,
+    pos: usize,
+    end: usize,
+    /// Ran out of data before the last block.
+    starved: bool,
+}
+
 /// Decodes every block of a baseline JPEG and calls `f(component, bx, by,
 /// coefficients)` with the quantized coefficients in natural order.
 /// `max_blocks` bounds the work on huge images.
 pub fn for_each_block(d: &[u8], j: &Jpeg, max_blocks: usize, mut f: impl FnMut(usize, usize, usize, &[i32; 64])) -> anyhow::Result<()> {
+    walk_blocks(d, j, max_blocks, &mut f, None)
+}
+
+fn walk_blocks(d: &[u8], j: &Jpeg, max_blocks: usize, f: &mut dyn FnMut(usize, usize, usize, &[i32; 64]), mut end: Option<&mut ScanEnd>) -> anyhow::Result<()> {
     if !j.is_baseline() {
         anyhow::bail!("only baseline JPEGs are decoded");
     }
@@ -419,6 +447,16 @@ pub fn for_each_block(d: &[u8], j: &Jpeg, max_blocks: usize, mut f: impl FnMut(u
         };
         let per_mcu: usize = if scan.comps.len() == 1 { 1 } else { scan.comps.iter().map(|&(ci, _, _)| j.components[ci].h as usize * j.components[ci].v as usize).sum() };
         let mut unit_no = 0usize;
+        if let Some(e) = end.as_deref_mut() {
+            e.units = if scan.comps.len() == 1 {
+                let c = &j.components[scan.comps[0].0];
+                let (hm, vm) = (j.hmax() as usize, j.vmax() as usize);
+                (j.width as usize * c.h as usize).div_ceil(hm).div_ceil(8) * (j.height as usize * c.v as usize).div_ceil(vm).div_ceil(8)
+            } else {
+                (j.width as usize).div_ceil(8 * j.hmax() as usize) * (j.height as usize).div_ceil(8 * j.vmax() as usize) * per_mcu
+            };
+            e.end = scan.data.1;
+        }
         for (si, bx, by) in units {
             if j.restart > 0 && unit_no > 0 && unit_no % (per_mcu * j.restart as usize) == 0 {
                 bits.restart();
@@ -427,6 +465,12 @@ pub fn for_each_block(d: &[u8], j: &Jpeg, max_blocks: usize, mut f: impl FnMut(u
             unit_no += 1;
             if bits.starved > MAX_STARVED {
                 break;
+            }
+            if bits.starved > 0 {
+                if let Some(e) = end.as_deref_mut() {
+                    e.starved = true;
+                    return Ok(());
+                }
             }
             let mut coef = [0i32; 64];
             let t = bits.decode(&dcs[si])? as u32;
@@ -458,6 +502,11 @@ pub fn for_each_block(d: &[u8], j: &Jpeg, max_blocks: usize, mut f: impl FnMut(u
             if done >= max_blocks {
                 return Ok(());
             }
+        }
+        if let Some(e) = end.as_deref_mut() {
+            // Bits of the last byte may still be buffered; that byte was read.
+            e.pos = bits.pos;
+            e.starved |= bits.starved > 0;
         }
     }
     Ok(())

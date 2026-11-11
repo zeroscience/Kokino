@@ -596,14 +596,6 @@ impl ExtVolume {
             dirty: self.dirty,
         }
     }
-
-    /// Inode-table block ranges, sorted: [start, end).
-    fn itable_ranges(&self) -> Vec<(u64, u64)> {
-        let n = (self.inodes_per_group * self.inode_size).div_ceil(self.block);
-        let mut v: Vec<(u64, u64)> = self.groups.iter().filter(|g| g.inode_table != 0).map(|g| (g.inode_table, g.inode_table + n)).collect();
-        v.sort_unstable();
-        v
-    }
 }
 
 /// Up to `len` bytes from `offset` of a file of `size` bytes mapped by `map`.
@@ -628,8 +620,9 @@ fn read_map<R: Read + Seek>(r: &mut R, map: &[Extent], size: u64, offset: u64, l
     Ok(out)
 }
 
-/// Copies of inode-table blocks found in the journal: file-system block to
-/// (transaction sequence, volume offset of the copy), newest first.
+/// Copies of metadata blocks found in the journal (inode tables, directory
+/// blocks and the rest): file-system block to (transaction sequence, volume
+/// offset of the copy), newest first.
 type JournalCopies = HashMap<u64, Vec<(u32, u64)>>;
 
 fn journal_copies<R: Read + Seek>(v: &ExtVolume, r: &mut R) -> anyhow::Result<JournalCopies> {
@@ -657,11 +650,6 @@ fn journal_copies<R: Read + Seek>(v: &ExtVolume, r: &mut R) -> anyhow::Result<Jo
     let (is64, csum2, csum3) = (incompat & 2 != 0, incompat & 8 != 0, incompat & 0x10 != 0);
     let tag_len = if csum3 { 16 } else { 8 + if csum2 { 2 } else { 0 } + if is64 { 4 } else { 0 } };
     let tail = if csum2 || csum3 { 4 } else { 0 };
-    let tables = v.itable_ranges();
-    let in_table = |b: u64| {
-        let i = tables.partition_point(|x| x.1 <= b);
-        tables.get(i).map(|x| x.0 <= b).unwrap_or(false)
-    };
     let mut copies = 0usize;
     for j in first..maxlen {
         let Some(off) = at(j) else { continue };
@@ -680,9 +668,9 @@ fn journal_copies<R: Read + Seek>(v: &ExtVolume, r: &mut R) -> anyhow::Result<Jo
             if data >= maxlen {
                 data = first;
             }
-            // Escaped blocks had their first four bytes replaced; the inode
-            // copies are only used when that cannot matter.
-            if flags & 1 == 0 && in_table(fsb) && copies < MAX_JOURNAL_COPIES {
+            // Escaped blocks had their first four bytes replaced (they began
+            // with the journal's magic number): left out.
+            if flags & 1 == 0 && fsb < v.blocks && copies < MAX_JOURNAL_COPIES {
                 if let Some(d) = at(data) {
                     out.entry(fsb).or_default().push((seq, d));
                     copies += 1;
@@ -716,6 +704,8 @@ struct Walker<'a, R: Read + Seek> {
     named: HashSet<u64>,
     journal: JournalCopies,
     from_journal: u64,
+    /// Names found only in older copies of directory blocks in the journal.
+    journal_names: u64,
     no_content: u64,
     /// Deleted directories whose first block was found by search: inode to volume offset.
     found_dirs: HashMap<u64, u64>,
@@ -741,7 +731,7 @@ pub fn scan<R: Read + Seek>(v: &ExtVolume, r: &mut R, mut progress: impl FnMut(u
     if !root_ino.is_dir() {
         anyhow::bail!("ext root inode is not a directory");
     }
-    let mut w = Walker { v, r, out: vec![], next: FIRST_RECORD, seen_dirs: HashSet::new(), named: HashSet::from([ROOT_INODE]), journal, from_journal: 0, no_content: 0, found_dirs: HashMap::new(), dir_search_bytes: 0 };
+    let mut w = Walker { v, r, out: vec![], next: FIRST_RECORD, seen_dirs: HashSet::new(), named: HashSet::from([ROOT_INODE]), journal, from_journal: 0, journal_names: 0, no_content: 0, found_dirs: HashMap::new(), dir_search_bytes: 0 };
     let root = w.entry(ROOT_RECORD, ROOT_RECORD, "/".into(), ".".into(), ROOT_INODE, root_off, &root_ino, false, (root_ino.clone(), root_off, None), None);
     w.out.push(root);
     let mut queue: VecDeque<DirWork> = VecDeque::from([(ROOT_RECORD, String::new(), ROOT_INODE, root_off, false)]);
@@ -793,6 +783,9 @@ pub fn scan<R: Read + Seek>(v: &ExtVolume, r: &mut R, mut progress: impl FnMut(u
     kokino_ntfs::note_shared_space(&mut w.out, ranges);
     if w.from_journal > 0 {
         notes.push(format!("{} deleted file(s) were recovered through older copies of their inodes kept in the ext journal.", w.from_journal));
+    }
+    if w.journal_names > 0 {
+        notes.push(format!("{} name(s) of deleted files and folders were found only in older copies of their folders kept in the ext journal.", w.journal_names));
     }
     if w.no_content > 0 {
         notes.push(format!(
@@ -994,7 +987,16 @@ impl<'a, R: Read + Seek> Walker<'a, R> {
         let Ok(ino) = self.v.inode_at(self.r, off) else { return vec![] };
         let indexed = ino.flags & FL_INDEX != 0;
         let mut data = vec![];
-        for x in self.v.map(self.r, &ino, off) {
+        // The file-system block behind each block of the directory.
+        let mut dir_blocks: Vec<(usize, u64)> = vec![];
+        let map = self.v.map(self.r, &ino, off);
+        for x in &map {
+            let Some(vol) = x.vol else { continue };
+            for k in 0..x.len.div_ceil(self.v.block).min(MAX_DIR_BYTES / self.v.block) {
+                dir_blocks.push(((x.offset / self.v.block + k) as usize, vol / self.v.block + k));
+            }
+        }
+        for x in map {
             if x.offset != data.len() as u64 && x.offset > data.len() as u64 {
                 if x.offset > MAX_DIR_BYTES {
                     break;
@@ -1033,8 +1035,43 @@ impl<'a, R: Read + Seek> Walker<'a, R> {
         // slack: a deleted name the folder still has (same inode) is stale.
         let live: HashSet<(String, u64)> = found.iter().filter(|x| !x.3).map(|x| (x.0.clone(), x.1)).collect();
         let mut seen: HashSet<(String, u64)> = HashSet::new();
+        // Older copies of this folder's blocks in the journal: names that are
+        // neither in the folder now nor in its slack.
+        let mut from_journal: HashMap<(String, u64), u32> = HashMap::new();
+        if !ino.inline() && !self.journal.is_empty() {
+            let known: HashSet<(String, u64)> = found.iter().map(|x| (x.0.clone(), x.1)).collect();
+            let known_names: HashSet<&str> = found.iter().map(|x| x.0.as_str()).collect();
+            let mut extra = vec![];
+            for &(bi, fsb) in &dir_blocks {
+                let Some(copies) = self.journal.get(&fsb).cloned() else { continue };
+                for (seq, at) in copies.into_iter().take(16) {
+                    let Ok(blk) = rd(self.r, at, self.v.block as usize) else { continue };
+                    if indexed && bi > 0 && u32_at(&blk, 0) == 0 && u16_at(&blk, 4) as usize == blk.len() && blk.get(6) == Some(&0) {
+                        continue;
+                    }
+                    let mut old = vec![];
+                    self.parse_block(&blk, indexed && bi == 0, &mut old);
+                    // Only blocks of this folder: the copy names "." as it.
+                    if bi == 0 && !(u32_at(&blk, 0) as u64 == n && blk.get(8) == Some(&b'.')) {
+                        continue;
+                    }
+                    for (name, child, ft, _) in old {
+                        if child == n || known.contains(&(name.clone(), child)) || known_names.contains(name.as_str()) {
+                            continue;
+                        }
+                        if let std::collections::hash_map::Entry::Vacant(e) = from_journal.entry((name.clone(), child)) {
+                            e.insert(seq);
+                            extra.push((name, child, ft, true));
+                        }
+                    }
+                }
+            }
+            found.extend(extra);
+        }
         let mut sub = vec![];
         for (name, child, ftype, del) in found {
+            let jseq = from_journal.get(&(name.clone(), child)).copied();
+            let before = self.out.len();
             if child == n && !del {
                 continue;
             }
@@ -1043,6 +1080,15 @@ impl<'a, R: Read + Seek> Walker<'a, R> {
             }
             if let Some(d) = self.name(rec, &path, name, child, ftype, del, deleted) {
                 sub.push(d);
+            }
+            if let (Some(seq), true) = (jseq, self.out.len() > before) {
+                self.journal_names += 1;
+                let msg = format!("name found only in an older copy of the folder kept in the ext journal (transaction {})", seq);
+                let e = self.out.last_mut().unwrap();
+                e.error = Some(match e.error.take() {
+                    Some(m) => format!("{}; {}", msg, m),
+                    None => msg,
+                });
             }
             if self.out.len() > MAX_ENTRIES {
                 break;
@@ -1266,6 +1312,19 @@ mod tests {
         assert_eq!(s.entries.iter().filter(|e| e.orphan).count(), 1, "{:?}", s.entries.iter().filter(|e| e.orphan).map(|e| &e.path).collect::<Vec<_>>());
         assert!(s.entries.iter().all(|e| !e.path.contains("..")));
         assert_eq!(s.entries.iter().filter(|e| !e.deleted && !e.is_dir).count(), 6);
+        // A name deleted long ago: only the journal's older copy of /docs has it.
+        let old = s.entries.iter().find(|e| e.path == "/docs/old-plan.txt");
+        if version == "ext2" {
+            assert!(old.is_none());
+        } else {
+            let old = old.expect("/docs/old-plan.txt from the journal");
+            assert!(old.deleted && !old.is_dir && old.size == 0);
+            assert_eq!(old.unix.as_ref().unwrap().inode, 21);
+            assert!(old.error.as_deref().unwrap_or("").starts_with("name found only in an older copy of the folder kept in the ext journal (transaction 5)"), "{:?}", old.error);
+            assert!(s.notes.iter().any(|n| n.starts_with("1 name(s) of deleted files")), "{:?}", s.notes);
+            // The names the folder still has are not repeated.
+            assert_eq!(s.entries.iter().filter(|e| e.path == "/docs/report.txt").count(), 1);
+        }
 
         let free: u64 = v.free_runs(&mut f).iter().map(|r| r.1).sum();
         assert!(free > 3 << 20, "{}", free);

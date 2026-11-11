@@ -79,16 +79,17 @@ start or be trusted; most items are blocked on test data rather than code.
 ### 3. Deeper Windows
 - [ ] **Windows Search** (Windows.edb): file names, contents and times the indexer kept, also for deleted files. The ESE reader exists (SRUM and WebCache use it). Needs: a test database.
 - [ ] **$LogFile in full**: redo and undo of MFT changes (what a file looked like before it changed). Needs: a large but well-documented effort (NTFS internals, libfsntfs notes).
-- [x] **SRUM**: app timeline (time in focus, keyboard and mouse input), push notification and battery tables. Still to do: the long-term energy table, and a check on a real computer's database.
+- [x] **SRUM**: app timeline (time in focus, keyboard and mouse input), push notification, battery and long-term energy tables. Still to do: a check on a real computer's database.
 - [ ] **Deleted PST items** from the file's free blocks.
 
 ### 4. More formats
 - [ ] **XFS** (Red Hat and its derivatives default to it). Needs: test images (made with mkfs.xfs) and a parser comparable to ext's.
 - [ ] **ESXi snapshots** (VMFSSPARSE, SESPARSE).
 - [ ] **UDF virtual (VAT) and sparable partitions** (written CDs and DVDs).
-- [ ] **Older journal copies of whole directories** on ext4 (names of files deleted long ago).
+- [x] **Older journal copies of whole directories** on ext3 and ext4 (names of files deleted long ago, also when their inode was reused).
 - [ ] **macOS unified logs** (tracev3).
-- [ ] **Carving of fragmented files** (JPEG and others split across free space).
+- [x] **Carving of JPEGs in two pieces** (bifragment gap carving, kept only when the joined picture decodes exactly).
+- [ ] **Carving of other fragmented files**, and JPEGs in three or more pieces or progressive JPEGs.
 
 ### 5. Workflow
 - [x] **Watchlist from STIX 2.1 and MISP exports**, IP networks (CIDR), and each sweep compared with the previous one (what is new).

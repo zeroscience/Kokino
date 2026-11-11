@@ -187,7 +187,15 @@ That first round also stopped on a wrong assumption in the fuzzer's own
 check (an IP network does not "match itself" as an address); the check was
 corrected and is not counted as a problem.
 
-In all: 670,345,144 inputs over 40 targets, and 40 distinct problems
+ext folder names from the journal, JPEGs in two pieces, SRUM long-term energy (after 1.4.0):
+
+| Target | What it covers | Rounds | Inputs in all | Distinct problems found |
+|---|---|---|--:|---|
+| `ext` | again, with every metadata block the journal holds and older copies of directory blocks parsed for names | 10 min | 235,678 | none |
+| `carve` | again, with the JPEG join: the header walk, sectors classified as JPEG data or not, the search for the second piece and the strict decode check, with a split picture as an extra seed | 10 min | 43,267,718 | none |
+| `ese` | again, with the long-term energy table | 10 min | 192,933 | none |
+
+In all: 714,041,473 inputs over 40 targets, and 40 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed

@@ -127,6 +127,10 @@ pub struct Srum {
     /// Battery: charge level and capacity over time (laptops and tablets).
     #[serde(default)]
     pub energy: Vec<SrumEnergy>,
+    /// Long-term energy table: per period, time active and in standby, on
+    /// mains power and on battery.
+    #[serde(default)]
+    pub energy_lt: Vec<SrumEnergyLt>,
     /// Rows not kept (the oldest), beyond the limit.
     pub dropped: u64,
     pub error: Option<String>,
@@ -182,6 +186,24 @@ pub struct SrumPush {
     pub kind: i64,
     pub size: u64,
     pub network: i64,
+}
+
+/// One row of SRUM's long-term energy table. Times and energy as stored
+/// (Windows does not document their units).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SrumEnergyLt {
+    pub t: u64,
+    pub active_ac: u64,
+    pub standby_ac: u64,
+    pub active_dc: u64,
+    pub standby_dc: u64,
+    pub active_discharge: u64,
+    pub standby_discharge: u64,
+    pub active_energy: u64,
+    pub standby_energy: u64,
+    pub full: u64,
+    pub designed: u64,
+    pub cycles: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -949,6 +971,7 @@ const SRUM_CONNECTIVITY: &str = "{DD6636C4-8929-4683-974E-22C046A43763}";
 const SRUM_TIMELINE: &str = "{5C8CF1C7-7257-4F13-B223-970EF5939312}";
 const SRUM_PUSH: &str = "{D10CA2FE-6FCF-4F6D-848E-B2E99266FA86}";
 const SRUM_ENERGY: &str = "{FEE4E14F-02A9-4550-B5CE-5FA2DA202E37}";
+const SRUM_ENERGY_LT: &str = "{FEE4E14F-02A9-4550-B5CE-5FA2DA202E37}LT";
 /// Most hourly rows kept per table (the newest).
 const MAX_SRUM_ROWS: usize = 250_000;
 
@@ -1094,6 +1117,24 @@ fn srum(w: &mut WindowsArtifacts, d: &[u8], file: usize, deleted: bool, profiles
             });
         }
     }
+    if let Some(t) = db.table(SRUM_ENERGY_LT) {
+        for r in db.rows(t, MAX_SRUM_ROWS) {
+            s.energy_lt.push(SrumEnergyLt {
+                t: srum_time(r.get("TimeStamp")),
+                active_ac: num(&r, "ActiveAcTime"),
+                standby_ac: num(&r, "CsAcTime"),
+                active_dc: num(&r, "ActiveDcTime"),
+                standby_dc: num(&r, "CsDcTime"),
+                active_discharge: num(&r, "ActiveDischargeTime"),
+                standby_discharge: num(&r, "CsDischargeTime"),
+                active_energy: num(&r, "ActiveEnergy"),
+                standby_energy: num(&r, "CsEnergy"),
+                full: num(&r, "FullChargedCapacity"),
+                designed: num(&r, "DesignedCapacity"),
+                cycles: num(&r, "CycleCount"),
+            });
+        }
+    }
     // Totals per program and user.
     let mut apps: BTreeMap<(String, String), SrumApp> = BTreeMap::new();
     let span = |t: u64, a: &mut SrumApp| {
@@ -1131,6 +1172,7 @@ fn srum(w: &mut WindowsArtifacts, d: &[u8], file: usize, deleted: bool, profiles
     s.dropped = keep_newest(&mut s.network, MAX_SRUM_ROWS, |x| x.t) + keep_newest(&mut s.usage, MAX_SRUM_ROWS, |x| x.t) + keep_newest(&mut s.focus, MAX_SRUM_ROWS, |x| x.t);
     s.push.sort_by_key(|x| x.t);
     s.energy.sort_by_key(|x| x.t);
+    s.energy_lt.sort_by_key(|x| x.t);
     s.connections.sort_by_key(|c| c.start);
     if deleted {
         s.error.get_or_insert_with(|| "read from a deleted copy of SRUDB.dat".into());
@@ -2660,6 +2702,9 @@ mod tests {
             let e = &s.energy[1];
             assert_eq!((e.state, e.charge, e.full, e.designed, e.cycles), (2, 15_000, 48_000, 50_000, 212));
             assert_eq!(iso(e.event), "2026-10-20T10:30:00.0000000Z");
+            assert_eq!(s.energy_lt.len(), 1);
+            let lt = &s.energy_lt[0];
+            assert_eq!((lt.active_ac, lt.active_dc, lt.standby_dc, lt.active_energy, lt.full, lt.cycles), (14_400, 5_400, 28_800, 61_000, 48_000, 212));
             // Periods with input are on the timeline; the service's is not.
             finish(&mut w);
             let t = &w.timeline;

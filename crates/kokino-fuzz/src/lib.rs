@@ -594,6 +594,7 @@ fn photo(d: &[u8]) {
 fn carve(d: &[u8]) {
     let mut s: &[u8] = d;
     let _ = kokino_analysis::carve::identify(&mut s, 0);
+    kokino_analysis::carve::fuzz_jpeg_two(d);
 }
 
 fn browser(d: &[u8]) {

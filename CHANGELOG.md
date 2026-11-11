@@ -6,13 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- ext3 and ext4: names of files deleted long ago, from older copies of their folders kept in the journal, also when the file's inode now belongs to another file. On the NIST CFReDS ext images this found 704 more deleted names (ext-10, files whose inodes were reused) and changed nothing else.
+- Carving: JPEGs split in two pieces across free space are joined again (bifragment gap carving). The second piece is looked for up to 16 MB on, and a join is kept only when the joined picture decodes into exactly the blocks its header promises and ends where its data ends. Such files are marked "joined from two pieces" with both offsets; preview, export, hashes, the picture checks and the search index read the joined bytes.
+- SRUM: the long-term energy table (time active and in standby, on mains power and on battery, per period; values as stored).
 - Watchlist: STIX 2.1 bundles (indicator patterns for file hashes and names, IPv4 and IPv6 addresses and networks, domain names, URLs, email addresses and message senders, process names, joined by AND or OR, and the same kinds of observable objects) and MISP event exports (attributes and object attributes, composite types such as filename|sha256 and ip-dst|port, deleted attributes left out), pasted or loaded from a file. Only equality comparisons are read; the rest are listed as not read.
 - Watchlist: IP networks in CIDR form (198.51.100.0/24), also in pasted lists; web addresses that are IP addresses are matched against IP indicators.
 - Watchlist: each sweep is compared with the previous sweep of the case; hits it did not have are marked new, with an "Only new" filter. The number of new hits is in the audit log.
 - SRUM: the App Timeline Provider table (per program and period, seconds in the foreground, with user input, keyboard and mouse input, and playing audio), push notifications and battery charge. In-focus and input time per program in the program list and the export; periods with user input on the timeline as programs in use.
 
 ### Changed
-- Fuzzing: `ioc` again with STIX and MISP seeds (5.1 million inputs) and `ese` with the new SRUM tables (273,000); see Fixed. In all: 670 million inputs over 40 targets, 40 problems found and fixed.
+- Fuzzing: `ioc` again with STIX and MISP seeds (5.1 million inputs) and `ese` with the new SRUM tables (273,000; see Fixed), then `ext` with folder copies from the journal (236,000), `carve` with the JPEG join (43.3 million) and `ese` with the long-term energy table (193,000), which found nothing. In all: 714 million inputs over 40 targets, 40 problems found and fixed.
 - Watchlist: up to 50,000 indicators and 20 MB (was 5,000 and 2 MB); the sweep looks indicators up in tables instead of comparing each with every file and record, so large feeds stay fast. Email addresses are matched as whole addresses in From, To and Cc (before, as text anywhere in the field).
 
 ### Fixed

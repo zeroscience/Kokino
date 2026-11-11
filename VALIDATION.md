@@ -517,7 +517,7 @@ analysis to count deleted names that have no content left.
 
 | Data | Result |
 |---|---|
-| Deleted names listed | 2,782 (NIST counts 3,032 deleted files with metadata in the cases that state a number) |
+| Deleted names listed | 3,486 with folder copies from the journal (2,782 before; NIST counts 3,032 deleted files with metadata in the cases that state a number) |
 | Deleted names matching NIST's count exactly | 11 of 19 cases with a stated count |
 | Deleted files with content | 1,013 (ext2 711, ext3 33, ext4 269) |
 | Tagged content complete | 962 of 965 files; 1,852,775 of 1,852,782 blocks right (99.9996%) |
@@ -540,7 +540,7 @@ analysis to count deleted names that have no content left.
 | ext-07-two | 6 | 3 | 3 | 0 | 2 | 0 |
 | ext-08 | 26 | 25 | 20 | 15 | 7 | 0 |
 | ext-09 | 766 | 832 | 260 | 260 | 0 | 0 |
-| ext-10 | 1757 | 1181 | 539 | 539 | 279 | 0 |
+| ext-10 | 1757 | 1885 | 539 | 539 | 279 | 0 |
 | ext-11 | 9 | 9 | 3 | 3 | 0 | 0 |
 | ext-12 | 30 | 30 | 12 | 12 | 3 | 0 |
 | ext-13 | 384 | 404 | 120 | 92 | 2 | 0 |
@@ -548,6 +548,16 @@ analysis to count deleted names that have no content left.
 | ext-15 | - | 0 | 0 | 0 | 0 | 0 |
 | ext-16 | - | 178 | 0 | 0 | 0 | 0 |
 | ext-17 | - | 0 | 0 | 0 | 0 | 0 |
+
+Names from older copies of folders in the journal (after 1.4.0) changed
+one image only: ext-10, NIST's case of deleted files whose space and
+inodes were used again, went from 1,181 to 1,885 deleted names. The 704
+new names (in /box of the ext3 and ext4 partitions) are files such as
+xB0004-4.txt whose inode now belongs to a newer file (xF0004-4.txt); the
+folder no longer names them anywhere, but the journal's older copy of it
+does. Kokino lists them with "inode in use again" and does not attribute
+the newer file's content to them. None repeats a name the folder still
+has, and every other number in the table stayed the same.
 
 ### What the numbers mean
 

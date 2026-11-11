@@ -902,17 +902,16 @@ fn carved_src(st: &AppState, cid: &str, eid: &str, id: u32) -> anyhow::Result<By
     let case = st.case(cid)?;
     let res = jobs::load_carved(&case, eid).ok_or_else(|| anyhow::anyhow!("this evidence has not been carved"))?;
     let f = res.files.into_iter().find(|f| f.id == id).ok_or_else(|| anyhow::anyhow!("no such carved file"))?;
-    if f.space.is_none() {
+    if f.space.is_none() && f.gap.is_none() {
         return image_range(&case.evidence_by_id(eid)?, f.offset, f.len);
     }
-    // Carved from a decrypted volume: read it decrypted.
+    // Carved from a decrypted volume (read decrypted), or in two pieces.
     let l = st.loaded(cid, eid)?;
-    let (mut reader, size) = kokino_analysis::carve::space_reader(&l.evidence, &l.analysis.volumes, f.space)?;
-    let (start, len) = (f.offset, f.len.min(size.saturating_sub(f.offset)));
+    let (mut reader, len) = kokino_analysis::carve::carved_reader(&l.evidence, &l.analysis.volumes, &f)?;
     Ok((len, Box::new(move |off, n| {
         let n = n.min(len.saturating_sub(off) as usize);
         let mut buf = vec![0u8; n];
-        let got = read_at(&mut reader, start + off, &mut buf)?;
+        let got = read_at(&mut reader, off, &mut buf)?;
         buf.truncate(got);
         Ok(buf)
     })))
@@ -2233,7 +2232,7 @@ fn carved_bytes(st: &AppState, cid: &str, eid: &str, id: u32, max: u64) -> anyho
         anyhow::bail!("carved file is {} bytes; larger than {}", f.len, max);
     }
     let l = st.loaded(cid, eid)?;
-    let buf = kokino_analysis::carve::read_carved(&l.evidence, &l.analysis.volumes, f.space, f.offset, f.len)?;
+    let buf = kokino_analysis::carve::read_carved_file(&l.evidence, &l.analysis.volumes, &f)?;
     Ok((f, buf, case))
 }
 
