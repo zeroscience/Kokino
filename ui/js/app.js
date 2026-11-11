@@ -629,40 +629,67 @@ async function watchlistView(c) {
   const cid = c.info.id;
   setCrumbs([{ label: "Cases", href: "/" }, { label: c.info.name, href: "/c/" + cid }, { label: "Watchlist" }]);
   const saved = await api(`/cases/${cid}/watchlist`);
-  const ta = h("textarea.mono", { rows: 10, style: { width: "100%" }, placeholder: "One per line: hashes (MD5, SHA-1, SHA-256), IP addresses, domains or URLs, email addresses, file names or paths.\n# comments and \"value # note\" are kept; defanged forms like hxxp and [.] are read too." });
+  const FORMAT = { lines: "a list", stix: "a STIX 2.1 bundle", misp: "a MISP event export" };
+  const ta = h("textarea.mono", { rows: 10, style: { width: "100%" }, placeholder: "One per line: hashes (MD5, SHA-1, SHA-256), IP addresses or networks (CIDR), domains or URLs, email addresses, file names or paths.\n# comments and \"value # note\" are kept; defanged forms like hxxp and [.] are read too.\nOr paste or load a STIX 2.1 bundle or a MISP event export (JSON)." });
   ta.value = saved.text;
   const out = h("div.stack");
   const status = h("span.muted");
+  const lastNote = h("span.muted", saved.last_sweep ? `Last sweep ${ts(saved.last_sweep.at)} by ${saved.last_sweep.by}; hits since then will be marked new.` : "");
   const KIND = { md5: "MD5", sha1: "SHA-1", sha256: "SHA-256", ip: "IP", email: "Email", domain: "Domain or name", path: "Path", name: "File name" };
   const open = (x) => x.file != null ? fileDrawer({ cid, eid: x.evidence, fi: x.fi }, x.file)
     : go(`/c/${cid}/e/${x.evidence}/${x.what === "web" ? "web" : x.what === "mail" ? "mail" : "system"}?fi=${x.fi}${x.what === "logon" ? "&sec=logons" : x.what === "event" ? "&sec=events" : ""}`);
+  const file = h("input", { type: "file", accept: ".json,.txt,.csv,.ioc,text/plain,application/json", style: { display: "none" } });
+  file.onchange = async () => {
+    const f = file.files[0];
+    if (!f) return;
+    if (f.size > 20 * 1024 * 1024) return toast("The file is too big (20 MB at most)", true);
+    ta.value = await f.text();
+    file.value = "";
+    status.textContent = `Loaded ${f.name}`;
+  };
+  let r = null, onlyNew = false;
+  const draw = () => {
+    if (!r) return;
+    const hit = r.results.filter((x) => x.hits.length && (!onlyNew || x.hits.some((y) => y.new)));
+    const missing = r.results.filter((x) => !x.hits.length);
+    const notes = [`Read as ${FORMAT[r.format] || "a list"}: ${num(r.results.length)} indicators. Searched: ${r.searched.join(", ") || "none"}.`];
+    if (r.not_analyzed.length) notes.push(`Not analyzed yet: ${r.not_analyzed.join(", ")}.`);
+    if (r.not_hashed.length && r.results.some((x) => ["md5", "sha1", "sha256"].includes(x.indicator.kind))) notes.push(`No hash analysis on ${r.not_hashed.join(", ")}: hashes cannot match there; run Hash analysis first.`);
+    if (r.ignored.length) notes.push(`Not read (${num(r.ignored.length)}): ${r.ignored.slice(0, 5).join(", ")}${r.ignored.length > 5 ? "..." : ""}.`);
+    notes.push(r.previous ? `Compared with the sweep of ${ts(r.previous.at)} by ${r.previous.by}: ${num(r.new_hits)} new hit${r.new_hits === 1 ? "" : "s"}.` : "The first sweep of this case: the next one will mark what is new.");
+    const hitRow = (y) => h("div.ell", { class: y.deleted ? "deleted" : null },
+      y.new && r.previous ? h("span.pill.warn", { style: { marginRight: "6px" } }, "new") : null,
+      h("a", { href: "javascript:void 0", onclick: () => open(y), title: y.detail }, y.detail), h("span.muted", ` ${y.evidence_name}${y.time ? ", " + ts(y.time) : ""}${y.deleted ? ", deleted" : ""}`));
+    const row = (x) => {
+      const hs = onlyNew ? x.hits.filter((y) => y.new) : x.hits;
+      return h("tr",
+        h("td.mono.wrap", x.indicator.value, x.indicator.note ? h("div.muted", x.indicator.note) : null),
+        h("td", h("span.pill", KIND[x.indicator.kind] || x.indicator.kind)),
+        h("td", hs.length ? [...hs.slice(0, 50).map(hitRow), hs.length > 50 || x.truncated ? h("div.muted", `and ${x.truncated ? "more than " : ""}${num(hs.length - Math.min(50, hs.length))} more`) : null] : h("span.muted", "not found")));
+    };
+    const tbody = h("tbody", hit.slice(0, 3000).map(row));
+    const more = missing.length && !onlyNew ? h("button.sm", { onclick: (e) => { tbody.append(...missing.slice(0, 3000).map(row)); e.target.remove(); } }, `Show the ${num(Math.min(missing.length, 3000))} indicators not found`) : null;
+    out.replaceChildren(h("p.muted", { style: { margin: 0 } }, notes.join(" ")),
+      r.results.length ? h("div.scroll", { style: { maxHeight: "calc(100vh - 460px)" } }, h("table.tbl.sys", h("thead", h("tr", ["Indicator", "Kind", "Hits"].map((t) => h("th", t)))), tbody)) : h("div.card.empty", "The list is empty."),
+      ...(more ? [h("div.row", more)] : []));
+  };
+  const newOnly = h("label.row", { style: { gap: "6px" }, title: "Only indicators with hits the previous sweep did not have" }, h("input", { type: "checkbox", onchange: (e) => { onlyNew = e.target.checked; draw(); } }), "Only new");
   const run = async () => {
     status.textContent = "Searching...";
     out.replaceChildren(h("div.card.empty", h("div.spin")));
-    let r;
     try { r = await api(`/cases/${cid}/watchlist/sweep`, { method: "POST", body: { text: ta.value } }); } catch (e) { status.textContent = ""; out.replaceChildren(h("div.card.empty", e.message)); return; }
-    const hit = r.results.filter((x) => x.hits.length);
-    status.textContent = `${num(hit.length)} of ${num(r.results.length)} indicators found`;
-    const notes = [`Searched: ${r.searched.join(", ") || "none"}.`];
-    if (r.not_analyzed.length) notes.push(`Not analyzed yet: ${r.not_analyzed.join(", ")}.`);
-    if (r.not_hashed.length && r.results.some((x) => ["md5", "sha1", "sha256"].includes(x.indicator.kind))) notes.push(`No hash analysis on ${r.not_hashed.join(", ")}: hashes cannot match there; run Hash analysis first.`);
-    if (r.ignored.length) notes.push(`Not read: ${r.ignored.slice(0, 5).join(", ")}${r.ignored.length > 5 ? "..." : ""}.`);
-    const hitRow = (y) => h("div.ell", { class: y.deleted ? "deleted" : null },
-      h("a", { href: "javascript:void 0", onclick: () => open(y), title: y.detail }, y.detail), h("span.muted", ` ${y.evidence_name}${y.time ? ", " + ts(y.time) : ""}${y.deleted ? ", deleted" : ""}`));
-    out.replaceChildren(h("p.muted", { style: { margin: 0 } }, notes.join(" ")),
-      r.results.length ? h("div.scroll", { style: { maxHeight: "calc(100vh - 460px)" } }, h("table.tbl.sys", h("thead", h("tr", ["Indicator", "Kind", "Hits"].map((t) => h("th", t)))),
-        h("tbody", [...hit, ...r.results.filter((x) => !x.hits.length)].map((x) => h("tr",
-          h("td.mono.wrap", x.indicator.value, x.indicator.note ? h("div.muted", x.indicator.note) : null),
-          h("td", h("span.pill", KIND[x.indicator.kind] || x.indicator.kind)),
-          h("td", x.hits.length ? [...x.hits.slice(0, 50).map(hitRow), x.hits.length > 50 || x.truncated ? h("div.muted", `and ${x.truncated ? "more than " : ""}${num(x.hits.length - Math.min(50, x.hits.length))} more`) : null] : h("span.muted", "not found"))))))) : h("div.card.empty", "The list is empty."));
+    const found = r.results.filter((x) => x.hits.length).length;
+    status.textContent = `${num(found)} of ${num(r.results.length)} indicators found` + (r.previous ? `, ${num(r.new_hits)} new hits` : "");
+    lastNote.textContent = "";
+    draw();
   };
   const save = async () => {
-    try { const r = await api(`/cases/${cid}/watchlist`, { method: "PUT", body: { text: ta.value } }); toast(`Saved ${num(r.indicators.length)} indicators`); } catch (e) { toast(e.message, true); }
+    try { const x = await api(`/cases/${cid}/watchlist`, { method: "PUT", body: { text: ta.value } }); toast(`Saved ${num(x.indicators)} indicators (${FORMAT[x.format] || "a list"})`); } catch (e) { toast(e.message, true); }
   };
   render(h("div.stack",
-    h("div.hd", h("div", h("h1", "Watchlist"), h("div.muted", "Search every analyzed evidence item of the case at once for known indicators: file hashes (from Hash analysis), file names and paths (deleted files included), domains and URLs in web activity and email, email addresses, and IP addresses in logons and event logs.")), h("span.sp")),
-    ta,
-    h("div.row", h("button.primary", { onclick: run }, "Search the case"), canWrite() ? h("button", { onclick: save, title: "Keep this list with the case (recorded in the audit log)" }, "Save list") : null, status),
+    h("div.hd", h("div", h("h1", "Watchlist"), h("div.muted", "Search every analyzed evidence item of the case at once for known indicators: file hashes (from Hash analysis), file names and paths (deleted files included), domains and URLs in web activity and email, email addresses, and IP addresses and networks in logons and event logs. Paste a list, or load a STIX 2.1 bundle or a MISP event export.")), h("span.sp")),
+    ta, file,
+    h("div.row.wrap", h("button.primary", { onclick: run }, "Search the case"), h("button", { onclick: () => file.click() }, "Load file..."), canWrite() ? h("button", { onclick: save, title: "Keep this list with the case (recorded in the audit log)" }, "Save list") : null, newOnly, status, lastNote),
     out));
 }
 
@@ -1812,30 +1839,39 @@ async function systemTab(ctx) {
       const loadRows = async (a) => {
         pick = a;
         const p = new URLSearchParams({ app: a.app, user: a.user, limit: 1000 });
-        const [net, use] = await Promise.all([api(`/cases/${ctx.cid}/evidence/${ctx.eid}/fs/${ctx.fi}/srum?${p}`), api(`/cases/${ctx.cid}/evidence/${ctx.eid}/fs/${ctx.fi}/srum?kind=usage&${p}`)]);
+        const base = `/cases/${ctx.cid}/evidence/${ctx.eid}/fs/${ctx.fi}/srum`;
+        const [net, use, foc] = await Promise.all([api(`${base}?${p}`), api(`${base}?kind=usage&${p}`), api(`${base}?kind=focus&${p}`)]);
+        const dur = (sec) => sec >= 3600 ? `${Math.floor(sec / 3600)} h ${Math.floor(sec % 3600 / 60)} min` : sec >= 60 ? `${Math.floor(sec / 60)} min ${sec % 60} s` : `${sec} s`;
         detail.replaceChildren(
           card(`${progName(a.app)}, hour by hour`, h("p.muted", { style: { margin: 0 } }, a.app + (a.user ? `, user ${a.user}` : "")),
             net.items.length ? table([`Hour ending (${zoneName()})`, "Sent", "Received", "Network", "Interface"], net.items.map((x) => h("tr", h("td.mono", t16(x.t)), h("td.num", { class: x.sent >= 104857600 ? "bad-text" : null }, bytes(x.sent)), h("td.num", bytes(x.received)), h("td", x.profile), h("td", x.interface)))) : null,
             net.total > net.items.length ? h("p.muted", `newest ${num(net.items.length)} of ${num(net.total)} hours`) : null,
-            use.items.length ? table([`Hour ending (${zoneName()})`, "Disk read", "Disk written", "CPU cycles (foreground)", "CPU cycles (background)"], use.items.map((x) => h("tr", h("td.mono", t16(x.t)), h("td.num", bytes(x.read)), h("td.num", bytes(x.written)), h("td.num", num(x.foreground)), h("td.num", num(x.background))))) : null));
+            use.items.length ? table([`Hour ending (${zoneName()})`, "Disk read", "Disk written", "CPU cycles (foreground)", "CPU cycles (background)"], use.items.map((x) => h("tr", h("td.mono", t16(x.t)), h("td.num", bytes(x.read)), h("td.num", bytes(x.written)), h("td.num", num(x.foreground)), h("td.num", num(x.background))))) : null,
+            foc.items.length ? table([`Period ended (${zoneName()})`, "Lasted", "In the foreground", "User input", "Keyboard", "Mouse", "Playing audio"], foc.items.map((x) => h("tr", h("td.mono", t16(x.end || x.t)), h("td", dur(Math.round(x.duration_ms / 1000))), h("td", dur(x.focus_s)), h("td", { class: x.input_s ? "bad-text" : null }, dur(x.input_s)), h("td", dur(x.keyboard_s)), h("td", dur(x.mouse_s)), h("td", dur(x.audio_s))))) : null));
         detail.scrollIntoView({ block: "start", behavior: "smooth" });
       };
-      const fill = () => out.replaceChildren(table(["Program", "User", "Sent", "Received", "Disk read", "Disk written", "First", "Last"],
+      const mins = (sec) => (sec ? (sec >= 3600 ? `${(sec / 3600).toFixed(1)} h` : `${Math.round(sec / 60)} min`) : "");
+      const fill = () => out.replaceChildren(table(["Program", "User", "Sent", "Received", "Disk read", "Disk written", "In focus", "Input", "First", "Last"],
         s.apps.filter((a) => !q || (a.app + " " + a.user).toLowerCase().includes(q)).map((a) =>
           h("tr", { class: pick === a ? "sel" : null, onclick: () => { loadRows(a); fill(); } },
             h("td.nm", h("b", progName(a.app)), h("div.muted", a.app)), h("td", a.user),
             h("td.num", { class: a.sent >= 1073741824 ? "bad-text" : null }, bytes(a.sent)), h("td.num", bytes(a.received)), h("td.num", bytes(a.read)), h("td.num", bytes(a.written)),
+            h("td.num", mins(a.focus_s)), h("td.num", mins(a.input_s)),
             h("td.mono", t16(a.first)), h("td.mono", t16(a.last))))));
       fill();
       return [
         card("SRUM (System Resource Usage Monitor)", kv([["Covers", s.first ? `${t16(s.first)} to ${t16(s.last)}` : "no records"], ["Programs", num(s.apps.length)],
-          ["Hourly records", r.srum_rows ? `${num(r.srum_rows.network)} network, ${num(r.srum_rows.usage)} resource use${s.dropped ? ` (the oldest ${num(s.dropped)} not kept)` : ""}` : ""], ["Database", fileOf(s.file)]]),
+          ["Hourly records", r.srum_rows ? `${num(r.srum_rows.network)} network, ${num(r.srum_rows.usage)} resource use${r.srum_rows.focus ? `, ${num(r.srum_rows.focus)} app timeline` : ""}${s.dropped ? ` (the oldest ${num(s.dropped)} not kept)` : ""}` : ""], ["Database", fileOf(s.file)]]),
           s.dirty ? h("p", { style: { color: "var(--warn)", margin: 0 } }, "Not cleanly closed: the newest hours may be only in its transaction logs (SRU*.log), which are not read.") : null,
           s.error ? h("p.bad-text", s.error) : null),
         filterBox("Filter by program or user...", (v) => { q = v; fill(); }),
-        h("p.muted", { style: { fontSize: "12.5px" } }, "Windows writes, about once an hour, how many bytes each program sent and received over which network and how much it read and wrote to disk, per user, and keeps about 30 to 60 days. A program that sent gigabytes is worth a look (cloud sync and copy tools such as rclone are a common way to take data out). Click a program for its hours. Times are when Windows wrote the record, at the end of the hour it covers."),
+        h("p.muted", { style: { fontSize: "12.5px" } }, "Windows writes, about once an hour, how many bytes each program sent and received over which network and how much it read and wrote to disk, per user, and keeps about 30 to 60 days. A program that sent gigabytes is worth a look (cloud sync and copy tools such as rclone are a common way to take data out). Windows 10 and later also record, per program, how long it was in the foreground and how long the user typed or clicked in it (In focus, Input): the difference between a program that ran and one that someone used. Click a program for its hours and periods. Times are when Windows wrote the record, at the end of the hour it covers."),
         out, detail,
         s.connections.length ? card("Network connections", table([`Connected (${zoneName()})`, "For", "Network", "Interface"], s.connections.slice().reverse().map((c) => h("tr", h("td.mono", t16(c.start)), h("td", `${Math.floor(c.seconds / 3600)} h ${Math.floor(c.seconds % 3600 / 60)} min`), h("td", c.profile), h("td", c.interface))))) : null,
+        (s.push || []).length ? card("Push notifications", h("p.muted", { style: { margin: 0 } }, "Notifications Windows delivered to each program, as SRUM recorded them: when a messaging or mail app was receiving."),
+          table([`Time (${zoneName()})`, "Program", "User", "Kind", "Size"], s.push.slice().reverse().slice(0, 2000).map((x) => h("tr", h("td.mono", t16(x.t)), h("td.nm", progName(x.app)), h("td", x.user), h("td", { 1: "toast", 2: "tile", 3: "badge", 4: "raw" }[x.kind] || `type ${x.kind}`), h("td.num", bytes(x.size)))))) : null,
+        (s.energy || []).length ? card("Battery", h("p.muted", { style: { margin: 0 } }, "Charge level over time, as SRUM recorded it: when the computer ran on battery and how far it drained. State is the StateTransition value as stored."),
+          table([`Time (${zoneName()})`, "Charge", "Of full capacity", "Full / design capacity", "Cycles", "State"], s.energy.slice().reverse().slice(0, 2000).map((x) => h("tr", h("td.mono", t16(x.event || x.t)), h("td.num", `${num(x.charge)} mWh`), h("td.num", x.full ? `${Math.round(100 * x.charge / x.full)}%` : ""), h("td.num", `${num(x.full)} / ${num(x.designed)} mWh`), h("td.num", num(x.cycles)), h("td.num", x.state))))) : null,
       ];
     },
     journal: () => {

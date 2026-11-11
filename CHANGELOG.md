@@ -5,6 +5,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Watchlist: STIX 2.1 bundles (indicator patterns for file hashes and names, IPv4 and IPv6 addresses and networks, domain names, URLs, email addresses and message senders, process names, joined by AND or OR, and the same kinds of observable objects) and MISP event exports (attributes and object attributes, composite types such as filename|sha256 and ip-dst|port, deleted attributes left out), pasted or loaded from a file. Only equality comparisons are read; the rest are listed as not read.
+- Watchlist: IP networks in CIDR form (198.51.100.0/24), also in pasted lists; web addresses that are IP addresses are matched against IP indicators.
+- Watchlist: each sweep is compared with the previous sweep of the case; hits it did not have are marked new, with an "Only new" filter. The number of new hits is in the audit log.
+- SRUM: the App Timeline Provider table (per program and period, seconds in the foreground, with user input, keyboard and mouse input, and playing audio), push notifications and battery charge. In-focus and input time per program in the program list and the export; periods with user input on the timeline as programs in use.
+
+### Changed
+- Fuzzing: `ioc` again with STIX and MISP seeds (5.1 million inputs) and `ese` with the new SRUM tables (273,000); see Fixed. In all: 670 million inputs over 40 targets, 40 problems found and fixed.
+- Watchlist: up to 50,000 indicators and 20 MB (was 5,000 and 2 MB); the sweep looks indicators up in tables instead of comparing each with every file and record, so large feeds stay fast. Email addresses are matched as whole addresses in From, To and Cc (before, as text anywhere in the field).
+
+### Fixed
+- SRUM: per-program totals could overflow on a damaged database with huge hourly values (found by fuzzing); they now stop at the largest value.
+- Watchlist: a STIX pattern with a multi-byte character just before an object name stopped the parser (found by fuzzing before release).
+
 ## [1.4.0] - 2026-11-10
 
 A whole case at once: one timeline across every evidence item, a watchlist that sweeps every item for known indicators, golden results that check what Kokino finds in every test image on every commit, and a roadmap for after a pause in development.

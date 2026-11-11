@@ -79,7 +79,7 @@ start or be trusted; most items are blocked on test data rather than code.
 ### 3. Deeper Windows
 - [ ] **Windows Search** (Windows.edb): file names, contents and times the indexer kept, also for deleted files. The ESE reader exists (SRUM and WebCache use it). Needs: a test database.
 - [ ] **$LogFile in full**: redo and undo of MFT changes (what a file looked like before it changed). Needs: a large but well-documented effort (NTFS internals, libfsntfs notes).
-- [ ] **SRUM**: energy, push notification and app timeline tables.
+- [x] **SRUM**: app timeline (time in focus, keyboard and mouse input), push notification and battery tables. Still to do: the long-term energy table, and a check on a real computer's database.
 - [ ] **Deleted PST items** from the file's free blocks.
 
 ### 4. More formats
@@ -91,7 +91,7 @@ start or be trusted; most items are blocked on test data rather than code.
 - [ ] **Carving of fragmented files** (JPEG and others split across free space).
 
 ### 5. Workflow
-- [ ] **Watchlist from STIX and MISP exports**, and saved sweeps compared over time (what is new since the last sweep).
+- [x] **Watchlist from STIX 2.1 and MISP exports**, IP networks (CIDR), and each sweep compared with the previous one (what is new).
 - [ ] **Code-signed Windows and macOS packages.** Needs: a code-signing certificate and an Apple Developer ID; no code.
 - [ ] **Plugin interface** for artifacts Kokino does not read yet (a parser as a separate program reading a file and writing JSON). Needs: a stable output format first.
 - [ ] **Optional AI summaries** that only cite linked evidence, off by default and never sending evidence anywhere without the examiner's choice.

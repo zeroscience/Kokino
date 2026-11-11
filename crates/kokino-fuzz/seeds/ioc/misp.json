@@ -1,0 +1,10 @@
+{"Event": {"info": "LAB-PC intrusion", "Attribute": [
+        {"type": "ip-dst|port", "category": "Network activity", "value": "192.0.2.10|443", "comment": "C2"},
+        {"type": "filename|sha1", "category": "Payload delivery", "value": "evil.dll|DA39A3EE5E6B4B0D3255BFEF95601890AFD80709"},
+        {"type": "hostname", "category": "Network activity", "value": "beacon.lab.test"},
+        {"type": "email-src", "category": "Payload delivery", "value": "mallory@lab.test"},
+        {"type": "text", "category": "Other", "value": "not an indicator"},
+        {"type": "domain", "value": "old.lab.test", "deleted": true}
+      ],
+      "Object": [{"name": "file", "Attribute": [{"type": "md5", "value": "d41d8cd98f00b204e9800998ecf8427e", "category": "Payload delivery"}]}]
+    }}

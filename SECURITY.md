@@ -176,7 +176,18 @@ Watchlist (1.4.0):
 |---|---|---|--:|---|
 | `ioc` | the watchlist parser: indicator kinds, defanged forms, notes, URL hosts, domain and IP comparison | 10 min | 13,628,459 | 1: an IPv4-mapped IPv6 address (::ffff:192.0.2.1) did not match itself, so such an indicator found nothing; fixed (found in a first round stopped to fix it and not counted) |
 
-In all: 669,995,687 inputs over 40 targets, and 38 distinct problems
+STIX and MISP watchlists, SRUM app timeline, push and battery tables (after 1.4.0):
+
+| Target | What it covers | Rounds | Inputs in all | Distinct problems found |
+|---|---|---|--:|---|
+| `ioc` | again, with STIX 2.1 bundles and MISP events as seeds, IP networks, and every value looked up as a hash, file, URL, host, mail field and address | 10 min | 5,076,839 | 1: a crash on a STIX pattern with a multi-byte character just before an object name; fixed (found in a first round stopped to fix it and not counted) |
+| `ese` | again, with the SRUM fixtures holding the App Timeline Provider, push notification and energy tables | 10 min | 272,618 | 1: integer overflows adding up per-program totals (bytes sent, received, read and written, processor cycles, focus and input time) from huge values; fixed (same first round) |
+
+That first round also stopped on a wrong assumption in the fuzzer's own
+check (an IP network does not "match itself" as an address); the check was
+corrected and is not counted as a problem.
+
+In all: 670,345,144 inputs over 40 targets, and 40 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed
@@ -221,6 +232,8 @@ found by fuzzing, all fixed.
 | 36 | Outlook PST | Crash (read past the end) | Fuzzing | A subnode block one byte long was read for its level | Short blocks read as empty |
 | 37 | Property lists | Integer overflow | Fuzzing | A date of about 10^30 seconds converted to Windows time | Saturating arithmetic; such dates read as unknown |
 | 38 | Watchlist | Wrong result | Fuzzing | Only one side of an IP comparison was unmapped, so an IPv4-mapped IPv6 indicator never matched | Both sides normalized before comparing |
+| 39 | Watchlist (STIX) | Crash (slice inside a character) | Fuzzing | The start of an object name was found one byte after a multi-byte character | Character boundaries kept |
+| 40 | SRUM | Integer overflow | Fuzzing | Per-program totals added hourly values near 2^63 | Saturating arithmetic |
 
 Before the fixes, every one of these could stop or slow an ingest, a carving
 job or a picture scan, or exhaust the examiner's memory, on purpose-made

@@ -105,7 +105,7 @@ Every finding links to the exact bytes it came from, every indicator of anti-for
 - **Built-in help:** a searchable Wiki (getting started, roles, evidence, every view, browser history, hex, reports, LAN mode, command line, troubleshooting) and an About page with version and contact.
 - **Correlation:** a case page listing what its evidence items have in common: users, computer names, email addresses, IP addresses, USB serials, wireless networks, web domains and identical files.
 - **Case timeline:** every evidence item and volume of a case on one timeline, in time order, each row opening in its item.
-- **Watchlist:** paste indicators (hashes, IP addresses, domains and URLs, email addresses, file names and paths; defanged forms too) and search every evidence item of the case at once; the list can be kept with the case.
+- **Watchlist:** paste indicators (hashes, IP addresses and networks, domains and URLs, email addresses, file names and paths; defanged forms too) or load a STIX 2.1 bundle or MISP event export, and search every evidence item of the case at once; each sweep marks what is new since the previous one, and the list can be kept with the case.
 - **Cases and accounts:** cases can be renamed, handed to another lead examiner, deleted and restored, all audit-logged. Every examiner signs in. Admins manage accounts and assign people to cases as examiner or reviewer (read-only). Every case action is attributed to the account in the audit log, and sign-ins are recorded in a hash-chained system audit log. Optional LAN mode serves HTTPS to a whole lab.
 
 ## What's next
@@ -220,7 +220,7 @@ Headless, using the same engine:
 - Every action is logged to `<case>/audit.jsonl` under the examiner's account, with the SHA-256 of the previous entry.
 - Analysis is deterministic for a given image and Kokino version, and the version is stored with the results.
 - Results are checked against public test images with ground truth, NIST CFReDS (61 deleted-file recovery images) and Digital Corpora: 99.8% of deleted-file blocks recovered correctly, image hashes matching the published values. See [VALIDATION.md](VALIDATION.md).
-- Every parser that reads evidence is fuzzed (670 million inputs so far, 38 problems found and fixed) and `unsafe` Rust is forbidden in every crate. See [SECURITY.md](SECURITY.md), which is also where to report a vulnerability.
+- Every parser that reads evidence is fuzzed (670 million inputs so far, 40 problems found and fixed) and `unsafe` Rust is forbidden in every crate. See [SECURITY.md](SECURITY.md), which is also where to report a vulnerability.
 - The GUI needs a signed-in session (Argon2id passwords, HttpOnly SameSite=Strict cookies, login backoff), a CSRF header on every change and a known Host, which blocks other browser tabs and DNS rebinding. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#3-accounts-and-access).
 
 ## Development

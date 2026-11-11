@@ -392,9 +392,19 @@ fn ioc(d: &[u8]) {
             assert!(in_domain(&i.value, &i.value));
         }
         if i.kind == "ip" {
-            assert!(ip_eq(&i.value, &i.value));
+            // An address matches itself; a network, its own first address.
+            let addr = i.value.split('/').next().unwrap_or("");
+            assert!(ip_eq(addr, &i.value), "{}", i.value);
         }
         let _ = host(&i.value);
+    }
+    // Every value looked up as each kind of thing found on a disk.
+    let m = Matcher::new(&list);
+    for i in list.iter().take(200) {
+        let _ = (m.hash(&i.value), m.file(&i.value, &i.value), m.url(&i.value), m.host(&i.value), m.mail_field(&i.value), m.ip(&i.value));
+    }
+    for line in text.lines().take(200) {
+        let _ = (m.url(line), m.mail_field(line), m.ip(line), m.file(line, line));
     }
 }
 

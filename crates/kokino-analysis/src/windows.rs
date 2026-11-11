@@ -117,6 +117,16 @@ pub struct Srum {
     pub network: Vec<SrumNet>,
     pub usage: Vec<SrumUsage>,
     pub connections: Vec<SrumConn>,
+    /// App Timeline Provider: when a program ran, how long it was in the
+    /// foreground and how long the user typed or clicked in it.
+    #[serde(default)]
+    pub focus: Vec<SrumFocus>,
+    /// Push notifications received per program.
+    #[serde(default)]
+    pub push: Vec<SrumPush>,
+    /// Battery: charge level and capacity over time (laptops and tablets).
+    #[serde(default)]
+    pub energy: Vec<SrumEnergy>,
     /// Rows not kept (the oldest), beyond the limit.
     pub dropped: u64,
     pub error: Option<String>,
@@ -136,6 +146,56 @@ pub struct SrumApp {
     pub foreground: u64,
     pub background: u64,
     pub records: u32,
+    /// Seconds in the foreground, and with keyboard or mouse input (App
+    /// Timeline Provider).
+    #[serde(default)]
+    pub focus_s: u64,
+    #[serde(default)]
+    pub input_s: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SrumFocus {
+    /// When SRUM wrote the row.
+    pub t: u64,
+    /// When the program's period ended.
+    pub end: u64,
+    pub app: String,
+    pub user: String,
+    /// How long the period lasted.
+    pub duration_ms: u64,
+    /// Seconds in the foreground, with any user input, keyboard input,
+    /// mouse input, and playing audio.
+    pub focus_s: u64,
+    pub input_s: u64,
+    pub keyboard_s: u64,
+    pub mouse_s: u64,
+    pub audio_s: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SrumPush {
+    pub t: u64,
+    pub app: String,
+    pub user: String,
+    /// NotificationType as stored (1 toast, 2 tile, 3 badge, 4 raw).
+    pub kind: i64,
+    pub size: u64,
+    pub network: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SrumEnergy {
+    pub t: u64,
+    /// When the battery event happened.
+    pub event: u64,
+    /// StateTransition as stored.
+    pub state: i64,
+    /// Remaining charge, full-charge capacity and design capacity (mWh).
+    pub charge: u64,
+    pub full: u64,
+    pub designed: u64,
+    pub cycles: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -225,6 +285,11 @@ impl WindowsArtifacts {
         self.srum.as_ref().map(|s| (s.network.as_slice(), s.usage.as_slice()))
     }
 
+    /// SRUM's App Timeline rows, which `without_journal` leaves out too.
+    pub fn srum_focus(&self) -> &[SrumFocus] {
+        self.srum.as_ref().map(|s| s.focus.as_slice()).unwrap_or(&[])
+    }
+
     /// A copy without the change journal, which can hold hundreds of
     /// thousands of changes and is served page by page instead.
     pub fn without_journal(&self) -> WindowsArtifacts {
@@ -246,7 +311,7 @@ impl WindowsArtifacts {
             shellbags: self.shellbags.clone(),
             journal: None,
             // Hourly rows are served page by page too.
-            srum: self.srum.as_ref().map(|s| Srum { network: vec![], usage: vec![], ..s.clone() }),
+            srum: self.srum.as_ref().map(|s| Srum { network: vec![], usage: vec![], focus: vec![], ..s.clone() }),
             tasks: self.tasks.clone(),
             reg_deleted_keys: self.reg_deleted_keys.clone(),
             reg_deleted_values: self.reg_deleted_values.clone(),
@@ -881,6 +946,9 @@ fn wlan_profiles(h: &Hive, names: &HashMap<String, String>, out: &mut HashMap<u3
 const SRUM_NETWORK: &str = "{973F5D5C-1D90-4944-BE8E-24B94231A174}";
 const SRUM_USAGE: &str = "{D10CA2FE-6FCF-4F6D-848E-B2E99266FA89}";
 const SRUM_CONNECTIVITY: &str = "{DD6636C4-8929-4683-974E-22C046A43763}";
+const SRUM_TIMELINE: &str = "{5C8CF1C7-7257-4F13-B223-970EF5939312}";
+const SRUM_PUSH: &str = "{D10CA2FE-6FCF-4F6D-848E-B2E99266FA86}";
+const SRUM_ENERGY: &str = "{FEE4E14F-02A9-4550-B5CE-5FA2DA202E37}";
 /// Most hourly rows kept per table (the newest).
 const MAX_SRUM_ROWS: usize = 250_000;
 
@@ -980,6 +1048,52 @@ fn srum(w: &mut WindowsArtifacts, d: &[u8], file: usize, deleted: bool, profiles
             s.connections.push(SrumConn { start: if start > 0 { start } else { srum_time(r.get("TimeStamp")) }, seconds: num(&r, "ConnectedTime"), interface: if_type(r.get("InterfaceLuid").and_then(|v| v.i64()).unwrap_or(0)), profile: profile(&r) });
         }
     }
+    // A FILETIME column, or nothing when it is not one.
+    let ft = |r: &HashMap<String, ese::Value>, col: &str| -> u64 {
+        let v = r.get(col).and_then(|v| v.i64()).unwrap_or(0);
+        if (116_444_736_000_000_000..=159_000_000_000_000_000).contains(&v) { v as u64 } else { 0 }
+    };
+    if let Some(t) = db.table(SRUM_TIMELINE) {
+        for r in db.rows(t, usize::MAX) {
+            s.focus.push(SrumFocus {
+                t: srum_time(r.get("TimeStamp")),
+                end: ft(&r, "EndTime"),
+                app: name(&r, "AppId"),
+                user: name(&r, "UserId"),
+                duration_ms: num(&r, "DurationMS"),
+                focus_s: num(&r, "InFocusS"),
+                input_s: num(&r, "UserInputS"),
+                keyboard_s: num(&r, "KeyboardInputS"),
+                mouse_s: num(&r, "MouseInputS"),
+                audio_s: num(&r, "AudioOutS"),
+            });
+        }
+    }
+    if let Some(t) = db.table(SRUM_PUSH) {
+        for r in db.rows(t, MAX_SRUM_ROWS) {
+            s.push.push(SrumPush {
+                t: srum_time(r.get("TimeStamp")),
+                app: name(&r, "AppId"),
+                user: name(&r, "UserId"),
+                kind: r.get("NotificationType").and_then(|v| v.i64()).unwrap_or(0),
+                size: num(&r, "PayloadSize"),
+                network: r.get("NetworkType").and_then(|v| v.i64()).unwrap_or(0),
+            });
+        }
+    }
+    if let Some(t) = db.table(SRUM_ENERGY) {
+        for r in db.rows(t, MAX_SRUM_ROWS) {
+            s.energy.push(SrumEnergy {
+                t: srum_time(r.get("TimeStamp")),
+                event: ft(&r, "EventTimestamp"),
+                state: r.get("StateTransition").and_then(|v| v.i64()).unwrap_or(0),
+                charge: num(&r, "ChargeLevel"),
+                full: num(&r, "FullChargedCapacity"),
+                designed: num(&r, "DesignedCapacity"),
+                cycles: num(&r, "CycleCount"),
+            });
+        }
+    }
     // Totals per program and user.
     let mut apps: BTreeMap<(String, String), SrumApp> = BTreeMap::new();
     let span = |t: u64, a: &mut SrumApp| {
@@ -987,28 +1101,36 @@ fn srum(w: &mut WindowsArtifacts, d: &[u8], file: usize, deleted: bool, profiles
             a.first = if a.first == 0 { t } else { a.first.min(t) };
             a.last = a.last.max(t);
         }
-        a.records += 1;
+        a.records = a.records.saturating_add(1);
     };
     for n in &s.network {
         let a = apps.entry((n.app.clone(), n.user.clone())).or_insert_with(|| SrumApp { app: n.app.clone(), user: n.user.clone(), ..Default::default() });
-        a.sent += n.sent;
-        a.received += n.received;
+        a.sent = a.sent.saturating_add(n.sent);
+        a.received = a.received.saturating_add(n.received);
         span(n.t, a);
     }
     for u in &s.usage {
         let a = apps.entry((u.app.clone(), u.user.clone())).or_insert_with(|| SrumApp { app: u.app.clone(), user: u.user.clone(), ..Default::default() });
-        a.read += u.read;
-        a.written += u.written;
-        a.foreground += u.foreground;
-        a.background += u.background;
+        a.read = a.read.saturating_add(u.read);
+        a.written = a.written.saturating_add(u.written);
+        a.foreground = a.foreground.saturating_add(u.foreground);
+        a.background = a.background.saturating_add(u.background);
         span(u.t, a);
+    }
+    for f in &s.focus {
+        let a = apps.entry((f.app.clone(), f.user.clone())).or_insert_with(|| SrumApp { app: f.app.clone(), user: f.user.clone(), ..Default::default() });
+        a.focus_s = a.focus_s.saturating_add(f.focus_s);
+        a.input_s = a.input_s.saturating_add(f.input_s);
+        span(f.t, a);
     }
     s.apps = apps.into_values().collect();
     s.apps.sort_by(|a, b| b.sent.cmp(&a.sent).then(b.written.cmp(&a.written)));
     let times = s.network.iter().map(|n| n.t).chain(s.usage.iter().map(|u| u.t)).filter(|&t| t > 0);
     s.first = times.clone().min().unwrap_or(0);
     s.last = times.max().unwrap_or(0);
-    s.dropped = keep_newest(&mut s.network, MAX_SRUM_ROWS, |x| x.t) + keep_newest(&mut s.usage, MAX_SRUM_ROWS, |x| x.t);
+    s.dropped = keep_newest(&mut s.network, MAX_SRUM_ROWS, |x| x.t) + keep_newest(&mut s.usage, MAX_SRUM_ROWS, |x| x.t) + keep_newest(&mut s.focus, MAX_SRUM_ROWS, |x| x.t);
+    s.push.sort_by_key(|x| x.t);
+    s.energy.sort_by_key(|x| x.t);
     s.connections.sort_by_key(|c| c.start);
     if deleted {
         s.error.get_or_insert_with(|| "read from a deleted copy of SRUDB.dat".into());
@@ -2258,6 +2380,11 @@ fn finish(w: &mut WindowsArtifacts) {
         for c in &s.connections {
             t.push(WinTime { t: c.start, kind: "NET".into(), what: if c.profile.is_empty() { c.interface.clone() } else { c.profile.clone() }, detail: format!("connected for {} min ({}, SRUM)", c.seconds / 60, c.interface) });
         }
+        // Periods in which the user typed or clicked in a program.
+        for f in s.focus.iter().filter(|f| f.input_s > 0) {
+            let when = if f.end > 0 { f.end } else { f.t };
+            t.push(WinTime { t: when, kind: "EXEC".into(), what: f.app.clone(), detail: format!("in use: {} s in the foreground, {} s with keyboard or mouse input, period ending here (SRUM app timeline){}", f.focus_s, f.input_s, if f.user.is_empty() { String::new() } else { format!(", user {}", f.user) }) });
+        }
     }
     for k in &w.tasks {
         // Windows' own tasks run all the time; only the others' runs are events.
@@ -2506,6 +2633,41 @@ pub fn inspect(name: &str, data: &[u8], full: bool) -> anyhow::Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// App timeline, push notifications and battery from the SRUM fixtures
+    /// written by esent.dll (scripts/make_srum_fixture.py).
+    #[test]
+    fn srum_focus_push_and_battery() {
+        for name in ["SRUDB.dat", "SRUDB-4k.dat"] {
+            let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/win/").to_string() + name;
+            let d = std::fs::read(&p).unwrap();
+            let mut w = WindowsArtifacts::default();
+            srum(&mut w, &d, 0, false, &HashMap::new());
+            let s = w.srum.as_ref().unwrap();
+            assert!(s.error.is_none(), "{:?}", s.error);
+            let iso = kokino_core::time::filetime_to_iso;
+            assert_eq!(s.focus.len(), 3, "{}", name);
+            let rc = s.focus.iter().find(|f| f.app.ends_with("rclone.exe")).unwrap();
+            assert_eq!((rc.focus_s, rc.input_s, rc.keyboard_s, rc.mouse_s, rc.duration_ms), (600, 45, 30, 15, 3_480_000));
+            assert_eq!(iso(rc.end), "2026-10-20T10:58:00.0000000Z");
+            let ff = s.focus.iter().find(|f| f.app.ends_with("firefox.exe")).unwrap();
+            assert_eq!((ff.focus_s, ff.input_s, ff.audio_s), (1800, 900, 1200));
+            let app = s.apps.iter().find(|a| a.app.ends_with("firefox.exe")).unwrap();
+            assert_eq!((app.focus_s, app.input_s), (1800, 900));
+            assert_eq!(s.push.len(), 3);
+            assert!(s.push.iter().all(|x| x.kind == 1 && x.size == 2048 && x.app == "Microsoft.WindowsStore_8wekyb3d8bbwe"));
+            assert_eq!(s.energy.len(), 2);
+            let e = &s.energy[1];
+            assert_eq!((e.state, e.charge, e.full, e.designed, e.cycles), (2, 15_000, 48_000, 50_000, 212));
+            assert_eq!(iso(e.event), "2026-10-20T10:30:00.0000000Z");
+            // Periods with input are on the timeline; the service's is not.
+            finish(&mut w);
+            let t = &w.timeline;
+            let used: Vec<&WinTime> = t.iter().filter(|x| x.detail.contains("SRUM app timeline")).collect();
+            assert_eq!(used.len(), 2);
+            assert!(used.iter().any(|x| iso(x.t) == "2026-10-20T10:58:00.0000000Z" && x.what.ends_with("rclone.exe")));
+        }
+    }
 
     /// A Windows XP Security log: logons, a log clearing, a process start,
     /// an account created, read like the EVTX events of later Windows.

@@ -45,8 +45,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/cases/{cid}/audit", get(audit))
         .route("/cases/{cid}/correlate", get(correlate))
         .route("/cases/{cid}/timeline", get(case_timeline))
-        .route("/cases/{cid}/watchlist", get(get_watchlist).put(put_watchlist))
-        .route("/cases/{cid}/watchlist/sweep", post(sweep_watchlist))
+        .route("/cases/{cid}/watchlist", get(get_watchlist).put(put_watchlist).layer(axum::extract::DefaultBodyLimit::max(WATCHLIST_MAX + 4096)))
+        .route("/cases/{cid}/watchlist/sweep", post(sweep_watchlist).layer(axum::extract::DefaultBodyLimit::max(WATCHLIST_MAX + 4096)))
         .route("/cases/{cid}/members", axum::routing::put(set_members))
         .route("/cases/{cid}/bookmarks", get(bookmarks_list).post(bookmark_add))
         .route("/cases/{cid}/bookmarks/report", get(bookmarks_report))
@@ -608,38 +608,56 @@ struct WatchText {
     text: String,
 }
 
-/// The case's saved watchlist (one indicator per line).
+/// Largest watchlist accepted (a MISP or STIX export of a big feed).
+const WATCHLIST_MAX: usize = 20 << 20;
+
+fn watchlist_size(text: &str) -> anyhow::Result<()> {
+    if text.len() > WATCHLIST_MAX {
+        anyhow::bail!("the watchlist is too long ({} MB at most)", WATCHLIST_MAX >> 20);
+    }
+    Ok(())
+}
+
+/// The case's saved watchlist, and when it was last swept.
 async fn get_watchlist(State(st): St, Path(cid): Path<String>) -> R {
     let case = st.case(&cid)?;
     let text = std::fs::read_to_string(case.dir.join("watchlist.txt")).unwrap_or_default();
     let (list, ignored) = crate::watchlist::parse(&text);
-    Ok(Json(json!({"text": text, "indicators": list, "ignored": ignored})))
+    let last: Option<crate::watchlist::Last> = kokino_core::case::read_json(&case.dir.join("watchlist-last.json")).ok();
+    let last = last.map(|l| json!({"at": l.at, "by": l.by}));
+    Ok(Json(json!({"text": text, "format": crate::watchlist::format_of(&text), "indicators": list.len(), "ignored": ignored, "last_sweep": last})))
 }
 
 async fn put_watchlist(State(st): St, Extension(me): Me, Path(cid): Path<String>, Json(b): Json<WatchText>) -> R {
-    if b.text.len() > 2_000_000 {
-        return Err(anyhow::anyhow!("the watchlist is too long (2 MB at most)").into());
-    }
+    watchlist_size(&b.text)?;
     let case = st.case(&cid)?;
     let (list, ignored) = crate::watchlist::parse(&b.text);
     std::fs::write(case.dir.join("watchlist.txt"), &b.text)?;
-    case.audit.append(&me.username, "watchlist.save", json!({"indicators": list.len()}))?;
-    Ok(Json(json!({"indicators": list, "ignored": ignored})))
+    let format = crate::watchlist::format_of(&b.text);
+    case.audit.append(&me.username, "watchlist.save", json!({"indicators": list.len(), "format": format}))?;
+    Ok(Json(json!({"indicators": list.len(), "format": format, "ignored": ignored})))
 }
 
 /// Search every analyzed item of the case for the indicators in `text`.
 async fn sweep_watchlist(State(st): St, Extension(me): Me, Path(cid): Path<String>, Json(b): Json<WatchText>) -> R {
-    if b.text.len() > 2_000_000 {
-        return Err(anyhow::anyhow!("the watchlist is too long (2 MB at most)").into());
-    }
+    watchlist_size(&b.text)?;
     let user = me.username.clone();
     Ok(Json(json!(tokio::task::spawn_blocking(move || -> anyhow::Result<crate::watchlist::Report> {
         let (list, ignored) = crate::watchlist::parse(&b.text);
         let mut rep = crate::watchlist::sweep(&st, &cid, &list)?;
         rep.ignored = ignored;
+        rep.format = crate::watchlist::format_of(&b.text).into();
+        let case = st.case(&cid)?;
+        // Compared with the previous sweep, which this one then replaces.
+        let lp = case.dir.join("watchlist-last.json");
+        let _g = st.bookmarks.lock().unwrap();
+        let prev: Option<crate::watchlist::Last> = kokino_core::case::read_json(&lp).ok();
+        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let last = crate::watchlist::compare(&mut rep, prev, &user, &now);
+        kokino_core::case::write_json(&lp, &last)?;
         let matched = rep.results.iter().filter(|r| !r.hits.is_empty()).count();
         let hits: usize = rep.results.iter().map(|r| r.hits.len()).sum();
-        st.case(&cid)?.audit.append(&user, "watchlist.sweep", json!({"indicators": list.len(), "matched": matched, "hits": hits, "searched": rep.searched.len()}))?;
+        case.audit.append(&user, "watchlist.sweep", json!({"indicators": list.len(), "format": rep.format, "matched": matched, "hits": hits, "new_hits": rep.new_hits, "searched": rep.searched.len()}))?;
         Ok(rep)
     })
     .await??)))
@@ -1581,13 +1599,13 @@ async fn windows(State(st): St, Path((cid, eid, fi)): Path<(String, String, usiz
             "first": j.first, "last": j.last, "records": j.records, "dropped": j.dropped, "error": j.error, "changes": j.changes.len(),
             "created_files": count(kokino_artifacts::usn::FILE_CREATE), "deleted_files": count(kokino_artifacts::usn::FILE_DELETE), "renamed_files": count(kokino_artifacts::usn::RENAME_NEW_NAME)})
     });
-    let srum_rows = f.windows.srum_rows().map(|(n, u)| json!({"network": n.len(), "usage": u.len()}));
+    let srum_rows = f.windows.srum_rows().map(|(n, u)| json!({"network": n.len(), "usage": u.len(), "focus": f.windows.srum_focus().len()}));
     Ok(Json(json!({"schema": l.analysis.schema, "fs": f.volume.fs_label, "windows": f.windows.without_journal(), "journal": journal, "srum_rows": srum_rows, "linux": linux, "files": files})))
 }
 
 #[derive(Deserialize)]
 struct SrumQ {
-    /// "network" (default) or "usage"
+    /// "network" (default), "usage" or "focus"
     kind: Option<String>,
     /// Only this program and user (exact).
     app: Option<String>,
@@ -1605,7 +1623,10 @@ async fn srum(State(st): St, Path((cid, eid, fi)): Path<(String, String, usize)>
     let lim = q.limit.unwrap_or(300).min(3000);
     let ok = |app: &str, user: &str| q.app.as_deref().is_none_or(|a| a == app) && q.user.as_deref().is_none_or(|u| u == user);
     let iso = |t: u64| if t == 0 { String::new() } else { filetime_to_iso(t) };
-    let (total, items): (usize, Vec<Value>) = if q.kind.as_deref() == Some("usage") {
+    let (total, items): (usize, Vec<Value>) = if q.kind.as_deref() == Some("focus") {
+        let hits: Vec<_> = f.windows.srum_focus().iter().rev().filter(|x| ok(&x.app, &x.user)).collect();
+        (hits.len(), hits.into_iter().skip(off).take(lim).map(|x| { let mut v = json!(x); v["t_iso"] = json!(iso(x.t)); v }).collect())
+    } else if q.kind.as_deref() == Some("usage") {
         let hits: Vec<_> = usage.iter().rev().filter(|x| ok(&x.app, &x.user)).collect();
         (hits.len(), hits.into_iter().skip(off).take(lim).map(|x| { let mut v = json!(x); v["t_iso"] = json!(iso(x.t)); v }).collect())
     } else {

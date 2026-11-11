@@ -10,6 +10,9 @@ Monitor). All content is invented: LAB-PC, alice, documentation networks.
   {D10CA2FE-6FCF-4F6D-848E-B2E99266FA89}    application resource usage
   {973F5D5C-1D90-4944-BE8E-24B94231A174}    network data usage
   {DD6636C4-8929-4683-974E-22C046A43763}    network connectivity
+  {5C8CF1C7-7257-4F13-B223-970EF5939312}    App Timeline Provider (focus, input)
+  {D10CA2FE-6FCF-4F6D-848E-B2E99266FA86}    push notifications
+  {FEE4E14F-02A9-4550-B5CE-5FA2DA202E37}    energy usage (battery)
 
 Ground truth (tested in kokino-artifacts and kokino-analysis):
   - rclone.exe in alice's Temp folder sent 2,147,483,648 bytes over Wi-Fi
@@ -22,7 +25,17 @@ Ground truth (tested in kokino-artifacts and kokino-analysis):
   - app resource usage for rclone.exe: 3 records, 1,000,000 foreground
     cycles each, 2,147,483,648 bytes read in all;
   - one connectivity record: profile 7 connected 2026-10-20 08:55 UTC for
-    7,500 seconds.
+    7,500 seconds;
+  - app timeline: rclone.exe (alice) in a period ending 2026-10-20 10:58
+    UTC, 600 s in the foreground, 45 s of input (30 keyboard, 15 mouse);
+    firefox.exe (alice) ending 09:30 UTC, 1,800 s in the foreground, 900 s
+    of input (400 keyboard, 500 mouse), 1,200 s playing audio; wuauserv as
+    SYSTEM ending 10:00 UTC with no foreground time or input;
+  - three push notifications (toasts of 2,048 bytes) for the Store app,
+    user alice, at 10:05, 10:10 and 10:15 UTC;
+  - battery: 41,000 of 48,000 mWh (design 50,000, 212 cycles) at 09:30 UTC
+    with StateTransition 1, then 15,000 mWh at 10:30 UTC with
+    StateTransition 2.
 IdBlob is a compressed column, so the engine stores the ASCII strings
 7-bit compressed, as Windows 8 and later do; the path with an umlaut it
 keeps as it is.
@@ -225,6 +238,46 @@ def srum_tables(table, L, Q, D, U16):
              "ConnectStartTime": Q(filetime(datetime.datetime(2026, 10, 20, 8, 55, tzinfo=UTC))), "L2ProfileFlags": L(0)}]
     table("{DD6636C4-8929-4683-974E-22C046A43763}", common + [("InterfaceLuid", JET_coltypLongLong, JET_bitColumnFixed), ("L2ProfileId", JET_coltypLong, JET_bitColumnFixed),
           ("ConnectedTime", JET_coltypLong, JET_bitColumnFixed), ("ConnectStartTime", JET_coltypLongLong, JET_bitColumnFixed), ("L2ProfileFlags", JET_coltypLong, JET_bitColumnFixed)], conn)
+
+    # App Timeline Provider: the columns Windows 10 has, in its order (the
+    # *Timeline columns are bit fields of the period's minutes).
+    tl_long = ["Flags"]
+    tl_q = ["EndTime"]
+    tl_long2 = ["DurationMS", "SpanMS", "TimelineEnd"]
+    tl_bits = ["InFocusTimeline", "UserInputTimeline", "CompRenderedTimeline", "CompDirtiedTimeline", "CompPropagatedTimeline", "AudioInTimeline", "AudioOutTimeline", "CpuTimeline", "DiskTimeline", "NetworkTimeline", "MBBTimeline"]
+    tl_s = ["InFocusS", "PSMForegroundS", "UserInputS", "CompRenderedS", "CompDirtiedS", "CompPropagatedS", "AudioInS", "AudioOutS"]
+    tl_cyc = ["Cycles", "CyclesBreakdown", "CyclesAttr", "CyclesAttrBreakdown", "CyclesWOB", "CyclesWOBBreakdown", "DiskRaw", "NetworkTailRaw", "NetworkBytesRaw", "MBBTailRaw", "MBBBytesRaw"]
+    tl_s2 = ["DisplayRequiredS", "DisplayRequiredTimeline", "KeyboardInputTimeline", "KeyboardInputS", "MouseInputS"]
+
+    def tl(ts, app, user, end, dur, focus, inp, kb, mouse, audio):
+        row = {"TimeStamp": D(ts), "AppId": L(app), "UserId": L(user), "Flags": L(0), "EndTime": Q(filetime(end)), "DurationMS": L(dur), "SpanMS": L(dur), "TimelineEnd": L(dur // 60000)}
+        for c in tl_bits + tl_cyc:
+            row[c] = Q(0)
+        vals = {"InFocusS": focus, "PSMForegroundS": focus, "UserInputS": inp, "CompRenderedS": focus, "CompDirtiedS": 0, "CompPropagatedS": 0, "AudioInS": 0, "AudioOutS": audio}
+        for c in tl_s:
+            row[c] = L(vals[c])
+        row.update({"DisplayRequiredS": L(0), "DisplayRequiredTimeline": Q(0), "KeyboardInputTimeline": Q(0), "KeyboardInputS": L(kb), "MouseInputS": L(mouse)})
+        return row
+
+    day = lambda hh, mm: datetime.datetime(2026, 10, 20, hh, mm, tzinfo=UTC)
+    timeline = [tl(day(11, 0), 1, 4, day(10, 58), 3_480_000, 600, 45, 30, 15, 0),
+                tl(day(10, 0), 2, 4, day(9, 30), 3_600_000, 1800, 900, 400, 500, 1200),
+                tl(day(10, 0), 3, 5, day(10, 0), 3_600_000, 0, 0, 0, 0, 0)]
+    table("{5C8CF1C7-7257-4F13-B223-970EF5939312}", common + [(c, JET_coltypLong, JET_bitColumnFixed) for c in tl_long] + [(c, JET_coltypLongLong, JET_bitColumnFixed) for c in tl_q] +
+          [(c, JET_coltypLong, JET_bitColumnFixed) for c in tl_long2] + [(c, JET_coltypLongLong, JET_bitColumnFixed) for c in tl_bits] + [(c, JET_coltypLong, JET_bitColumnFixed) for c in tl_s] +
+          [(c, JET_coltypLongLong, JET_bitColumnFixed) for c in tl_cyc] + [("DisplayRequiredS", JET_coltypLong, JET_bitColumnFixed), ("DisplayRequiredTimeline", JET_coltypLongLong, JET_bitColumnFixed),
+          ("KeyboardInputTimeline", JET_coltypLongLong, JET_bitColumnFixed), ("KeyboardInputS", JET_coltypLong, JET_bitColumnFixed), ("MouseInputS", JET_coltypLong, JET_bitColumnFixed)], timeline)
+
+    push = [{"TimeStamp": D(day(10, m)), "AppId": L(6), "UserId": L(4), "NotificationType": L(1), "PayloadSize": L(2048), "NetworkType": L(1)} for m in (5, 10, 15)]
+    table("{D10CA2FE-6FCF-4F6D-848E-B2E99266FA86}", common + [("NotificationType", JET_coltypLong, JET_bitColumnFixed), ("PayloadSize", JET_coltypLong, JET_bitColumnFixed),
+          ("NetworkType", JET_coltypLong, JET_bitColumnFixed)], push)
+
+    def battery(ts, state, charge):
+        return {"TimeStamp": D(ts), "AppId": L(0), "UserId": L(0), "EventTimestamp": Q(filetime(ts)), "StateTransition": L(state), "ChargeLevel": L(charge), "CycleCount": L(212),
+                "ConfigurationHash": Q(0x1234), "DesignedCapacity": L(50_000), "FullChargedCapacity": L(48_000)}
+    table("{FEE4E14F-02A9-4550-B5CE-5FA2DA202E37}", common + [("EventTimestamp", JET_coltypLongLong, JET_bitColumnFixed), ("StateTransition", JET_coltypLong, JET_bitColumnFixed),
+          ("ChargeLevel", JET_coltypLong, JET_bitColumnFixed), ("CycleCount", JET_coltypLong, JET_bitColumnFixed), ("ConfigurationHash", JET_coltypLongLong, JET_bitColumnFixed),
+          ("DesignedCapacity", JET_coltypLong, JET_bitColumnFixed), ("FullChargedCapacity", JET_coltypLong, JET_bitColumnFixed)], [battery(day(9, 30), 1, 41_000), battery(day(10, 30), 2, 15_000)])
 
 
 

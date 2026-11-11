@@ -1,25 +1,27 @@
 //! Watchlist (IOC sweep): a list of indicators searched in every analyzed
 //! evidence item of a case at once.
 //!
-//! Each line is one indicator, recognized by its form:
-//! - MD5, SHA-1 or SHA-256 (32, 40 or 64 hex digits): file contents, from
-//!   the hashes taken at analysis;
-//! - an IPv4 or IPv6 address: logons and events (Windows, Linux, macOS);
-//! - an email address: senders and recipients of email;
-//! - a URL or a domain: web visits, downloads, cache and cookies (the
-//!   domain and its subdomains), email addresses at that domain, and files
-//!   of that exact name ("ld.so.preload" looks like a domain);
-//! - anything else: a file name (exact, any case) or, with a / or \ in it,
-//!   a path fragment; deleted files included.
+//! The list is pasted lines, a STIX 2.1 bundle or a MISP event export
+//! (kokino_analysis::ioc reads them). What each kind is looked for in:
+//! - MD5, SHA-1, SHA-256: file contents, from the hashes Hash analysis took;
+//! - IP addresses and networks: Windows and Linux events and logons, and web
+//!   addresses that are IP addresses;
+//! - email addresses: senders and recipients of email;
+//! - domains (and URLs, by their host): web visits, downloads, cache and
+//!   cookies of the domain and its subdomains, email addresses at the
+//!   domain, and files of that exact name ("ld.so.preload" looks like a
+//!   domain);
+//! - file names (exact, any case) and path fragments; deleted files included.
 //!
-//! Lines starting with # are comments; "value # note" keeps the note. The
-//! parsing is kokino_analysis::ioc.
+//! Each sweep is compared with the one before it: hits it did not have are
+//! marked new.
 
 use crate::state::AppState;
-use serde::Serialize;
+use kokino_analysis::ioc::Matcher;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 
-pub use kokino_analysis::ioc::{parse, Indicator};
-use kokino_analysis::ioc::{host, in_domain, ip_eq};
+pub use kokino_analysis::ioc::{format_of, parse, Indicator};
 
 const MAX_HITS_PER: usize = 500;
 
@@ -35,6 +37,14 @@ pub struct Hit {
     pub file: Option<usize>,
     pub time: String,
     pub deleted: bool,
+    /// Not found by the previous sweep.
+    pub new: bool,
+}
+
+impl Hit {
+    fn key(&self) -> String {
+        format!("{}|{}|{}|{}|{}", self.evidence, self.fi, self.what, self.detail, self.time)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -52,12 +62,39 @@ pub struct Report {
     /// Items without file hashes (hash indicators cannot match there).
     pub not_hashed: Vec<String>,
     pub ignored: Vec<String>,
+    /// "lines", "stix" or "misp".
+    pub format: String,
+    /// The sweep this one was compared with.
+    pub previous: Option<Previous>,
+    pub new_hits: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Previous {
+    pub at: String,
+    pub by: String,
+    pub indicators: usize,
+    pub hits: usize,
+}
+
+/// What a sweep found, kept with the case to compare the next one with.
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct Last {
+    pub at: String,
+    pub by: String,
+    /// Hit keys per indicator ("kind:value").
+    pub hits: HashMap<String, Vec<String>>,
+}
+
+fn ind_key(i: &Indicator) -> String {
+    format!("{}:{}", i.kind, i.value.to_lowercase())
 }
 
 pub fn sweep(st: &AppState, cid: &str, list: &[Indicator]) -> anyhow::Result<Report> {
     let case = st.case(cid)?;
     let mut rep = Report::default();
     let mut results: Vec<Matches> = list.iter().cloned().map(|indicator| Matches { indicator, hits: vec![], truncated: false }).collect();
+    let m = Matcher::new(list);
     let iso = |t: u64| if t == 0 { String::new() } else { kokino_core::time::filetime_to_iso(t) };
     for rec in case.evidence() {
         let Ok(l) = st.loaded(cid, &rec.id) else {
@@ -69,88 +106,96 @@ pub fn sweep(st: &AppState, cid: &str, list: &[Indicator]) -> anyhow::Result<Rep
         if hs.is_none() {
             rep.not_hashed.push(rec.name.clone());
         }
-        for res in results.iter_mut() {
-            let ind = &res.indicator;
-            let push = |h: Hit, res_hits: &mut Vec<Hit>, trunc: &mut bool| {
-                if res_hits.len() < MAX_HITS_PER {
-                    res_hits.push(h);
+        let mut add = |idx: &[usize], fi: usize, what: &str, detail: &dyn Fn() -> String, file: Option<usize>, time: String, deleted: bool| {
+            let mut seen = HashSet::new();
+            for &i in idx {
+                if !seen.insert(i) {
+                    continue;
+                }
+                let r = &mut results[i];
+                if r.hits.len() < MAX_HITS_PER {
+                    r.hits.push(Hit { evidence: rec.id.clone(), evidence_name: rec.name.clone(), fi, what: what.into(), detail: detail(), file, time: time.clone(), deleted, new: false });
                 } else {
-                    *trunc = true;
+                    r.truncated = true;
                 }
-            };
-            let mk = |fi: usize, what: &str, detail: String, file: Option<usize>, time: String, deleted: bool| Hit { evidence: rec.id.clone(), evidence_name: rec.name.clone(), fi, what: what.into(), detail, file, time, deleted };
-            for (fi, f) in l.analysis.filesystems.iter().enumerate() {
-                match ind.kind.as_str() {
-                    "md5" | "sha1" | "sha256" => {
-                        let Some(h) = &hs else { continue };
-                        for x in h.fh.files.iter().filter(|x| x.fi == fi) {
-                            let v = match ind.kind.as_str() {
-                                "md5" => &x.hashes.md5,
-                                "sha1" => &x.hashes.sha1,
-                                _ => &x.hashes.sha256,
-                            };
-                            if v.eq_ignore_ascii_case(&ind.value) {
-                                if let Some(idx) = f.files.iter().position(|r| r.e.record == x.record) {
-                                    let r = &f.files[idx];
-                                    push(mk(fi, "file", r.e.path.clone(), Some(idx), iso(r.e.si.map(|t| t.modified).unwrap_or(0)), r.e.deleted), &mut res.hits, &mut res.truncated);
-                                }
-                            }
-                        }
-                    }
-                    "name" | "path" => {
-                        let needle = ind.value.replace('\\', "/").to_lowercase();
-                        for (idx, r) in f.files.iter().enumerate() {
-                            let hit = if ind.kind == "name" { r.e.name.eq_ignore_ascii_case(&ind.value) } else { r.e.path.to_lowercase().contains(&needle) };
-                            if hit {
-                                push(mk(fi, "file", r.e.path.clone(), Some(idx), iso(r.e.si.map(|t| t.modified).unwrap_or(0)), r.e.deleted), &mut res.hits, &mut res.truncated);
-                            }
-                        }
-                    }
-                    "domain" => {
-                        // "ld.so.preload" reads as a domain too: a file of that name is a hit.
-                        for (idx, r) in f.files.iter().enumerate().filter(|(_, r)| r.e.name.eq_ignore_ascii_case(&ind.value)) {
-                            push(mk(fi, "file", r.e.path.clone(), Some(idx), iso(r.e.si.map(|t| t.modified).unwrap_or(0)), r.e.deleted), &mut res.hits, &mut res.truncated);
-                        }
-                        let w = &f.web;
-                        for v in w.visits.iter().filter(|v| in_domain(&host(&v.url), &ind.value)) {
-                            push(mk(fi, "web", format!("visit {}", v.url), None, iso(v.t), false), &mut res.hits, &mut res.truncated);
-                        }
-                        for d in w.downloads.iter().filter(|d| in_domain(&host(&d.url), &ind.value)) {
-                            push(mk(fi, "web", format!("download {} to {}", d.url, d.target), None, iso(d.start), false), &mut res.hits, &mut res.truncated);
-                        }
-                        for c in w.cache.iter().filter(|c| in_domain(&host(&c.url), &ind.value)) {
-                            push(mk(fi, "web", format!("cached {}", c.url), None, iso(c.t), false), &mut res.hits, &mut res.truncated);
-                        }
-                        for c in w.cookies.iter().filter(|c| in_domain(&host(&format!("x://{}", c.site)), &ind.value)) {
-                            push(mk(fi, "web", format!("cookie {}", c.site), None, iso(c.last_access.max(c.created)), false), &mut res.hits, &mut res.truncated);
-                        }
-                        for m in f.mail.messages.iter().filter(|m| [&m.from, &m.to, &m.cc].iter().any(|s| s.to_lowercase().contains(&format!("@{}", ind.value)))) {
-                            push(mk(fi, "mail", format!("{}: from {} to {}", m.subject, m.from, m.to), None, iso(m.date), m.deleted || m.expunged), &mut res.hits, &mut res.truncated);
-                        }
-                    }
-                    "email" => {
-                        for m in f.mail.messages.iter().filter(|m| [&m.from, &m.to, &m.cc].iter().any(|s| s.to_lowercase().contains(&ind.value))) {
-                            push(mk(fi, "mail", format!("{}: from {} to {}", m.subject, m.from, m.to), None, iso(m.date), m.deleted || m.expunged), &mut res.hits, &mut res.truncated);
-                        }
-                    }
-                    "ip" => {
-                        for e in f.windows.events.iter().filter(|e| ip_eq(&e.ip, &ind.value)) {
-                            push(mk(fi, "event", format!("{} ({} {})", e.summary, e.channel, e.event_id), None, iso(e.time), false), &mut res.hits, &mut res.truncated);
-                        }
-                        for e in f.linux.events.iter().filter(|e| ip_eq(&e.ip, &ind.value)) {
-                            push(mk(fi, "event", format!("{} ({})", e.summary, e.source), None, iso(e.time), false), &mut res.hits, &mut res.truncated);
-                        }
-                        for x in f.linux.logons.iter().filter(|x| ip_eq(&x.from, &ind.value)) {
-                            push(mk(fi, "logon", format!("{} {} from {} ({})", x.kind, x.user, x.from, x.source), None, iso(x.time), false), &mut res.hits, &mut res.truncated);
-                        }
-                    }
-                    _ => {}
+            }
+        };
+        for (fi, f) in l.analysis.filesystems.iter().enumerate() {
+            let mtime = |r: &kokino_analysis::FileRow| iso(r.e.si.map(|t| t.modified).unwrap_or(0));
+            for (idx, r) in f.files.iter().enumerate() {
+                let hit = m.file(&r.e.name, &r.e.path);
+                if !hit.is_empty() {
+                    add(&hit, fi, "file", &|| r.e.path.clone(), Some(idx), mtime(r), r.e.deleted);
                 }
+            }
+            if let (Some(h), true) = (&hs, m.has_hashes()) {
+                let by_record: HashMap<u64, usize> = f.files.iter().enumerate().map(|(i, r)| (r.e.record, i)).collect();
+                for x in h.fh.files.iter().filter(|x| x.fi == fi) {
+                    let mut hit: Vec<usize> = m.hash(&x.hashes.md5).to_vec();
+                    hit.extend(m.hash(&x.hashes.sha1));
+                    hit.extend(m.hash(&x.hashes.sha256));
+                    if hit.is_empty() {
+                        continue;
+                    }
+                    if let Some(&idx) = by_record.get(&x.record) {
+                        let r = &f.files[idx];
+                        add(&hit, fi, "file", &|| r.e.path.clone(), Some(idx), mtime(r), r.e.deleted);
+                    }
+                }
+            }
+            let w = &f.web;
+            for v in &w.visits {
+                add(&m.url(&v.url), fi, "web", &|| format!("visit {}", v.url), None, iso(v.t), false);
+            }
+            for d in &w.downloads {
+                add(&m.url(&d.url), fi, "web", &|| format!("download {} to {}", d.url, d.target), None, iso(d.start), false);
+            }
+            for c in &w.cache {
+                add(&m.url(&c.url), fi, "web", &|| format!("cached {}", c.url), None, iso(c.t), false);
+            }
+            for c in &w.cookies {
+                add(&m.host(c.site.trim_start_matches('.')), fi, "web", &|| format!("cookie {}", c.site), None, iso(c.last_access.max(c.created)), false);
+            }
+            for msg in &f.mail.messages {
+                let mut hit = m.mail_field(&msg.from);
+                hit.extend(m.mail_field(&msg.to));
+                hit.extend(m.mail_field(&msg.cc));
+                add(&hit, fi, "mail", &|| format!("{}: from {} to {}", msg.subject, msg.from, msg.to), None, iso(msg.date), msg.deleted || msg.expunged);
+            }
+            for e in &f.windows.events {
+                add(&m.ip(&e.ip), fi, "event", &|| format!("{} ({} {})", e.summary, e.channel, e.event_id), None, iso(e.time), false);
+            }
+            for e in &f.linux.events {
+                add(&m.ip(&e.ip), fi, "event", &|| format!("{} ({})", e.summary, e.source), None, iso(e.time), false);
+            }
+            for x in &f.linux.logons {
+                add(&m.ip(&x.from), fi, "logon", &|| format!("{} {} from {} ({})", x.kind, x.user, x.from, x.source), None, iso(x.time), false);
             }
         }
     }
     rep.results = results;
     Ok(rep)
+}
+
+/// Marks the hits the previous sweep did not have (all of them for an
+/// indicator it did not search for), and returns what to keep for the next.
+pub fn compare(rep: &mut Report, prev: Option<Last>, by: &str, at: &str) -> Last {
+    let mut new_hits = 0;
+    if let Some(p) = &prev {
+        let total: usize = p.hits.values().map(Vec::len).sum();
+        rep.previous = Some(Previous { at: p.at.clone(), by: p.by.clone(), indicators: p.hits.len(), hits: total });
+        for r in rep.results.iter_mut() {
+            let old: HashSet<&str> = p.hits.get(&ind_key(&r.indicator)).map(|v| v.iter().map(String::as_str).collect()).unwrap_or_default();
+            for h in r.hits.iter_mut() {
+                if !old.contains(h.key().as_str()) {
+                    h.new = true;
+                    new_hits += 1;
+                }
+            }
+        }
+    }
+    rep.new_hits = new_hits;
+    Last { at: at.into(), by: by.into(), hits: rep.results.iter().map(|r| (ind_key(&r.indicator), r.hits.iter().map(Hit::key).collect())).collect() }
 }
 
 #[cfg(test)]
@@ -183,6 +228,15 @@ mod tests {
         assert_eq!(count(2, "e1"), 1);
         assert_eq!(count(2, "e2"), 1, "the collection keeps the path under [root]");
         assert!(r.results[3].hits.is_empty());
+        // Compared with a sweep that only had the IP's first hit: the rest are new.
+        let mut r = r;
+        let first = r.results[0].hits[0].key();
+        let prev = Last { at: "2026-11-10T09:00:00Z".into(), by: "tester".into(), hits: [(ind_key(&r.results[0].indicator), vec![first])].into_iter().collect() };
+        let last = compare(&mut r, Some(prev), "tester", "2026-11-11T09:00:00Z");
+        assert!(!r.results[0].hits[0].new && r.results[0].hits[1..].iter().all(|h| h.new));
+        assert!(r.results[1].hits.iter().all(|h| h.new), "an indicator not in the previous sweep");
+        assert_eq!(r.new_hits, r.results.iter().map(|x| x.hits.len()).sum::<usize>() - 1);
+        assert_eq!(last.hits.len(), 4);
         std::fs::remove_dir_all(&root).ok();
     }
 }

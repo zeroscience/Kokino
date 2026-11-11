@@ -1,0 +1,12 @@
+{"type": "bundle", "id": "bundle--1", "objects": [
+      {"type": "indicator", "spec_version": "2.1", "id": "indicator--1", "name": "Dropper", "pattern_type": "stix",
+       "pattern": "[file:hashes.'SHA-256' = 'E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855' OR file:name = 'update.lab.test']"},
+      {"type": "indicator", "id": "indicator--2", "name": "C2", "pattern": "[ipv4-addr:value = '198.51.100.0/24'] OR [domain-name:value = 'c2.lab.test'] OR [url:value = 'http://dl.lab.test/a.ps1']"},
+      {"type": "indicator", "id": "indicator--3", "name": "Phish", "pattern": "[email-message:from_ref.value = 'Bob@Lab.test' AND email-message:subject = 'Invoice']"},
+      {"type": "indicator", "id": "indicator--4", "name": "Not this", "pattern": "[file:name != 'good.exe' AND file:name LIKE 'x%']"},
+      {"type": "indicator", "id": "indicator--5", "name": "Sigma", "pattern_type": "sigma", "pattern": "title: x"},
+      {"type": "indicator", "id": "indicator--6", "name": "Quote", "pattern": "[file:name = 'it\\'s.exe']"},
+      {"type": "ipv6-addr", "id": "ipv6-addr--1", "value": "2001:db8::7"},
+      {"type": "file", "id": "file--1", "name": "payload.bin", "hashes": {"MD5": "d41d8cd98f00b204e9800998ecf8427e"}},
+      {"type": "malware", "id": "malware--1", "name": "x"}
+    ]}

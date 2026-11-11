@@ -218,8 +218,8 @@ pub fn table(l: &Loaded, fi: usize, hs: Option<&HashStatus>, carved: Option<&Car
                     w.reg_deleted_values.iter().map(|v| vec![s(&v.hive), s(&v.key), s(&v.name), s(&v.kind), s(&v.text), json!(v.size), json!(v.data_reused), s(&v.notable), s(file(Some(v.file)))]).collect(),
                 ),
                 _ => tb(
-                    vec!["program", "user", "first_utc", "last_utc", "bytes_sent", "bytes_received", "disk_read", "disk_written"],
-                    w.srum.as_ref().map(|r| r.apps.iter().map(|a| vec![s(&a.app), s(&a.user), t(a.first), t(a.last), json!(a.sent), json!(a.received), json!(a.read), json!(a.written)]).collect()).unwrap_or_default(),
+                    vec!["program", "user", "first_utc", "last_utc", "bytes_sent", "bytes_received", "disk_read", "disk_written", "focus_seconds", "input_seconds"],
+                    w.srum.as_ref().map(|r| r.apps.iter().map(|a| vec![s(&a.app), s(&a.user), t(a.first), t(a.last), json!(a.sent), json!(a.received), json!(a.read), json!(a.written), json!(a.focus_s), json!(a.input_s)]).collect()).unwrap_or_default(),
                 ),
             }
         }
