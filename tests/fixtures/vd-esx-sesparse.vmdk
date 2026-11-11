@@ -1,0 +1,14 @@
+# Disk DescriptorFile
+version=1
+CID=77777777
+parentCID=33333333
+createType="seSparse"
+parentFileNameHint="vd-flat.vmdk"
+
+# Extent description
+RW 7360 SESPARSE "vd-esx-sesparse-sesparse.vmdk"
+
+# The Disk Data Base
+#DDB
+ddb.virtualHWVersion = "4"
+ddb.adapterType = "ide"

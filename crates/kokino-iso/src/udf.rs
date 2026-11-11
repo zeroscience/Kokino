@@ -1,15 +1,18 @@
 //! UDF (Universal Disk Format, ECMA-167 / OSTA UDF 1.02 to 2.60): DVDs,
 //! Blu-ray discs, packet-written and UDF-formatted media.
 //!
-//! Reads the anchor, the volume descriptor sequence, the partition maps
-//! (physical, and the metadata partition of UDF 2.50 and later), the file
-//! set, then every file entry (FE and EFE) with short, long and embedded
-//! allocation descriptors. Directory entries marked deleted stay in UDF
-//! directories until the space is reused: they are listed as deleted with
-//! whatever their file entry still says.
+//! Reads the anchor, the volume descriptor sequence, the partition maps,
+//! the file set, then every file entry (FE and EFE) with short, long and
+//! embedded allocation descriptors. Directory entries marked deleted stay
+//! in UDF directories until the space is reused: they are listed as
+//! deleted with whatever their file entry still says.
 //!
-//! Not read yet: virtual partitions (VAT, CD-R written incrementally) and
-//! sparable partitions (sparing tables of DVD-RW); such discs are reported.
+//! Partition maps: physical; sparable (DVD-RW, CD-RW: packets moved to a
+//! spare area are read from there, through the sparing table); virtual
+//! (CD-R and DVD-R written incrementally: blocks are numbered through the
+//! VAT, the virtual allocation table recorded at the end of the last
+//! session, in the UDF 1.50 and 2.00 layouts); and the metadata partition
+//! of UDF 2.50 and later. VATs of earlier sessions are not followed.
 
 use crate::{civil_ft, le16, le32, le64, rd, ROOT_RECORD};
 use kokino_ntfs::{Extent, FsEntry, NtfsVolumeInfo, Stream, Times, UnixMeta};
@@ -29,8 +32,16 @@ enum Map {
     /// UDF 2.50+: blocks are offsets into the metadata file, which lives
     /// in the physical partition `phys` (index into the map table).
     Metadata { phys: usize, extents: Vec<(u64, u64)> },
+    /// Like physical, but packets listed in the sparing table (original
+    /// block, sorted) were moved to the spare sector given.
+    Sparable { start: u64, len: u64, packet: u64, table: Vec<(u64, u64)> },
+    /// Block n is VAT entry n, a block of the physical map `phys`.
+    Virtual { phys: usize, vat: Vec<u32> },
     Unsupported(String),
 }
+
+const MAX_VAT_ENTRIES: usize = 1 << 22;
+const MAX_SPARING_ENTRIES: usize = 1 << 16;
 
 pub struct UdfVolume {
     pub block: u64,
@@ -138,6 +149,9 @@ pub fn open<R: Read + Seek>(r: &mut R, size: u64) -> anyhow::Result<UdfVolume> {
     let fsd_ad = &lvd[248..264];
     let nmaps = le32(&lvd, 268) as usize;
     let mut maps = vec![];
+    let mut notes: Vec<String> = vec![];
+    // Virtual maps: (map index, partition number).
+    let mut virtual_pn: Vec<(usize, u64)> = vec![];
     let mut p = 440usize;
     for _ in 0..nmaps.min(16) {
         let Some(m) = lvd.get(p..) else { break };
@@ -150,11 +164,42 @@ pub fn open<R: Read + Seek>(r: &mut R, size: u64) -> anyhow::Result<UdfVolume> {
         match (ty, phys) {
             (1, Some((start, len))) => maps.push(Map::Physical { start, len }),
             (2, _) => {
-                let id = String::from_utf8_lossy(&m[5..28]).trim_end_matches('\0').to_string();
-                if id.contains("Metadata") {
+                let id = String::from_utf8_lossy(m.get(5..28).unwrap_or(&[])).trim_end_matches('\0').to_string();
+                let pn = le16(m, 38);
+                let phys_of = |pn: u64| parts.iter().find(|x| x.0 == pn).map(|x| (x.1, x.2));
+                if id.contains("Sparable") {
+                    match phys_of(pn) {
+                        Some((start, plen)) => {
+                            let packet = le16(m, 40).max(1);
+                            let ntables = (m.get(42).copied().unwrap_or(0) as usize).min(4);
+                            let tsize = le32(m, 44).min(MAX_SPARING_ENTRIES as u64 * 8 + 56);
+                            let mut table = None;
+                            for k in 0..ntables {
+                                let loc = le32(m, 48 + 4 * k);
+                                let Ok(t) = rd(r, loc.saturating_mul(block), tsize.max(56) as usize) else { continue };
+                                if t.len() < 56 || !String::from_utf8_lossy(&t[17..40]).contains("Sparing Table") {
+                                    continue;
+                                }
+                                let n = (le16(&t, 48) as usize).min(MAX_SPARING_ENTRIES);
+                                let mut e: Vec<(u64, u64)> = (0..n).filter_map(|i| t.get(56 + 8 * i..64 + 8 * i)).map(|c| (le32(c, 0), le32(c, 4))).filter(|&(o, _)| o < 0xFFFF_FFF0).collect();
+                                e.sort_unstable();
+                                table = Some(e);
+                                break;
+                            }
+                            if table.is_none() && ntables > 0 {
+                                notes.push("UDF sparable partition: no sparing table could be read; blocks moved to the spare area are read from their original place".to_string());
+                            }
+                            maps.push(Map::Sparable { start, len: plen, packet, table: table.unwrap_or_default() });
+                        }
+                        None => maps.push(Map::Unsupported(id)),
+                    }
+                } else if id.contains("Virtual") {
+                    maps.push(Map::Virtual { phys: usize::MAX, vat: vec![] });
+                    virtual_pn.push((maps.len() - 1, pn));
+                } else if id.contains("Metadata") {
                     let pn = le16(m, 38);
                     let file = le32(m, 40);
-                    let phys_idx = maps.iter().position(|x| matches!(x, Map::Physical { .. })).unwrap_or(0);
+                    let phys_idx = maps.iter().position(|x| matches!(x, Map::Physical { .. } | Map::Sparable { .. })).unwrap_or(0);
                     let _ = pn;
                     maps.push(Map::Metadata { phys: phys_idx, extents: vec![(file, u64::MAX)] });
                 } else {
@@ -172,9 +217,18 @@ pub fn open<R: Read + Seek>(r: &mut R, size: u64) -> anyhow::Result<UdfVolume> {
         size,
         maps,
         root: (0, 0),
-        notes: vec![],
+        notes,
         created,
     };
+    // Virtual partitions: the VAT is recorded last, so it is looked for from
+    // the end of the image back.
+    for (mi, pn) in virtual_pn {
+        let phys = (0..v.maps.len()).find(|&i| i != mi && matches!(v.maps[i], Map::Physical { .. }) && parts.iter().any(|x| x.0 == pn)).unwrap_or(0);
+        match find_vat(&v, r, phys) {
+            Some(vat) => v.maps[mi] = Map::Virtual { phys, vat },
+            None => v.maps[mi] = Map::Unsupported("*UDF Virtual Partition (no VAT found)".into()),
+        }
+    }
     // Metadata partition: its blocks are the metadata file's content.
     for i in 0..v.maps.len() {
         if let Map::Metadata { phys, extents } = v.maps[i].clone() {
@@ -197,6 +251,55 @@ pub fn open<R: Read + Seek>(r: &mut R, size: u64) -> anyhow::Result<UdfVolume> {
     }
     v.root = (le32(&fsd, 404), le16(&fsd, 408) as u16);
     Ok(v)
+}
+
+/// The VAT: a file entry near the end of the image whose file type is 248
+/// (UDF 2.00 and later), or whose data ends with "*UDF Virtual Alloc Tbl"
+/// (UDF 1.50). Its entries are blocks of the physical map `phys`.
+fn find_vat<R: Read + Seek>(v: &UdfVolume, r: &mut R, phys: usize) -> Option<Vec<u32>> {
+    let last = (v.size / v.block).checked_sub(1)?;
+    for back in 0..256u64 {
+        let Some(at) = last.checked_sub(back) else { break };
+        let Ok(fe) = rd(r, at * v.block, v.block as usize) else { continue };
+        if fe.len() < 176 || !matches!(tag(&fe), 261 | 266) {
+            continue;
+        }
+        let ftype = fe[27];
+        let (exts, size) = v.map_file(r, at * v.block, phys);
+        if size < 4 || size > MAX_VAT_ENTRIES as u64 * 4 + 4096 {
+            continue;
+        }
+        let mut d = vec![];
+        for x in exts {
+            let n = x.len.min(size - d.len() as u64) as usize;
+            match x.vol {
+                Some(o) => d.extend(rd(r, o, n).ok()?),
+                None => d.resize(d.len() + n, 0),
+            }
+            if d.len() as u64 >= size {
+                break;
+            }
+        }
+        // An embedded VAT: the data is in the entry itself.
+        if d.is_empty() {
+            if let (_, _, Some(e)) = alloc_descs(&fe) {
+                d = e;
+            }
+        }
+        let entries: &[u8] = if ftype == 248 {
+            let hd = le16(&d, 0) as usize;
+            if hd < 152 || hd > d.len() {
+                continue;
+            }
+            &d[hd..]
+        } else if d.len() >= 36 && d[d.len() - 36..].windows(22).any(|w| w == b"*UDF Virtual Alloc Tbl") {
+            &d[..d.len() - 36]
+        } else {
+            continue;
+        };
+        return Some(entries.chunks_exact(4).take(MAX_VAT_ENTRIES).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect());
+    }
+    None
 }
 
 /// One allocation descriptor, resolved to a partition reference.
@@ -258,6 +361,24 @@ impl UdfVolume {
                     off -= e_len;
                 }
                 None
+            }
+            Map::Sparable { start, len, packet, table } => {
+                if lbn >= *len {
+                    return None;
+                }
+                let first = lbn - lbn % packet;
+                match table.binary_search_by_key(&first, |x| x.0) {
+                    Ok(i) => Some((table[i].1 + (lbn - first)) * self.block),
+                    Err(_) => Some((start + lbn) * self.block),
+                }
+            }
+            Map::Virtual { phys, vat } => {
+                let p = *vat.get(usize::try_from(lbn).ok()?)?;
+                // A virtual map pointing at itself cannot be resolved.
+                if p == u32::MAX || matches!(self.maps.get(*phys), Some(Map::Virtual { .. })) {
+                    return None;
+                }
+                self.locate(*phys, p as u64)
             }
             Map::Unsupported(_) => None,
         }
@@ -527,5 +648,59 @@ mod tests {
         assert!(gone.deleted);
         assert_eq!(v.read(&mut f, gone, 0, 100).unwrap(), b"deleted from the UDF directory (test data)\n");
         assert_eq!(s.entries.iter().filter(|e| e.deleted).count(), 1);
+    }
+
+    fn fixture(name: &str) -> Option<(std::fs::File, u64)> {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures").join(name);
+        let f = std::fs::File::open(&p).ok()?;
+        let size = f.metadata().ok()?.len();
+        Some((f, size))
+    }
+
+    /// scripts/make_udf_fixture.py: the packet holding moved.txt was moved
+    /// to the spare area; its old place holds a stale copy.
+    #[test]
+    fn sparable_partition() {
+        let Some((mut f, size)) = fixture("udf-sparable.img") else { return };
+        let v = open(&mut f, size).unwrap();
+        assert!(v.notes.is_empty(), "{:?}", v.notes);
+        assert_eq!(v.label, "KOKINO_DVDRW");
+        let s = scan(&v, &mut f, |_, _| true).unwrap();
+        let by = |p: &str| s.entries.iter().find(|e| e.path == p).unwrap_or_else(|| panic!("{} missing", p));
+        assert_eq!(v.read(&mut f, by("/moved.txt"), 0, 100).unwrap(), b"This block was moved to the spare area (test data).
+");
+        assert_eq!(v.read(&mut f, by("/docs/report.txt"), 0, 5000).unwrap(), (b"Quarterly report line, lab.test internal.
+".repeat(120))[..5000].to_vec());
+        assert_eq!(v.read(&mut f, by("/README.TXT"), 0, 100).unwrap(), b"Kokino UDF test disc. Invented data.
+");
+        // Where the hex view shows it: the spare packet (sector 320 + 6).
+        assert_eq!(by("/moved.txt").streams[0].first_offset, Some(326 * 2048));
+    }
+
+    /// scripts/make_udf_fixture.py: everything but file data is in the
+    /// virtual partition, found through the VAT in the last sector.
+    #[test]
+    fn virtual_partition_through_the_vat() {
+        let Some((mut f, size)) = fixture("udf-vat.img") else { return };
+        let v = open(&mut f, size).unwrap();
+        assert!(v.notes.is_empty(), "{:?}", v.notes);
+        let s = scan(&v, &mut f, |_, _| true).unwrap();
+        let paths: Vec<&str> = s.entries.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(paths.len(), 5, "{:?}", paths);
+        let by = |p: &str| s.entries.iter().find(|e| e.path == p).unwrap_or_else(|| panic!("{} missing in {:?}", p, paths));
+        assert_eq!(v.read(&mut f, by("/session.txt"), 0, 100).unwrap(), b"Written in the last session of a CD-R (test data).
+");
+        assert_eq!(v.read(&mut f, by("/docs/report.txt"), 0, 5000).unwrap().len(), 5000);
+        assert!(by("/docs").is_dir);
+        // Without its VAT the virtual partition cannot be read, and says so.
+        let mut cut = vec![0u8; size as usize - 2048];
+        use std::io::{Read as _, Seek as _};
+        f.seek(std::io::SeekFrom::Start(0)).unwrap();
+        f.read_exact(&mut cut).unwrap();
+        let mut c = std::io::Cursor::new(cut.clone());
+        match open(&mut c, cut.len() as u64) {
+            Ok(v) => assert!(v.notes.iter().any(|n| n.contains("no VAT found")), "{:?}", v.notes),
+            Err(e) => assert!(e.to_string().contains("outside"), "{}", e),
+        }
     }
 }

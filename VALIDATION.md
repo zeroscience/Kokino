@@ -605,7 +605,7 @@ The validation found real problems, all fixed before these results:
 
 The public images above are large and checked before releases. The small
 test images in `tests/fixtures/` (every file system, image format,
-collection type and virtual disk Kokino reads; 38 analyses with BitLocker
+collection type and virtual disk Kokino reads; 42 analyses with BitLocker
 locked and unlocked) are checked on every commit instead, on Windows, Linux
 and macOS, by `crates/kokino-analysis/tests/golden.rs`.
 

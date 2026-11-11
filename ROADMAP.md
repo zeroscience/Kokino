@@ -24,7 +24,7 @@ Kokino version and what the file system or artifact is.
 
 ### Images and volumes
 - [x] E01 (with stored-hash check), raw / dd, split raw; MBR and GPT (1.2.5)
-- [x] VHD (fixed, dynamic, differencing), VHDX with log replay, VMDK (flat, sparse, stream, split, snapshot chains) (1.2.7, 1.3.1)
+- [x] VHD (fixed, dynamic, differencing), VHDX with log replay, VMDK (flat, sparse, stream, split, snapshot chains, ESXi VMFSSPARSE and SESPARSE snapshots) (1.2.7, 1.3.1, after 1.4.0)
 - [x] ISO 9660 (Rock Ridge, Joliet, multisession history) and UDF (1.2.7)
 - [x] Disk images and ISOs found inside evidence, extracted as evidence of their own (1.3.1)
 - [x] BitLocker with a password, recovery password, startup key (.BEK) or clear key; carving decrypted volumes (1.3.1)
@@ -84,8 +84,8 @@ start or be trusted; most items are blocked on test data rather than code.
 
 ### 4. More formats
 - [ ] **XFS** (Red Hat and its derivatives default to it). Needs: test images (made with mkfs.xfs) and a parser comparable to ext's.
-- [ ] **ESXi snapshots** (VMFSSPARSE, SESPARSE).
-- [ ] **UDF virtual (VAT) and sparable partitions** (written CDs and DVDs).
+- [x] **ESXi snapshots** (VMFSSPARSE, SESPARSE). Checked on images built to QEMU's reading of the formats; a check on snapshots from a real ESXi host is still to do.
+- [x] **UDF virtual (VAT) and sparable partitions** (written CDs and DVDs). Still to do: following the VATs of earlier sessions (files deleted between sessions), and a check on real discs.
 - [x] **Older journal copies of whole directories** on ext3 and ext4 (names of files deleted long ago, also when their inode was reused).
 - [ ] **macOS unified logs** (tracev3).
 - [x] **Carving of JPEGs in two pieces** (bifragment gap carving, kept only when the joined picture decodes exactly).

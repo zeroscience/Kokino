@@ -1,0 +1,58 @@
+{
+  "errors": 0,
+  "filesystems": [
+    {
+      "files": 5,
+      "listing": "0b890cb5e372d6ce",
+      "lists": {},
+      "score": {
+        "band": "Low",
+        "drivers": [],
+        "likelihood": 0.0
+      },
+      "stats": {
+        "ads": 0,
+        "by_category": [],
+        "bytes": 5089,
+        "deleted_bytes": 0,
+        "deleted_dirs": 0,
+        "deleted_files": 0,
+        "dirs": 1,
+        "files": 3,
+        "histogram": [
+          {
+            "created": 0,
+            "day": "2026-10-20",
+            "modified": 4
+          }
+        ],
+        "impact": [
+          "Data volume (no Windows installation found).",
+          "3 files (5.0 KiB) in 1 directories.",
+          "File timestamps span 2026-10-20 to 2026-10-20.",
+          "No anti-forensics indicators were triggered."
+        ],
+        "orphans": 0,
+        "os": null,
+        "time_max": 134369571300000000,
+        "time_min": 134369571300000000,
+        "top_ext": [
+          [
+            "txt",
+            3
+          ]
+        ],
+        "users": []
+      },
+      "volume": {
+        "fs": "UDF",
+        "index": 0,
+        "length": 1474560,
+        "start": 0
+      }
+    }
+  ],
+  "image_format": "Raw (dd)",
+  "image_size": 1474560,
+  "volumes": 1
+}

@@ -1,0 +1,139 @@
+{
+  "errors": 0,
+  "filesystems": [
+    {
+      "files": 11,
+      "listing": "b770e1d21a2dd04e",
+      "lists": {},
+      "score": {
+        "band": "Low",
+        "drivers": [],
+        "likelihood": 0.0
+      },
+      "stats": {
+        "ads": 0,
+        "by_category": [
+          [
+            "Images",
+            1
+          ]
+        ],
+        "bytes": 12106,
+        "deleted_bytes": 866,
+        "deleted_dirs": 1,
+        "deleted_files": 3,
+        "dirs": 3,
+        "files": 7,
+        "histogram": [
+          {
+            "created": 10,
+            "day": "2026-10-20",
+            "modified": 10
+          }
+        ],
+        "impact": [
+          "Data volume (no Windows installation found).",
+          "7 files (11.8 KiB) in 3 directories.",
+          "3 deleted files (866 B) and 1 deleted directories still have file system entries; content may be recoverable unless clusters were reused.",
+          "File timestamps span 2026-10-20 to 2026-10-20.",
+          "No anti-forensics indicators were triggered.",
+          "FAT stores times in the local time of the device that wrote them, with no time zone; they are shown as stored.",
+          "Deleted FAT files are recovered assuming their clusters were contiguous (the chain is cleared on delete); content of fragmented deleted files can be partly wrong."
+        ],
+        "orphans": 0,
+        "os": null,
+        "time_max": 134369631340000000,
+        "time_min": 134369631305000000,
+        "top_ext": [
+          [
+            "txt",
+            5
+          ],
+          [
+            "csv",
+            1
+          ],
+          [
+            "jpg",
+            1
+          ]
+        ],
+        "users": []
+      },
+      "volume": {
+        "fs": "FAT32",
+        "index": 0,
+        "length": 2621440,
+        "start": 65536
+      }
+    },
+    {
+      "files": 11,
+      "listing": "b770e1d21a2dd04e",
+      "lists": {},
+      "score": {
+        "band": "Low",
+        "drivers": [],
+        "likelihood": 0.0
+      },
+      "stats": {
+        "ads": 0,
+        "by_category": [
+          [
+            "Images",
+            1
+          ]
+        ],
+        "bytes": 12106,
+        "deleted_bytes": 866,
+        "deleted_dirs": 1,
+        "deleted_files": 3,
+        "dirs": 3,
+        "files": 7,
+        "histogram": [
+          {
+            "created": 10,
+            "day": "2026-10-20",
+            "modified": 10
+          }
+        ],
+        "impact": [
+          "Data volume (no Windows installation found).",
+          "7 files (11.8 KiB) in 3 directories.",
+          "3 deleted files (866 B) and 1 deleted directories still have file system entries; content may be recoverable unless clusters were reused.",
+          "File timestamps span 2026-10-20 to 2026-10-20.",
+          "No anti-forensics indicators were triggered.",
+          "Deleted FAT files are recovered assuming their clusters were contiguous (the chain is cleared on delete); content of fragmented deleted files can be partly wrong."
+        ],
+        "orphans": 0,
+        "os": null,
+        "time_max": 134369559340000000,
+        "time_min": 134369559305000000,
+        "top_ext": [
+          [
+            "txt",
+            5
+          ],
+          [
+            "csv",
+            1
+          ],
+          [
+            "jpg",
+            1
+          ]
+        ],
+        "users": []
+      },
+      "volume": {
+        "fs": "exFAT",
+        "index": 1,
+        "length": 1048576,
+        "start": 2686976
+      }
+    }
+  ],
+  "image_format": "VMDK (seSparse) (+1 parent)",
+  "image_size": 3768320,
+  "volumes": 2
+}

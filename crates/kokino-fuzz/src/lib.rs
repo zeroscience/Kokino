@@ -21,8 +21,8 @@ pub const TARGETS: &[Target] = &[
     Target { name: "ext", run: ext, seeds: &["tests/fixtures/ext2.img", "tests/fixtures/ext3.img", "tests/fixtures/ext4.img"] },
     Target { name: "linuxlogs", run: linuxlogs, seeds: &["crates/kokino-fuzz/seeds/linux"] },
     Target { name: "journalz", run: journalz, seeds: &["crates/kokino-fuzz/seeds/linux/compressed.journal"] },
-    Target { name: "vdisk", run: vdisk, seeds: &["tests/fixtures/vd-dynamic.vhd", "tests/fixtures/vd-dynamic.vhdx", "tests/fixtures/vd-sparse.vmdk", "tests/fixtures/vd-stream.vmdk", "crates/kokino-fuzz/seeds/vdisk"] },
-    Target { name: "optical", run: optical, seeds: &["tests/fixtures/iso-rr-joliet.iso", "tests/fixtures/iso-udf.iso", "tests/fixtures/iso-multisession.iso"] },
+    Target { name: "vdisk", run: vdisk, seeds: &["tests/fixtures/vd-dynamic.vhd", "tests/fixtures/vd-dynamic.vhdx", "tests/fixtures/vd-sparse.vmdk", "tests/fixtures/vd-stream.vmdk", "crates/kokino-fuzz/seeds/vdisk", "tests/fixtures/vd-esx-vmfssparse-delta.vmdk", "tests/fixtures/vd-esx-sesparse-sesparse.vmdk"] },
+    Target { name: "optical", run: optical, seeds: &["tests/fixtures/iso-rr-joliet.iso", "tests/fixtures/iso-udf.iso", "tests/fixtures/iso-multisession.iso", "tests/fixtures/udf-sparable.img", "tests/fixtures/udf-vat.img"] },
     Target { name: "mac", run: mac, seeds: &["tests/fixtures/hfsplus.img", "tests/fixtures/apfs.img"] },
     Target { name: "ewf", run: ewf, seeds: &["tests/fixtures/disk-af-odd.E01", "tests/fixtures/disk-af.E01"] },
     Target { name: "indx", run: indx, seeds: &["crates/kokino-fuzz/seeds/indx"] },
@@ -195,9 +195,32 @@ fn vdisk(d: &[u8]) {
     use std::io::{Read, Seek, SeekFrom};
     let dir = std::env::temp_dir().join(format!("kokino-fuzz-vdisk-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
-    let p = dir.join("disk.bin");
+    let mut p = dir.join("disk.bin");
     if std::fs::write(&p, d).is_err() {
         return;
+    }
+    // An ESXi snapshot extent (VMFSSPARSE "COWD" or SESPARSE) is opened
+    // through a descriptor naming it, of the size its header claims.
+    let le = |o: usize, n: usize| d.get(o..o + n).map(|b| b.iter().rev().fold(0u64, |a, &x| a << 8 | x as u64));
+    let ext = if d.starts_with(b"COWD") {
+        le(12, 4).map(|c| ("VMFSSPARSE", c))
+    } else if le(0, 8) == Some(0xCAFE_BABE) {
+        le(16, 8).map(|c| ("SESPARSE", c))
+    } else {
+        None
+    };
+    if let Some((ty, cap)) = ext {
+        let desc = format!("# Disk DescriptorFile
+version=1
+CID=12345678
+parentCID=ffffffff
+createType=\"x\"
+RW {} {} \"disk.bin\"
+", cap.clamp(1, 1 << 24), ty);
+        p = dir.join("disk.vmdk");
+        if std::fs::write(&p, desc).is_err() {
+            return;
+        }
     }
     if let Ok(Some(v)) = kokino_image::vdisk::open(&p) {
         let v = std::sync::Arc::new(v);

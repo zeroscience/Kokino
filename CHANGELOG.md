@@ -6,6 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- UDF: sparable partitions (DVD-RW, CD-RW) read through their sparing table, so blocks moved to the spare area are read from there; virtual partitions (CD-R and DVD-R written incrementally) read through the VAT in the UDF 1.50 and 2.00 layouts. Both were reported as not read before. Test images built from ECMA-167 and UDF 2.01 (`scripts/make_udf_fixture.py`).
+- VMDK: ESXi snapshots in the VMFSSPARSE (-delta.vmdk, "COWD") and SESPARSE (-sesparse.vmdk, ESXi 6.5 and later) formats, with their parent chains.
+- Golden results: the two UDF images and the two ESXi snapshots (42 analyses).
 - ext3 and ext4: names of files deleted long ago, from older copies of their folders kept in the journal, also when the file's inode now belongs to another file. On the NIST CFReDS ext images this found 704 more deleted names (ext-10, files whose inodes were reused) and changed nothing else.
 - Carving: JPEGs split in two pieces across free space are joined again (bifragment gap carving). The second piece is looked for up to 16 MB on, and a join is kept only when the joined picture decodes into exactly the blocks its header promises and ends where its data ends. Such files are marked "joined from two pieces" with both offsets; preview, export, hashes, the picture checks and the search index read the joined bytes.
 - SRUM: the long-term energy table (time active and in standby, on mains power and on battery, per period; values as stored).
@@ -15,7 +18,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - SRUM: the App Timeline Provider table (per program and period, seconds in the foreground, with user input, keyboard and mouse input, and playing audio), push notifications and battery charge. In-focus and input time per program in the program list and the export; periods with user input on the timeline as programs in use.
 
 ### Changed
-- Fuzzing: `ioc` again with STIX and MISP seeds (5.1 million inputs) and `ese` with the new SRUM tables (273,000; see Fixed), then `ext` with folder copies from the journal (236,000), `carve` with the JPEG join (43.3 million) and `ese` with the long-term energy table (193,000), which found nothing. In all: 714 million inputs over 40 targets, 40 problems found and fixed.
+- Fuzzing: `ioc` again with STIX and MISP seeds (5.1 million inputs) and `ese` with the new SRUM tables (273,000; see Fixed), then `ext` with folder copies from the journal (236,000), `carve` with the JPEG join (43.3 million) and `ese` with the long-term energy table (193,000), which found nothing; then `optical` with the sparable and virtual UDF images (1.3 million) and `vdisk` with the ESXi extents (46,000), which found nothing. In all: 715 million inputs over 40 targets, 40 problems found and fixed.
 - Watchlist: up to 50,000 indicators and 20 MB (was 5,000 and 2 MB); the sweep looks indicators up in tables instead of comparing each with every file and record, so large feeds stay fast. Email addresses are matched as whole addresses in From, To and Cc (before, as text anywhere in the field).
 
 ### Fixed

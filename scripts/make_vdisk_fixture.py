@@ -20,6 +20,20 @@ top of their parent, so a reader must give back:
       + vd-split-s001.vmdk, -s002.vmdk (two sparse extents)  -> base
     vd-snap.vmdk            VMDK snapshot of vd-sparse.vmdk   -> patched
 
+ESXi snapshot formats (python scripts/make_vdisk_fixture.py esx writes
+only these), snapshots of vd-flat.vmdk:
+
+    vd-esx-vmfssparse.vmdk  descriptor, createType vmfsSparse
+      + vd-esx-vmfssparse-delta.vmdk  "COWD" sparse extent, 1-sector
+                            grains, 4096-entry grain tables      -> patched
+    vd-esx-sesparse.vmdk    descriptor, createType seSparse
+      + vd-esx-sesparse-sesparse.vmdk  SE sparse extent, 4 KiB grains,
+                            64-bit grain directory and tables; the
+                            patched grain is allocated, and one grain
+                            that is zeros in the base is marked "zero"   -> patched
+
+The layouts follow QEMU's vmdk driver (block/vmdk.c), which reads both.
+
     python scripts/make_vdisk_fixture.py
 """
 import os
@@ -311,6 +325,82 @@ def vmdk_stream(data, desc):
     return bytes(f)
 
 
+def cowd(data, only):
+    """VMFSSPARSE extent ("COWD", ESX 3 and later snapshot deltas): header
+    in sectors 0-3, grain directory at sector 4, grain tables of 4096
+    32-bit entries (absolute sector numbers, 0 = in the parent), 1-sector
+    grains."""
+    cap = len(data) // SECTOR
+    gtes = 4096
+    ngt = (cap + gtes - 1) // gtes
+    gd_sec = 4
+    gt_sec = gd_sec + (ngt * 4 + SECTOR - 1) // SECTOR
+    gt_secs = (gtes * 4) // SECTOR
+    first_grain = gt_sec + ngt * gt_secs
+    gt = [0] * (ngt * gtes)
+    body = b""
+    for s in range(cap):
+        lo, hi = s * SECTOR, (s + 1) * SECTOR
+        if any(a < hi and b > lo for a, b in only):
+            gt[s] = first_grain + len(body) // SECTOR
+            body += data[lo:hi]
+    head = bytearray(first_grain * SECTOR)
+    # magic, version 1, flags 3, sectors, granularity 1, GD sector, GD entries, next free sector
+    struct.pack_into("<4sIIIIIII", head, 0, b"COWD", 1, 3, cap, 1, gd_sec, ngt, first_grain + len(body) // SECTOR)
+    for t in range(ngt):
+        struct.pack_into("<I", head, gd_sec * SECTOR + 4 * t, gt_sec + t * gt_secs)
+        for i in range(gtes):
+            struct.pack_into("<I", head, (gt_sec + t * gt_secs) * SECTOR + 4 * i, gt[t * gtes + i])
+    return bytes(head) + body
+
+
+def sesparse(data, only, zero_grains):
+    """SESPARSE extent (ESXi 6.5 and later): a 512-byte constant header,
+    every offset and size in sectors; 4 KiB grains; grain tables of 4096
+    64-bit entries (64 sectors); grain directory entries 0x1 << 60 | table
+    index; grain table entries: state in the top 4 bits (0 parent, 1
+    unmapped, 2 zero, 3 allocated) and the grain index split 12/48."""
+    cap = len(data) // SECTOR
+    grain = 8
+    gtes = 4096
+    grains = (cap + grain - 1) // grain
+    ngt = (grains + gtes - 1) // gtes
+    gd_off, gd_size = 4, 1
+    gt_off, gt_size = gd_off + gd_size, ngt * 64
+    grains_off = gt_off + gt_size
+    gt = [0] * (ngt * gtes)
+    body = b""
+    for g in range(grains):
+        lo, hi = g * grain * SECTOR, (g + 1) * grain * SECTOR
+        if any(a < hi and b > lo for a, b in only):
+            idx = len(body) // (grain * SECTOR)
+            gt[g] = (3 << 60) | ((idx & 0xFFF) << 48) | (idx >> 12)
+            body += data[lo:hi].ljust(grain * SECTOR, b"\0")
+        elif g in zero_grains:
+            gt[g] = 2 << 60
+    head = bytearray(grains_off * SECTOR)
+    fields = [0x00000000CAFEBABE, 0x0000000200000001, cap, grain, 64, 0, 0, 0, 0, 0,
+              1, 1, 2, 1, 3, 1, gd_off, gd_size, gt_off, gt_size, 0, 0, 0, 0, grains_off, len(body) // SECTOR]
+    struct.pack_into("<26Q", head, 0, *fields)
+    struct.pack_into("<Q", head, SECTOR, 0x00000000CAFECAFE)  # volatile header
+    for t in range(ngt):
+        struct.pack_into("<Q", head, gd_off * SECTOR + 8 * t, (1 << 60) | t)
+        for i in range(gtes):
+            struct.pack_into("<Q", head, (gt_off + t * 64) * SECTOR + 8 * i, gt[t * gtes + i])
+    return bytes(head) + body
+
+
+def esx():
+    cap = SIZE // SECTOR
+    patch = [(PATCH_AT, PATCH_AT + len(PATCH))]
+    out("vd-esx-vmfssparse.vmdk", descriptor("vmfsSparse", ['RW %d VMFSSPARSE "vd-esx-vmfssparse-delta.vmdk"' % cap], 0x66666666, 0x33333333, "vd-flat.vmdk"))
+    out("vd-esx-vmfssparse-delta.vmdk", cowd(PATCHED, patch))
+    # A 4 KiB grain that is all zeros in the base, marked "zero" in the snapshot.
+    zero = next(g for g in range(SIZE // 4096) if not any(BASE[g * 4096:(g + 1) * 4096]) and g > 100)
+    out("vd-esx-sesparse.vmdk", descriptor("seSparse", ['RW %d SESPARSE "vd-esx-sesparse-sesparse.vmdk"' % cap], 0x77777777, 0x33333333, "vd-flat.vmdk"))
+    out("vd-esx-sesparse-sesparse.vmdk", sesparse(PATCHED, patch, {zero}))
+
+
 def main():
     cap = SIZE // SECTOR
     patch = [(PATCH_AT, PATCH_AT + len(PATCH))]
@@ -335,4 +425,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    esx() if sys.argv[1:] == ["esx"] else main()

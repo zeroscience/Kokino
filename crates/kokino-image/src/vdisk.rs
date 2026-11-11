@@ -86,6 +86,8 @@ enum ExtKind {
     Flat { file: usize, off: u64 },
     Zero,
     Sparse { file: usize, gd: Vec<u32>, grain: u64, gtes: u64, compressed: bool },
+    /// ESXi SESPARSE: 64-bit grain directory and tables; offsets in bytes.
+    SeSparse { file: usize, gd: Vec<u64>, tables: u64, gtes: u64, grain: u64, grains: u64 },
 }
 
 /// One disk of a chain: its map and what it is.
@@ -643,7 +645,14 @@ fn open_vmdk(p: &Path, v: &mut VDisk) -> anyhow::Result<Opened> {
                 }
                 sparse_extent(&ep, v)?
             }
-            other => bail!("VMDK extent type {} is not supported yet (ESXi snapshot formats VMFSSPARSE and SESPARSE)", other),
+            "VMFSSPARSE" | "SESPARSE" => {
+                let ep = dir.join(name);
+                if !ep.is_file() {
+                    bail!("extent file {} not found", ep.display());
+                }
+                if ty == "VMFSSPARSE" { cowd_extent(&ep, v)? } else { sesparse_extent(&ep, v)? }
+            }
+            other => bail!("VMDK extent type {} is not supported yet", other),
         };
         extents.push(Extent { start, len, kind });
         start += len;
@@ -700,6 +709,50 @@ fn sparse_extent(p: &Path, v: &mut VDisk) -> anyhow::Result<ExtKind> {
     let raw = rd(&mut f, gd_off.saturating_mul(SECTOR), (ngt * 4) as usize)?;
     let gd = raw.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
     Ok(ExtKind::Sparse { file: add_file(v, p), gd, grain: grain * SECTOR, gtes, compressed })
+}
+
+/// VMFSSPARSE ("COWD"): ESX snapshot deltas. Grain tables of 4096 32-bit
+/// entries (sector numbers; 0 is in the parent).
+fn cowd_extent(p: &Path, v: &mut VDisk) -> anyhow::Result<ExtKind> {
+    let mut f = File::open(p)?;
+    let len = f.metadata()?.len();
+    let h = rd(&mut f, 0, 512)?;
+    if !h.starts_with(b"COWD") {
+        bail!("{} is not a VMFSSPARSE extent (no COWD signature)", p.display());
+    }
+    let (capacity, grain, gd_sector, ngt) = (le32(&h, 12), le32(&h, 16), le32(&h, 20), le32(&h, 24));
+    let gtes = 4096u64;
+    if grain == 0 || grain > 1 << 16 || capacity > MAX_SIZE / SECTOR || ngt == 0 || ngt * 4 > MAX_TABLE_BYTES.min(len.max(4)) || ngt < capacity.div_ceil(grain).div_ceil(gtes) {
+        bail!("{}: VMFSSPARSE header out of range", p.display());
+    }
+    let raw = rd(&mut f, gd_sector.saturating_mul(SECTOR), (ngt * 4) as usize)?;
+    let gd = raw.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+    Ok(ExtKind::Sparse { file: add_file(v, p), gd, grain: grain * SECTOR, gtes, compressed: false })
+}
+
+/// SESPARSE: ESXi 6.5 and later snapshots (and large disks). The constant
+/// header gives every area in sectors; grains are 4 KiB and grain tables
+/// hold 4096 64-bit entries, as QEMU's vmdk driver reads them.
+fn sesparse_extent(p: &Path, v: &mut VDisk) -> anyhow::Result<ExtKind> {
+    let mut f = File::open(p)?;
+    let len = f.metadata()?.len();
+    let h = rd(&mut f, 0, 512)?;
+    if h.len() < 208 || le64(&h, 0) != 0xCAFE_BABE {
+        bail!("{} is not a SESPARSE extent", p.display());
+    }
+    let (version, capacity, grain, gt_size) = (le64(&h, 8), le64(&h, 16), le64(&h, 24), le64(&h, 32));
+    let (gd_off, gd_size, gt_off, grains_off) = (le64(&h, 128), le64(&h, 136), le64(&h, 144), le64(&h, 192));
+    if version != 0x0000_0002_0000_0001 || grain != 8 || gt_size != 64 || capacity > MAX_SIZE / SECTOR {
+        bail!("{}: SESPARSE header not supported (version {:#x}, grain {} sectors, grain table {} sectors)", p.display(), version, grain, gt_size);
+    }
+    let gtes = gt_size * SECTOR / 8;
+    let need = capacity.div_ceil(grain).div_ceil(gtes);
+    if gd_size.saturating_mul(SECTOR) / 8 < need || need * 8 > MAX_TABLE_BYTES.min(len.max(8)) {
+        bail!("{}: SESPARSE grain directory too small or larger than the file", p.display());
+    }
+    let raw = rd(&mut f, gd_off.saturating_mul(SECTOR), (need * 8) as usize)?;
+    let gd = raw.chunks_exact(8).map(|c| u64::from_le_bytes(c.try_into().unwrap())).collect();
+    Ok(ExtKind::SeSparse { file: add_file(v, p), gd, tables: gt_off.saturating_mul(SECTOR), gtes, grain: grain * SECTOR, grains: grains_off.saturating_mul(SECTOR) })
 }
 
 // ---------------------------------------------------------------- reading
@@ -839,6 +892,27 @@ impl VDiskReader {
                             s => Ok((Loc::Data { file: *file, off: s * SECTOR + within % grain }, n)),
                         }
                     }
+                    ExtKind::SeSparse { file, gd, tables, gtes, grain, grains } => {
+                        let g = within / grain;
+                        let n = (grain - within % grain).min(n);
+                        let parent = if lvl + 1 < self.disk.chain.len() { Loc::Parent } else { Loc::Zero };
+                        let gde = gd.get((g / gtes) as usize).copied().unwrap_or(0);
+                        if gde == 0 || gde >> 60 != 1 {
+                            return Ok((parent, n));
+                        }
+                        let table = (gde & 0xFFFF_FFFF).saturating_mul(gtes * 8).saturating_add(*tables);
+                        let gt = self.cached((4, *file, table), (*gtes * 8) as usize, false)?;
+                        let e = le64(&gt, ((g % gtes) * 8) as usize);
+                        match e >> 60 {
+                            0 => Ok((parent, n)),
+                            3 => {
+                                let idx = ((e & 0x0FFF_0000_0000_0000) >> 48) | ((e & 0x0000_FFFF_FFFF_FFFF) << 12);
+                                Ok((Loc::Data { file: *file, off: idx.saturating_mul(*grain).saturating_add(*grains).saturating_add(within % grain) }, n))
+                            }
+                            // 1 unmapped (SCSI UNMAP), 2 zero; anything else is not valid.
+                            _ => Ok((Loc::Zero, n)),
+                        }
+                    }
                 }
             }
         }
@@ -944,6 +1018,8 @@ mod tests {
             ("vd-flat.vmdk", &base, "VMDK (monolithicFlat)"),
             ("vd-split.vmdk", &base, "VMDK (twoGbMaxExtentSparse)"),
             ("vd-snap.vmdk", &patched, "VMDK (monolithicSparse) (+1 parent)"),
+            ("vd-esx-vmfssparse.vmdk", &patched, "VMDK (vmfsSparse) (+1 parent)"),
+            ("vd-esx-sesparse.vmdk", &patched, "VMDK (seSparse) (+1 parent)"),
             // Written by VMware ovftool 4.4 (OVF export of vd-sparse.vmdk).
             ("vd-vmware-stream.vmdk", &base, "VMDK (streamOptimized)"),
         ] {

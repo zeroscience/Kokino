@@ -1,0 +1,14 @@
+# Disk DescriptorFile
+version=1
+CID=66666666
+parentCID=33333333
+createType="vmfsSparse"
+parentFileNameHint="vd-flat.vmdk"
+
+# Extent description
+RW 7360 VMFSSPARSE "vd-esx-vmfssparse-delta.vmdk"
+
+# The Disk Data Base
+#DDB
+ddb.virtualHWVersion = "4"
+ddb.adapterType = "ide"
