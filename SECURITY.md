@@ -177,7 +177,7 @@ Watchlist (1.4.0):
 |---|---|---|--:|---|
 | `ioc` | the watchlist parser: indicator kinds, defanged forms, notes, URL hosts, domain and IP comparison | 10 min | 13,628,459 | 1: an IPv4-mapped IPv6 address (::ffff:192.0.2.1) did not match itself, so such an indicator found nothing; fixed (found in a first round stopped to fix it and not counted) |
 
-STIX and MISP watchlists, SRUM app timeline, push and battery tables (after 1.4.0):
+STIX and MISP watchlists, SRUM app timeline, push and battery tables (1.5.0):
 
 | Target | What it covers | Rounds | Inputs in all | Distinct problems found |
 |---|---|---|--:|---|
@@ -188,7 +188,7 @@ That first round also stopped on a wrong assumption in the fuzzer's own
 check (an IP network does not "match itself" as an address); the check was
 corrected and is not counted as a problem.
 
-ext folder names from the journal, JPEGs in two pieces, SRUM long-term energy (after 1.4.0):
+ext folder names from the journal, JPEGs in two pieces, SRUM long-term energy (1.5.0):
 
 | Target | What it covers | Rounds | Inputs in all | Distinct problems found |
 |---|---|---|--:|---|
@@ -196,14 +196,14 @@ ext folder names from the journal, JPEGs in two pieces, SRUM long-term energy (a
 | `carve` | again, with the JPEG join: the header walk, sectors classified as JPEG data or not, the search for the second piece and the strict decode check, with a split picture as an extra seed | 10 min | 43,267,718 | none |
 | `ese` | again, with the long-term energy table | 10 min | 192,933 | none |
 
-UDF sparable and virtual partitions, ESXi snapshots (after 1.4.0):
+UDF sparable and virtual partitions, ESXi snapshots (1.5.0):
 
 | Target | What it covers | Rounds | Inputs in all | Distinct problems found |
 |---|---|---|--:|---|
 | `optical` | again, with a sparable partition (sparing table) and a virtual partition (VAT found from the end of the image) as seeds | 10 min | 1,335,667 | none |
 | `vdisk` | again, with ESXi VMFSSPARSE and SESPARSE extents (opened through a descriptor naming them) as seeds | 10 min | 45,992 | none |
 
-Plugins and UDF sessions (after 1.4.0):
+Plugins and UDF sessions (1.5.0):
 
 | Target | What it covers | Rounds | Inputs in all | Distinct problems found |
 |---|---|---|--:|---|

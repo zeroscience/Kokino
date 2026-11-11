@@ -35,7 +35,7 @@
           "Data volume (no Windows installation found).",
           "11 files (587.5 KiB) in 7 directories.",
           "1 deleted files (55 B) and 0 deleted directories still have file system entries; content may be recoverable unless clusters were reused.",
-          "File timestamps span 2026-10-20 to 2026-11-04.",
+          "File timestamps span 20-10-2026 to 04-11-2026.",
           "No anti-forensics indicators were triggered.",
           "1 deleted file(s) found in old copies of catalog nodes (the journal and unused nodes)."
         ],

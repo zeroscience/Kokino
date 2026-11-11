@@ -30,7 +30,7 @@
           "Data volume (no Windows installation found).",
           "4 files (5.0 KiB) in 1 directories.",
           "1 deleted files (56 B) and 0 deleted directories still have file system entries; content may be recoverable unless clusters were reused.",
-          "File timestamps span 2026-10-20 to 2026-10-20.",
+          "File timestamps span 20-10-2026 to 20-10-2026.",
           "No anti-forensics indicators were triggered.",
           "1 file(s) and folder(s) are only in earlier sessions of this disc (found through their VATs): a later session removed them."
         ],

@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.5.0] - 11-11-2026
+
+More of what was left: watchlists from STIX 2.1 and MISP with each sweep compared with the last, plugins for artifacts Kokino does not read itself, CD-R and DVD-RW discs (UDF virtual and sparable partitions, files from earlier sessions), ESXi snapshots, JPEGs carved from two pieces, names of long-deleted files from the ext journal, more of SRUM, dates shown day first everywhere, and a website.
+
 ### Added
 - Website at https://zeroscience.github.io/kokino-ftk/ (source in `site/`): a static page (no build step, no trackers, nothing loaded from other sites) with features, downloads of the latest release, getting started, FAQ and about, in the application's own look.
 - Plugins: parsers for artifacts Kokino does not read itself, as separate programs in any language. A plugin is a folder with a plugin.json (file patterns, command, time limit, size limit); Kokino copies every matching file (live or deleted) out of the evidence, runs the program on the copy and shows the JSON rows it prints on the evidence item's new Plugins page. Off unless the server is started with `--plugins <folder>`; started by examiners only; every run audited with the plugin's version, command and the SHA-256 of its files. Also `kokino plugins <image> --plugins <folder>`. Example: plugins/internet-shortcut (Internet Shortcut .url files, Python standard library).
@@ -23,12 +27,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - Fuzzing: `ioc` again with STIX and MISP seeds (5.1 million inputs) and `ese` with the new SRUM tables (273,000; see Fixed), then `ext` with folder copies from the journal (236,000), `carve` with the JPEG join (43.3 million) and `ese` with the long-term energy table (193,000), which found nothing; then `optical` with the sparable and virtual UDF images (1.3 million) and `vdisk` with the ESXi extents (46,000), which found nothing. Then the new `plugin` target (32.6 million) and `optical` with two-session CD-R images (1.1 million), which found nothing. In all: 749 million inputs over 41 targets, 40 problems found and fixed.
 - Watchlist: up to 50,000 indicators and 20 MB (was 5,000 and 2 MB); the sweep looks indicators up in tables instead of comparing each with every file and record, so large feeds stay fast. Email addresses are matched as whole addresses in From, To and Cc (before, as text anywhere in the field).
+- Dates are shown day first with dashes (dd-mm-yyyy) by default: in the GUI, the case reports, the summaries the analysis writes and the shadow copy names. ISO and US order and any time zone remain a choice under Time; summaries written by the analysis are in UTC whatever the computer's zone, so the analysis of an image is the same everywhere. Stored data, JSON and CSV exports and audit logs stay ISO 8601.
 
 ### Fixed
 - SRUM: per-program totals could overflow on a damaged database with huge hourly values (found by fuzzing); they now stop at the largest value.
 - Watchlist: a STIX pattern with a multi-byte character just before an object name stopped the parser (found by fuzzing before release).
 
-## [1.4.0] - 2026-11-10
+## [1.4.0] - 10-11-2026
 
 A whole case at once: one timeline across every evidence item, a watchlist that sweeps every item for known indicators, golden results that check what Kokino finds in every test image on every commit, and a roadmap for after a pause in development.
 
@@ -41,14 +46,14 @@ A whole case at once: one timeline across every evidence item, a watchlist that 
 ### Changed
 - Roadmap rewritten: what is done, by area, and a prioritized list for after 1.4 with what each item needs (most are waiting for test data, not code).
 
-## [1.3.2] - 2026-11-09
+## [1.3.2] - 09-11-2026
 
 The built-in wiki brought up to date with everything 1.3.1 added; no changes to analysis.
 
 ### Changed
 - Wiki brought up to date with 1.3.1: the macOS system summary is under Mac disks (it said macOS artifacts were not read), carving of decrypted BitLocker volumes, the new validation images (dfvfs shadow copies and BitLocker To Go, the PST and OST samples) with thanks to their authors, release integrity (SBOM and signed provenance) under Security, and the About page's description of what Kokino reads; the README's description likewise.
 
-## [1.3.1] - 2026-11-09
+## [1.3.1] - 09-11-2026
 
 Encrypted, shadowed, collected and Mac: BitLocker unlocking (password, recovery password, startup key) with carving of decrypted space, Volume Shadow Copies, disk images inside evidence, triage collections (Velociraptor, KAPE, UAC, plain folders), Outlook PST and OST, Apple Mail, macOS system artifacts with Safari and FSEvents, WebCache of Internet Explorer 10 and 11, VHDX log replay, cross-evidence correlation, and a signed SBOM with every release.
 
@@ -84,7 +89,7 @@ Encrypted, shadowed, collected and Mac: BitLocker unlocking (password, recovery 
 - The Summary of a ZIP collection showed it as NTFS ("NTFS ZIP ..., cluster 0 B"); collections now show their format and size.
 - Found by fuzzing before release: ZIP collections (a Velociraptor-escaped name next to a multi-byte character stopped the analysis; a damaged ZIP could claim sizes that exhausted memory), shadow copies (offsets near 2^64 overflowed; a catalog listing thousands of stores overflowed the stack) and BitLocker (an offset near 2^64 overflowed).
 
-## [1.3.0] - 2026-11-09
+## [1.3.0] - 09-11-2026
 
 Email, exports and older systems: mbox and .eml mail, every list as CSV or JSON, registry transaction logs, text of legacy Office files, Windows XP event logs, Internet Explorer cookies and compressed journald fields.
 
@@ -107,7 +112,7 @@ Email, exports and older systems: mbox and .eml mail, every list as CSV or JSON,
 - The Windows test image's carving sample `draft.docx` is now built with a fixed time, so the test images are the same every time they are built.
 - The carving sample order on the test volume changed (the new log file took free clusters); the carving test was updated.
 
-## [1.2.9] - 2026-11-08
+## [1.2.9] - 08-11-2026
 
 More Windows: scheduled tasks (hidden ones flagged), Internet Explorer history with records recovered from free space, and deleted registry keys and values.
 
@@ -133,7 +138,7 @@ More Windows: scheduled tasks (hidden ones flagged), Internet Explorer history w
 - The server test of session expiry no longer fails on a computer that has been up for less than the idle timeout (it could not move a time back past the system's start).
 - The carving samples `memo.doc` and `security.evtx-chunk` moved from the test volume's free clusters to the unpartitioned space after it, to make room for the task files, the index.dat files and the larger SOFTWARE hive.
 
-## [1.2.8] - 2026-11-05
+## [1.2.8] - 05-11-2026
 
 Deeper NTFS and Windows: the change journal, names of deleted files from folder index slack and $LogFile, ShellBags, BAM/DAM and SRUM with Kokino's own ESE database reader.
 
@@ -153,7 +158,7 @@ Deeper NTFS and Windows: the change journal, names of deleted files from folder 
 - Hashing (and `kokino files`) skip name-only entries, which have no content.
 - Analysis schema 6. On NTFS evidence analyzed by an earlier version, the System summary says that the change journal, ShellBags, BAM/DAM, SRUM and recovered names are missing until it is analyzed again, with a Re-analyze button.
 
-## [1.2.7] - 2026-11-04
+## [1.2.7] - 04-11-2026
 
 Virtual disks, optical media and Mac disks: VHD, VHDX and VMDK (with snapshots), ISO 9660 and UDF (with multisession history), HFS+ and APFS (with deleted files), and an update check that runs only when asked.
 
@@ -171,7 +176,7 @@ Virtual disks, optical media and Mac disks: VHD, VHDX and VMDK (with snapshots),
 ### Fixed
 - Volume list: ext volumes were not marked as supported in the disk layout (only the analysis knew); fixed together with ISO 9660 and UDF detection.
 
-## [1.2.6] - 2026-11-02
+## [1.2.6] - 02-11-2026
 
 Linux: ext2, ext3 and ext4 file systems and Linux system artifacts, validated on the NIST CFReDS ext images and fuzzed.
 
@@ -199,7 +204,7 @@ Linux: ext2, ext3 and ext4 file systems and Linux system artifacts, validated on
 - ext reader (found by fuzzing before release): a superblock claiming millions of block groups made the block bitmap buffer reserve hundreds of megabytes from an 83 KB image. Group descriptors and the bitmap are now bounded by what the image holds.
 - Linux log parsers (found by fuzzing before release): integer overflows in POSIX time zone rules and in systemd journal object offsets and sizes. Fuzzing now totals 227,335,973 inputs over 18 targets, 22 problems found and fixed (SECURITY.md).
 
-## [1.2.5] - 2026-11-01
+## [1.2.5] - 01-11-2026
 
 First public release.
 

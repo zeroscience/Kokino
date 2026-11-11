@@ -74,16 +74,16 @@ fn offset_label(secs: i32) -> String {
 /// A stored time for people, day first, to the second. Times marked UTC
 /// ("Z" or an offset) are converted to this computer's zone, with summer
 /// time applied for that date, and carry their offset:
-/// "2026-10-30T14:32:05.123Z" -> "30.10.2026 15:32:05 UTC+1" in Amsterdam.
+/// "2026-10-30T14:32:05.123Z" -> "30-10-2026 15:32:05 UTC+1" in Amsterdam.
 /// Times without a zone (a device's local clock) are shown as stored,
-/// without a label. A date alone becomes "30.10.2026"; anything else is
+/// without a label. A date alone becomes "30-10-2026"; anything else is
 /// returned as it is. Stored data (audit logs, case files, JSON) stays ISO.
 pub fn human(iso: &str) -> String {
     format_time(iso, false)
 }
 
 /// Like `human`, keeping the fraction of a second as stored (FILETIME has
-/// 100 ns): "02.01.2021 13:37:00.1234567 UTC+1".
+/// 100 ns): "02-01-2021 13:37:00.1234567 UTC+1".
 pub fn human_full(iso: &str) -> String {
     format_time(iso, true)
 }
@@ -101,7 +101,7 @@ fn format_time(iso: &str, full: bool) -> String {
     if !(digits(0..4) && b.get(4) == Some(&b'-') && digits(5..7) && b.get(7) == Some(&b'-') && digits(8..10)) {
         return iso.to_string();
     }
-    let date = |y: &str, m: &str, d: &str| format!("{}.{}.{}", d, m, y);
+    let date = |y: &str, m: &str, d: &str| format!("{}-{}-{}", d, m, y);
     if !(iso.len() >= 19 && matches!(b[10], b'T' | b' ') && digits(11..13) && digits(14..16) && digits(17..19)) {
         return date(&iso[0..4], &iso[5..7], &iso[8..10]);
     }
@@ -117,10 +117,20 @@ fn format_time(iso: &str, full: bool) -> String {
     let Ok(t) = instant else { return iso.to_string() };
     let t = t.with_timezone(&Utc);
     if IN_UTC.with(|c| c.get()) {
-        return format!("{}{} UTC", t.format("%d.%m.%Y %H:%M:%S"), frac);
+        return format!("{}{} UTC", t.format("%d-%m-%Y %H:%M:%S"), frac);
     }
     let local = t.with_timezone(&chrono::Local);
-    format!("{}{} {}", local.format("%d.%m.%Y %H:%M:%S"), frac, offset_label(local.offset().local_minus_utc()))
+    format!("{}{} {}", local.format("%d-%m-%Y %H:%M:%S"), frac, offset_label(local.offset().local_minus_utc()))
+}
+
+/// A FILETIME for text that is stored with the analysis (summaries, notes):
+/// always UTC, whatever the computer's zone, so the analysis of an image is
+/// the same everywhere. "20-10-2026 10:30:02 UTC"; empty for 0.
+pub fn utc_text(ft: u64) -> String {
+    if ft == 0 {
+        return String::new();
+    }
+    with_utc(true, || human(&filetime_to_iso(ft)))
 }
 
 /// A FILETIME for people (see `human`), or empty.
@@ -145,20 +155,20 @@ mod tests {
     #[test]
     fn human_dates_are_day_first() {
         with_utc(true, || {
-            assert_eq!(human("2021-01-02T12:37:00.1234567Z"), "02.01.2021 12:37:00 UTC");
-            assert_eq!(human("2026-10-30T16:05:09.123+02:00"), "30.10.2026 14:05:09 UTC");
-            assert_eq!(human_full("2021-01-02T12:37:00.1234567Z"), "02.01.2021 12:37:00.1234567 UTC");
-            assert_eq!(filetime_human(132_539_328_000_000_000), "01.01.2021 00:00:00 UTC");
+            assert_eq!(human("2021-01-02T12:37:00.1234567Z"), "02-01-2021 12:37:00 UTC");
+            assert_eq!(human("2026-10-30T16:05:09.123+02:00"), "30-10-2026 14:05:09 UTC");
+            assert_eq!(human_full("2021-01-02T12:37:00.1234567Z"), "02-01-2021 12:37:00.1234567 UTC");
+            assert_eq!(filetime_human(132_539_328_000_000_000), "01-01-2021 00:00:00 UTC");
         });
         // No zone stored, or a device's clock: shown as stored.
-        assert_eq!(human("2010-08-06 00:06:08"), "06.08.2010 00:06:08");
-        assert_eq!(human_as_stored("2026-10-20T09:45:30.5000000Z"), "20.10.2026 09:45:30.5000000");
-        assert_eq!(human("2026-10-30"), "30.10.2026");
+        assert_eq!(human("2010-08-06 00:06:08"), "06-08-2010 00:06:08");
+        assert_eq!(human_as_stored("2026-10-20T09:45:30.5000000Z"), "20-10-2026 09:45:30.5000000");
+        assert_eq!(human("2026-10-30"), "30-10-2026");
         assert_eq!(human("not a time"), "not a time");
         assert_eq!(human(""), "");
         // This computer's zone: the label matches the conversion.
         let l = human("2026-01-15T12:00:00Z");
-        assert!(l.starts_with("15.01.2026 ") && l.contains("UTC"), "{}", l);
+        assert!(l.starts_with("15-01-2026 ") && l.contains("UTC"), "{}", l);
         assert_eq!(offset_label(3600), "UTC+1");
         assert_eq!(offset_label(-12600), "UTC-3:30");
         assert_eq!(offset_label(0), "UTC");

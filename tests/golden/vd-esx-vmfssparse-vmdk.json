@@ -35,7 +35,7 @@
           "Data volume (no Windows installation found).",
           "7 files (11.8 KiB) in 3 directories.",
           "3 deleted files (866 B) and 1 deleted directories still have file system entries; content may be recoverable unless clusters were reused.",
-          "File timestamps span 2026-10-20 to 2026-10-20.",
+          "File timestamps span 20-10-2026 to 20-10-2026.",
           "No anti-forensics indicators were triggered.",
           "FAT stores times in the local time of the device that wrote them, with no time zone; they are shown as stored.",
           "Deleted FAT files are recovered assuming their clusters were contiguous (the chain is cleared on delete); content of fragmented deleted files can be partly wrong."
@@ -101,7 +101,7 @@
           "Data volume (no Windows installation found).",
           "7 files (11.8 KiB) in 3 directories.",
           "3 deleted files (866 B) and 1 deleted directories still have file system entries; content may be recoverable unless clusters were reused.",
-          "File timestamps span 2026-10-20 to 2026-10-20.",
+          "File timestamps span 20-10-2026 to 20-10-2026.",
           "No anti-forensics indicators were triggered.",
           "Deleted FAT files are recovered assuming their clusters were contiguous (the chain is cleared on delete); content of fragmented deleted files can be partly wrong."
         ],

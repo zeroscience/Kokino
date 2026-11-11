@@ -313,13 +313,13 @@ Exported files, read the way the analysis reads them:
 | File | Records | Shown |
 |---|--:|---|
 | History (main) | 100 (21 deleted) | 69 visits; 31 last visits are also in a daily file and are shown once |
-| History, day 2011-10-18 | 49 | 34 visits; 15 `:Host:` summaries are not visits |
-| History, day 2011-10-19 | 46 (1 deleted) | 31 visits |
+| History, day 18-10-2011 | 49 | 34 visits; 15 `:Host:` summaries are not visits |
+| History, day 19-10-2011 | 46 (1 deleted) | 31 visits |
 | History (protected mode) | 199 (5 deleted) | 199 visits |
 | Cache and cache (protected mode) | 18 and 5,437 | 5,419 cached files (5 LEAK); 35 redirects not listed |
 | Downloads (IE 9) | 5 (2 deleted) | 5 downloads, with referring page and saved path |
 
-Visits run from 2011-10-18 to 2011-10-19, the same two days as the
+Visits run from 18-10-2011 to 19-10-2011, the same two days as the
 cache's last-access times; 42 searches are found in visited Bing and Google pages, and 5
 local files opened through Explorer appear as `file:` visits. The daily
 files give the computer's clock as UTC+03:00, which matches the time zone
@@ -350,7 +350,7 @@ was read with its cookie text files, as the analysis does:
 | Cookies | 2 (1 deleted) | 3 | 1 | 1 deleted index entry whose cookie file is gone (a ferry operator's site) |
 | Cookies\Low (protected mode) | 87 (1 deleted) | 220 | 86 | 1 deleted index entry whose cookie file is gone (filehippo.com, a download site) |
 
-Creation and last-use times fall on 2011-10-18 and 2011-10-19, the two days
+Creation and last-use times fall on 18-10-2011 and 19-10-2011, the two days
 of the case's browsing history.
 
 ## Registry transaction logs: public test hives (1.3.0)
@@ -380,8 +380,8 @@ local test data only, not included in Kokino.
 
 | | dfvfs | Kokino |
 |---|---|---|
-| Store 1 | de81cc22-aa8b-11eb-9339-8cdcd4557abc, 2021-05-01 17:40:03 | Same ID and time; volume 1, "Shadow copy 1 of volume 0" |
-| Store 2 | de81cc2b-aa8b-11eb-9339-8cdcd4557abc, 2021-05-01 17:41:28 | Same ID and time; volume 2, "Shadow copy 2 of volume 0" |
+| Store 1 | de81cc22-aa8b-11eb-9339-8cdcd4557abc, 01-05-2021 17:40:03 | Same ID and time; volume 1, "Shadow copy 1 of volume 0" |
+| Store 2 | de81cc2b-aa8b-11eb-9339-8cdcd4557abc, 01-05-2021 17:41:28 | Same ID and time; volume 2, "Shadow copy 2 of volume 0" |
 | Snapshot 1 | taken before `vss1` was written | 38 entries; neither `/vss1` nor `/vss2` |
 | Snapshot 2 | taken after `vss1`, before `vss2` | 40 entries; `/vss1` (7 bytes), no `/vss2` |
 | Live volume | both files written | 41 entries; `/vss1` and `/vss2` |
@@ -488,17 +488,17 @@ this checks that what is recovered is real and makes sense, not that
 nothing is missed.
 
 - SOFTWARE (85,033 live keys): 177 deleted keys with 1,366 values, 172
-  of them with a full path. 176 were last changed on 2011-10-18 at 23:18,
+  of them with a full path. 176 were last changed on 18-10-2011 at 23:18,
   the evening the laptop was set up: 163 Windows Installer component
   registrations (`Installer\UserData\S-1-5-18\Components`), 9 servicing
   package entries (Component Based Servicing) and 4 keys whose parent was
   not found. The last one, a key with values `Reason`, `ID` (the user's
-  SID), `Data` and `Scope`, was last changed on 2011-10-19 at 10:44:40.
+  SID), `Data` and `Scope`, was last changed on 19-10-2011 at 10:44:40.
   478 values were found on their own, mostly servicing package states. No
   older copy of a live key holds a value the live key lost.
 - SYSTEM (31,650 live keys): 4 deleted keys, the device entries of a
   Volume Shadow Copy (`Enum\STORAGE\VolumeSnapshot\HarddiskVolumeSnapshot2`),
-  last changed on 2011-10-19 at 10:42:54: the snapshot device was removed.
+  last changed on 19-10-2011 at 10:42:54: the snapshot device was removed.
   149 values were found on their own; for 10 of them the data cell is in
   use again, and their data is marked as possibly newer.
 - Reading all of SOFTWARE's free space takes 0.3 s.
@@ -549,7 +549,7 @@ analysis to count deleted names that have no content left.
 | ext-16 | - | 178 | 0 | 0 | 0 | 0 |
 | ext-17 | - | 0 | 0 | 0 | 0 | 0 |
 
-Names from older copies of folders in the journal (after 1.4.0) changed
+Names from older copies of folders in the journal (1.5.0) changed
 one image only: ext-10, NIST's case of deleted files whose space and
 inodes were used again, went from 1,181 to 1,885 deleted names. The 704
 new names (in /box of the ext3 and ext4 partitions) are files such as

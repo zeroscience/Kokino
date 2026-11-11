@@ -85,7 +85,7 @@ button { font: inherit; color: var(--text); cursor: pointer; }
 /* ---------- layout ---------- */
 main { position: relative; z-index: 1; max-width: 1120px; margin: 0 auto; padding: 0 24px; }
 section { padding: 56px 0 24px; }
-.hero { display: grid; grid-template-columns: 1.25fr .75fr; gap: 48px; align-items: center; padding-top: 64px; }
+.hero { display: grid; grid-template-columns: 1fr auto; gap: 56px; align-items: center; padding-top: 64px; }
 .hero h1 { margin: 14px 0 16px; }
 .lead { font-size: 19px; line-height: 1.55; }
 .pill { display: inline-block; border: 1px solid var(--line2); border-radius: 999px; padding: 3px 12px; font-size: 13px; color: var(--muted); background: var(--panel); }
@@ -95,7 +95,7 @@ section { padding: 56px 0 24px; }
 .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .btn.primary:hover { background: var(--accent2); border-color: var(--accent2); }
 .btn small { font-weight: 500; opacity: .75; }
-.painting { margin: 0; text-align: center; }
+.painting { margin: 0; text-align: center; justify-self: end; width: 100%; max-width: 260px; }
 .painting .frame { border-radius: 18px; overflow: hidden; box-shadow: var(--shadow), 0 0 0 1px var(--line2); transform: rotate(-1.5deg); }
 .painting img { display: block; width: 100%; height: auto; }
 .painting figcaption { margin-top: 12px; color: var(--muted); font-size: 13px; }
@@ -120,7 +120,7 @@ section { padding: 56px 0 24px; }
 /* ---------- small screens ---------- */
 @media (max-width: 900px) {
   .hero { grid-template-columns: 1fr; gap: 28px; }
-  .painting { max-width: 320px; margin: 0 auto; }
+  .painting { max-width: 220px; margin: 0 auto; justify-self: center; }
   .grid, .grid.two { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 720px) {

@@ -60,7 +60,7 @@
           "Windows (system volume) with 1 user profile(s): alice.",
           "14 files (526.4 KiB) in 527 directories.",
           "2 deleted files (1000 B) and 22 deleted directories still have file system entries; content may be recoverable unless clusters were reused.",
-          "File timestamps span 2009-07-14 to 2023-01-23.",
+          "File timestamps span 14-07-2009 to 23-01-2023.",
           "3 databases identified by signature.",
           "Anti-forensics likelihood is Very high (98%), driven by: Prefetch shows an anti-forensic tool was executed (1); Executable or archive hidden in an alternate data stream (1); Security event log missing or reset (1).",
           "1 MFT record(s) could not be parsed (corrupt, partially wiped or split across clusters) and are listed separately.",

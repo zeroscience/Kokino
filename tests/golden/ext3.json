@@ -31,7 +31,7 @@
           "9 files (43.1 KiB) in 3 directories.",
           "3 deleted files (94 B) and 0 deleted directories still have file system entries; content may be recoverable unless clusters were reused.",
           "1 entries are orphaned (parent directory missing or reused).",
-          "File timestamps span 2026-10-20 to 2026-10-20.",
+          "File timestamps span 20-10-2026 to 20-10-2026.",
           "No anti-forensics indicators were triggered.",
           "2 deleted file(s) were recovered through older copies of their inodes kept in the ext journal.",
           "1 name(s) of deleted files and folders were found only in older copies of their folders kept in the ext journal.",

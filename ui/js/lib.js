@@ -121,16 +121,16 @@ let tzChoice = (() => { try { return localStorage.getItem(TZ_KEY) || "local"; } 
 // Date order: day first by default (as in North Macedonia and most of
 // Europe); ISO or US order on request.
 const DF_KEY = "kokino.datefmt";
-export const DATE_FORMATS = { dmy: "dd.mm.yyyy", ymd: "yyyy-mm-dd", mdy: "mm/dd/yyyy" };
+export const DATE_FORMATS = { dmy: "dd-mm-yyyy", ymd: "yyyy-mm-dd", mdy: "mm/dd/yyyy" };
 let dfChoice = (() => { try { const v = localStorage.getItem(DF_KEY); return DATE_FORMATS[v] ? v : "dmy"; } catch (e) { return "dmy"; } })();
 export const dateFormat = () => dfChoice;
-/** "dd.mm.yyyy" and so on, for placeholders and hints. */
+/** "dd-mm-yyyy" and so on, for placeholders and hints. */
 export const datePattern = () => DATE_FORMATS[dfChoice];
 export function setDateFormat(f) {
   dfChoice = DATE_FORMATS[f] ? f : "dmy";
   try { localStorage.setItem(DF_KEY, dfChoice); } catch (e) { /* kept for this tab only */ }
 }
-const fmtDate = (y, m, d) => (dfChoice === "ymd" ? `${y}-${m}-${d}` : dfChoice === "mdy" ? `${m}/${d}/${y}` : `${d}.${m}.${y}`);
+const fmtDate = (y, m, d) => (dfChoice === "ymd" ? `${y}-${m}-${d}` : dfChoice === "mdy" ? `${m}/${d}/${y}` : `${d}-${m}-${y}`);
 
 /** "local", "UTC" or an IANA zone name. */
 export const zoneChoice = () => tzChoice;
@@ -175,7 +175,7 @@ export function offsetLabel(ms, z = zone()) {
 
 /**
  * A stored time for people, day first, in the display zone:
- * "2021-07-01T12:37:00.1234567Z" -> "01.07.2021 14:37:00.1234567" (Amsterdam).
+ * "2021-07-01T12:37:00.1234567Z" -> "01-07-2021 14:37:00.1234567" (Amsterdam).
  * EXIF's "2021:07:01 12:37:00" too. `len` keeps what the first `len`
  * characters of the ISO form would: 10 the date, 16 to the minute, 19 to the
  * second; without it, everything. Options: `raw` shows a device-local time

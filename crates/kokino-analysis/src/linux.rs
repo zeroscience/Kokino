@@ -1909,7 +1909,7 @@ pub fn fuzz_parsers(d: &[u8]) {
 pub fn impact(a: &LinuxArtifacts) -> Vec<String> {
     let mut out = vec![];
     let c = &a.computer;
-    let iso = |t: u64| if t == 0 { "unknown".to_string() } else { kokino_core::time::filetime_to_iso(t) };
+    let iso = |t: u64| if t == 0 { "unknown".to_string() } else { kokino_core::time::utc_text(t) };
     if !c.hostname.is_empty() || !c.os.is_empty() {
         let mac = c.os_id == "macos";
         let created = if c.fs_created == 0 { String::new() } else { format!("; {} {}", if mac { "set up" } else { "file system created" }, iso(c.fs_created)) };

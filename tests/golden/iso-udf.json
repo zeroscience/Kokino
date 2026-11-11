@@ -30,7 +30,7 @@
           "Data volume (no Windows installation found).",
           "6 files (8.9 KiB) in 9 directories.",
           "1 deleted files (43 B) and 0 deleted directories still have file system entries; content may be recoverable unless clusters were reused.",
-          "File timestamps span 2026-10-20 to 2026-10-20.",
+          "File timestamps span 20-10-2026 to 20-10-2026.",
           "No anti-forensics indicators were triggered.",
           "1 deleted UDF directory entry still holds a name; content is shown when the file entry it points to is intact, which cannot be guaranteed."
         ],

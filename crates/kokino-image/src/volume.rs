@@ -207,7 +207,7 @@ pub fn detect_volumes<R: Read + Seek>(r: &mut R, size: u64) -> Vec<Volume> {
     for v in vols.iter().filter(|v| v.fs == FsKind::Ntfs) {
         let mut sub = crate::SubReader::new(&mut *r, v.start, v.length);
         for s in crate::vss::stores(&mut sub, v.length) {
-            let day = chrono::DateTime::from_timestamp(((s.created / 10_000_000) as i64).saturating_sub(11_644_473_600), 0).map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or_default();
+            let day = chrono::DateTime::from_timestamp(((s.created / 10_000_000) as i64).saturating_sub(11_644_473_600), 0).map(|d| d.format("%d-%m-%Y %H:%M UTC").to_string()).unwrap_or_default();
             let mut sv = mk(0, v.kind, v.start, if s.volume_size > 0 { s.volume_size.min(v.length) } else { v.length }, format!("Shadow copy {} of volume {}, created {}", s.index, v.index, day), FsKind::Ntfs);
             sv.fs_label = "NTFS (shadow copy)".into();
             sv.shadow = Some(ShadowRef { of_volume: v.index, store: s.index, id: s.id.clone(), created: s.created });

@@ -37,7 +37,7 @@
           "Data volume (no Windows installation found).",
           "7 files (489.3 KiB) in 513 directories.",
           "0 deleted files (0 B) and 1 deleted directories still have file system entries; content may be recoverable unless clusters were reused.",
-          "File timestamps span 2021-01-01 to 2023-01-23.",
+          "File timestamps span 01-01-2021 to 23-01-2023.",
           "No anti-forensics indicators were triggered.",
           "1 MFT record(s) could not be parsed (corrupt, partially wiped or split across clusters) and are listed separately."
         ],

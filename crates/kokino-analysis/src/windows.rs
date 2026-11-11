@@ -2327,8 +2327,9 @@ fn events(w: &mut WindowsArtifacts, d: &[u8], i: usize, f: &FileRow, legacy: boo
 
 // ------------------------------------------------------------------ finish
 
+/// A time in summary text: dd-mm-yyyy hh:mm:ss UTC.
 fn iso(ft: u64) -> String {
-    if ft == 0 { "unknown".into() } else { kokino_core::time::filetime_to_iso(ft) }
+    if ft == 0 { "unknown".into() } else { kokino_core::time::utc_text(ft) }
 }
 
 fn finish(w: &mut WindowsArtifacts) {

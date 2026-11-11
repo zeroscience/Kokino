@@ -29,7 +29,7 @@
         "impact": [
           "Data volume (no Windows installation found).",
           "5 files (8.9 KiB) in 9 directories.",
-          "File timestamps span 2026-10-20 to 2026-10-20.",
+          "File timestamps span 20-10-2026 to 20-10-2026.",
           "No anti-forensics indicators were triggered."
         ],
         "orphans": 0,

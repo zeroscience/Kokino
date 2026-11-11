@@ -163,7 +163,7 @@ fn run_pack(st: &AppState, job: &Job, user: &str, cid: &str, src: &std::path::Pa
         format: "Folder (packed as tar)".into(),
         size: ev.size,
         added: kokino_core::time::now_iso(),
-        notes: format!("{}{}Packed from the folder {} on {}: {} files, {} bytes{}; every file's SHA-256 is in {} (SHA-256 {}) {}", notes, if notes.is_empty() { "" } else { " | " }, src.display(), kokino_core::time::now_iso(), packed.files, packed.bytes, if packed.skipped.is_empty() { String::new() } else { format!(", {} not readable", packed.skipped.len()) }, manifest.display(), mh.sha256, tag),
+        notes: format!("{}{}Packed from the folder {} on {}: {} files, {} bytes{}; every file's SHA-256 is in {} (SHA-256 {}) {}", notes, if notes.is_empty() { "" } else { " | " }, src.display(), kokino_core::time::with_utc(true, || kokino_core::time::human(&kokino_core::time::now_iso())), packed.files, packed.bytes, if packed.skipped.is_empty() { String::new() } else { format!(", {} not readable", packed.skipped.len()) }, manifest.display(), mh.sha256, tag),
         hashes: None,
         hashed_at: None,
         expected: None,

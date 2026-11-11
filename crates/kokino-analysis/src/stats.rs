@@ -155,7 +155,7 @@ fn impact(s: &Stats, indicators: &[Indicator], score: &Score) -> Vec<String> {
     if s.time_max > 0 {
         let a = kokino_core::time::filetime_to_iso(s.time_min);
         let b = kokino_core::time::filetime_to_iso(s.time_max);
-        out.push(format!("File timestamps span {} to {}.", &a[..10.min(a.len())], &b[..10.min(b.len())]));
+        out.push(format!("File timestamps span {} to {}.", kokino_core::time::human(&a[..10.min(a.len())]), kokino_core::time::human(&b[..10.min(b.len())])));
     }
     for (cat, n) in s.by_category.iter().filter(|(c, _)| matches!(c.as_str(), "Documents" | "Email" | "Databases" | "Encrypted / keys")) {
         out.push(format!("{} {} identified by signature.", n, cat.to_lowercase()));

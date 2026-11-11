@@ -1072,7 +1072,7 @@ fn evtx_chunk(src: &mut dyn Bytes, at: u64) -> Option<Hit> {
     if info.records == 0 {
         return None;
     }
-    let iso = |t: u64| if t == 0 { String::new() } else { kokino_core::time::filetime_to_iso(t).chars().take(16).collect() };
+    let iso = kokino_core::time::utc_text;
     Some(Hit {
         len: 65_536,
         complete: true,

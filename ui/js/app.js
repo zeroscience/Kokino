@@ -1201,7 +1201,7 @@ function macb(s) { return h("span.macb", [...s].map((c) => (c === "." ? "." : h(
 async function timelineTab(ctx) {
   const base = `/cases/${ctx.cid}/evidence/${ctx.eid}/fs/${ctx.fi}/timeline`;
   const q = h("input", { placeholder: "Filter by path...", value: ctx.q.q || "", style: { flex: 1 } });
-  // Days as dd.mm.yyyy, whatever the computer's locale (a date picker would follow it).
+  // Days as dd-mm-yyyy (or the order chosen), whatever the computer's locale (a date picker would follow it).
   const raw = fsClock(ctx).raw;
   const day = (v, ph) => h("input", { placeholder: ph, title: `Day as ${datePattern()} (${raw ? "device clock" : zoneName()})`, value: ts(v, 10), style: { width: "118px" } });
   const from = day(ctx.q.from, `from ${datePattern()}`);

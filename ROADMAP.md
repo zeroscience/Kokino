@@ -8,13 +8,13 @@ Every new parser is fuzzed before it ships ([SECURITY.md](SECURITY.md)) and
 checked against public test images with known answers where they exist
 ([VALIDATION.md](VALIDATION.md)).
 
-## Status: 1.4 and a pause
+## Status: 1.5
 
-1.4.0 is the last feature release for a while. Development pauses for a
-few months after it; during the pause, security reports
+1.5.0 finished most of what could be built without new test data. What is
+left below mostly waits for samples: disks from real Macs, encrypted APFS
+volumes, Windows Search databases, XFS and Ex01 images. Security reports
 ([SECURITY.md](SECURITY.md)) and wrong results (an artifact read
-incorrectly, a crash on real evidence) are still handled and fixed in 1.4.x
-releases. New features wait for the list below.
+incorrectly, a crash on real evidence) are always fixed first.
 
 Bug reports help most with a sample: the smallest image or file that shows
 the problem, or, when the evidence cannot be shared, the error text, the
@@ -24,8 +24,10 @@ Kokino version and what the file system or artifact is.
 
 ### Images and volumes
 - [x] E01 (with stored-hash check), raw / dd, split raw; MBR and GPT (1.2.5)
-- [x] VHD (fixed, dynamic, differencing), VHDX with log replay, VMDK (flat, sparse, stream, split, snapshot chains, ESXi VMFSSPARSE and SESPARSE snapshots) (1.2.7, 1.3.1, after 1.4.0)
+- [x] VHD (fixed, dynamic, differencing), VHDX with log replay, VMDK (flat, sparse, stream, split, snapshot chains) (1.2.7, 1.3.1)
+- [x] ESXi snapshots: VMFSSPARSE and SESPARSE (1.5.0)
 - [x] ISO 9660 (Rock Ridge, Joliet, multisession history) and UDF (1.2.7)
+- [x] UDF sparable partitions (DVD-RW, CD-RW) and virtual partitions (CD-R, DVD-R) through the VAT, with files removed between sessions (1.5.0)
 - [x] Disk images and ISOs found inside evidence, extracted as evidence of their own (1.3.1)
 - [x] BitLocker with a password, recovery password, startup key (.BEK) or clear key; carving decrypted volumes (1.3.1)
 - [x] Volume Shadow Copies, including inside BitLocker volumes (1.3.1)
@@ -36,10 +38,12 @@ Kokino version and what the file system or artifact is.
 - [x] NTFS: $UsnJrnl, deleted names in $I30 slack and $LogFile (1.2.8)
 - [x] FAT12, FAT16, FAT32 and exFAT (1.2.5)
 - [x] ext2/3/4 with deleted entries recovered through the journal (1.2.6)
+- [x] ext3/4: names of files deleted long ago, from older copies of folders in the journal (1.5.0)
 - [x] HFS+ and APFS with deleted files from old tree nodes (1.2.7)
 
 ### Artifacts
 - [x] Windows: registry (deleted keys, transaction logs), event logs (.evtx and .evt), Prefetch, LNK, Jump Lists, ShimCache, UserAssist, Amcache, ShellBags, BAM/DAM, SRUM, scheduled tasks (1.2.5 to 1.3.0)
+- [x] SRUM: app timeline (time in focus, keyboard and mouse input), push notifications, battery and long-term energy (1.5.0)
 - [x] Linux: accounts, logons, auth.log, syslog, journald (compressed fields), cron, systemd, shell histories, SSH keys, packages (1.2.6, 1.3.0)
 - [x] macOS: property lists, accounts, launchd persistence, quarantine events, KnowledgeC, Safari, FSEvents (1.3.1)
 - [x] Browsers: Chrome, Edge, Brave, Opera, Vivaldi, Firefox, Safari, Internet Explorer 4 to 11 (index.dat, WebCache, cookies), with deleted and carved records (1.2.5 to 1.3.1)
@@ -57,9 +61,13 @@ Kokino version and what the file system or artifact is.
 - [x] Case timeline: every evidence item of a case on one timeline (1.4.0)
 - [x] Watchlist: hashes, IP addresses, domains, email addresses and file names searched across a whole case (1.4.0)
 - [x] Golden results: every test image's key numbers checked on every commit, on Windows, Linux and macOS (1.4.0)
+- [x] Watchlists from STIX 2.1 and MISP exports, IP networks, and each sweep compared with the last (1.5.0)
+- [x] Plugins: separate programs for artifacts Kokino does not read, each run audited with the plugin's fingerprint (1.5.0)
+- [x] Carving: JPEGs in two pieces joined again (1.5.0)
+- [x] Dates day first (dd-mm-yyyy) in the GUI, reports and summaries; a website (1.5.0)
 - [x] Release SBOM (CycloneDX) and signed build provenance (1.3.1)
 
-## After the pause
+## What comes next
 
 In order of priority. "Needs" says what has to exist before the work can
 start or be trusted; most items are blocked on test data rather than code.
@@ -79,22 +87,19 @@ start or be trusted; most items are blocked on test data rather than code.
 ### 3. Deeper Windows
 - [ ] **Windows Search** (Windows.edb): file names, contents and times the indexer kept, also for deleted files. The ESE reader exists (SRUM and WebCache use it). Needs: a test database.
 - [ ] **$LogFile in full**: redo and undo of MFT changes (what a file looked like before it changed). Needs: a large but well-documented effort (NTFS internals, libfsntfs notes).
-- [x] **SRUM**: app timeline (time in focus, keyboard and mouse input), push notification, battery and long-term energy tables. Still to do: a check on a real computer's database.
+- [ ] **SRUM on a real computer's database**: the app timeline, push, battery and energy tables are checked on databases written by Windows' own engine. Needs: a SRUM database copied from a real computer (admin rights and a shadow copy).
 - [ ] **Deleted PST items** from the file's free blocks.
 
 ### 4. More formats
 - [ ] **XFS** (Red Hat and its derivatives default to it). Needs: test images (made with mkfs.xfs) and a parser comparable to ext's.
-- [x] **ESXi snapshots** (VMFSSPARSE, SESPARSE). Checked on images built to QEMU's reading of the formats; a check on snapshots from a real ESXi host is still to do.
-- [x] **UDF virtual (VAT) and sparable partitions** (written CDs and DVDs). Files removed between sessions are listed from the earlier sessions' VATs. Still to do: a check on real discs.
-- [x] **Older journal copies of whole directories** on ext3 and ext4 (names of files deleted long ago, also when their inode was reused).
+- [ ] **ESXi snapshots from a real host**: VMFSSPARSE and SESPARSE are checked on images built to QEMU's reading of the formats. Needs: snapshots from an ESXi host.
+- [ ] **Written CDs and DVDs from real drives**: UDF sparable and virtual partitions are checked on images built from the specification. Needs: images of real CD-R, DVD-R and DVD-RW discs.
 - [ ] **macOS unified logs** (tracev3).
-- [x] **Carving of JPEGs in two pieces** (bifragment gap carving, kept only when the joined picture decodes exactly).
 - [ ] **Carving of other fragmented files**, and JPEGs in three or more pieces or progressive JPEGs.
 
 ### 5. Workflow
-- [x] **Watchlist from STIX 2.1 and MISP exports**, IP networks (CIDR), and each sweep compared with the previous one (what is new).
 - [ ] **Code-signed Windows and macOS packages.** Needs: a code-signing certificate and an Apple Developer ID; no code.
-- [x] **Plugin interface** for artifacts Kokino does not read yet: a separate program per plugin, given a copy of each matching file, writing JSON rows; off unless the server is started with a plugin folder, each run audited with the plugin's fingerprint. Still to do: plugin rows on the timeline and in the watchlist.
+- [ ] **Plugin rows on the timeline and in the watchlist**, so what a plugin reports is searched and ordered with everything else.
 - [ ] **Optional AI summaries** that only cite linked evidence, off by default and never sending evidence anywhere without the examiner's choice.
 
 Nothing above is promised for a date. If one of these matters to a case you

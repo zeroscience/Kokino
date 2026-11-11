@@ -1,7 +1,7 @@
 // About page and the Wiki (user manual). Content lives here as data so the
 // app shell only routes to it.
 
-import { h, icon, debounce, api } from "./lib.js";
+import { h, icon, debounce, api, ts } from "./lib.js";
 
 export const CONTACT = {
   web: "https://www.zeroscience.mk",
@@ -32,7 +32,7 @@ function updateCard(info) {
       out.replaceChildren(
         u.newer
           ? h("div.stack",
-            h("p", h("b", `Kokino ${u.latest} is available`), ` (you have ${u.current}; published ${u.published.slice(0, 10)}).`),
+            h("p", h("b", `Kokino ${u.latest} is available`), ` (you have ${u.current}; published ${ts(u.published, 10)}).`),
             h("p", link(u.url, "Release notes and downloads")),
             u.checksums ? h("details", h("summary", "SHA-256 checksums of the release"), h("pre.cmd", u.checksums)) : null,
             h("p.muted", "Download it from GitHub and check it against the checksums. The Windows installer upgrades in place and keeps cases and accounts."))
@@ -99,8 +99,8 @@ export function aboutPage(info) {
     ),
     h("div.card.stack",
       h("h3", "What's next"),
-      p("1.4 is the last feature release for a few months. Security reports and wrong results (an artifact read incorrectly, a crash on real evidence) are still fixed in 1.4.x releases."),
-      p("After the pause, in order: checks on disks from real Macs; APFS encryption (FileVault), snapshots and LZFSE compression; Windows Search (Windows.edb) and NTFS $LogFile in full; XFS and Ex01; carving of files in more than two pieces. Most of these wait for test data rather than code. The full list, with what each item needs, is in ", link("https://github.com/zeroscience/Kokino/blob/main/ROADMAP.md", "ROADMAP.md"), "; if one matters to a case you work on, say so: that moves it up."),
+      p("1.5 finished most of what could be built without new test data. What comes next mostly waits for samples: disks from real Macs, encrypted APFS volumes and LZFSE compression, Windows Search databases, XFS and Ex01 images; then NTFS $LogFile in full and carving files in more than two pieces. Security reports and wrong results (an artifact read incorrectly, a crash on real evidence) are always fixed first."),
+      p("The full list, with what each item needs, is in ", link("https://github.com/zeroscience/Kokino/blob/main/ROADMAP.md", "ROADMAP.md"), "; if one matters to a case you work on, say so: that moves it up. The website: ", link("https://zeroscience.github.io/kokino-ftk/", "zeroscience.github.io/kokino-ftk"), "."),
     ),
     updateCard(info),
     h("div.grid.g2",
@@ -154,7 +154,7 @@ const WIKI = [
       pre("./target/release/kokino user add jdoe --role admin --display-name \"Jane Doe\""),
       p("Cases are stored in ", code("~/KokinoCases"), " (", code("%USERPROFILE%\\KokinoCases"), " on Windows). Use ", code("--cases D:\\Cases"), " to put them elsewhere. Stop the server with Ctrl+C."),
       h("div.cav", "After upgrading Kokino, open tabs reload themselves on their next request. If a page ever looks out of date, press Ctrl+F5."),
-      p(h("b", "Dates and time zones."), " Kokino stores every time as UTC and shows it in your own time zone (this computer's, with summer time applied for each date), day first: ", code("30.10.2026 15:32:05"), ". Tables name the zone in their heading and single times carry their offset (", code("UTC+1"), "). The ", h("b", "Time"), " button next to Theme switches to UTC or any other zone and to ISO (", code("yyyy-mm-dd"), ") or US (", code("mm/dd/yyyy"), ") order; the choice is kept in this browser. FAT and EXIF times are the device's own clock with no zone recorded, so they are shown as stored and marked \"device clock\". Case reports use the local time of the computer that makes them, or UTC if you ask, and say which; command-line output and the server log use the computer's local time with its offset. Stored data (audit logs, case files, ", code("--json"), " output) stays ISO 8601 UTC, as the forensic standards ISO/IEC 27037 and 27042 expect times and zones to be recorded unambiguously."),
+      p(h("b", "Dates and time zones."), " Kokino stores every time as UTC and shows it in your own time zone (this computer's, with summer time applied for each date), day first: ", code("30-10-2026 15:32:05"), ". Tables name the zone in their heading and single times carry their offset (", code("UTC+1"), "). The ", h("b", "Time"), " button next to Theme switches to UTC or any other zone and to ISO (", code("yyyy-mm-dd"), ") or US (", code("mm/dd/yyyy"), ") order; the choice is kept in this browser. FAT and EXIF times are the device's own clock with no zone recorded, so they are shown as stored and marked \"device clock\". Case reports use the local time of the computer that makes them, or UTC if you ask, and say which; command-line output and the server log use the computer's local time with its offset. Stored data (audit logs, case files, ", code("--json"), " output) stays ISO 8601 UTC, as the forensic standards ISO/IEC 27037 and 27042 expect times and zones to be recorded unambiguously."),
     ],
   },
   {

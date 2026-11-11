@@ -56,9 +56,9 @@
         "impact": [
           "Data volume (no Windows installation found).",
           "31 files (425.6 KiB) in 27 directories.",
-          "File timestamps span 2026-10-20 to 2026-10-21.",
+          "File timestamps span 20-10-2026 to 21-10-2026.",
           "Anti-forensics likelihood is Very high (76%), driven by: Shell history or sudo log shows evidence being destroyed (3); /etc/ld.so.preload loads a library into every program (1); Shell history emptied or sent to /dev/null (1).",
-          "Linux computer lab-srv running Debian GNU/Linux 12 (bookworm); file system created 2026-10-20T08:05:30.0000000Z.",
+          "Linux computer lab-srv running Debian GNU/Linux 12 (bookworm); file system created 20-10-2026 08:05:30 UTC.",
           "Accounts that can log in: root, toor, alice, svc-backup.",
           "Account toor: uid 0: a second root account.",
           "Account svc-backup: can log in without a password.",

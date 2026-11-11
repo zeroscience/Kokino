@@ -239,7 +239,7 @@ pub fn unlocked_volumes(ev: &Evidence, vols: &[Volume]) -> Vec<Volume> {
         // Shadow copies on the decrypted NTFS volume.
         if fs == FsKind::Ntfs {
             for s in vss::stores(&mut r, v.length) {
-                let day = chrono::DateTime::from_timestamp(((s.created / 10_000_000) as i64).saturating_sub(11_644_473_600), 0).map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or_default();
+                let day = chrono::DateTime::from_timestamp(((s.created / 10_000_000) as i64).saturating_sub(11_644_473_600), 0).map(|d| d.format("%d-%m-%Y %H:%M UTC").to_string()).unwrap_or_default();
                 // The full encrypted length: the snapshot is read through the decryption.
                 let mut sv = volume::mk(vols.len() + out.len(), v.kind, v.start, v.length, format!("Shadow copy {} of volume {} (decrypted), created {}", s.index, unlocked_index, day), FsKind::Ntfs);
                 sv.fs_label = "NTFS (shadow copy, BitLocker)".into();

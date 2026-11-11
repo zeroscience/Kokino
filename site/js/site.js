@@ -71,7 +71,9 @@ function showRelease(rel) {
   const pill = document.getElementById("version");
   pill.textContent = `Version ${v}, open source, Apache-2.0`;
   const intro = document.getElementById("dl-intro");
-  const when = rel.published_at ? new Date(rel.published_at).toISOString().slice(0, 10) : "";
+  // Day first: dd-mm-yyyy.
+  const iso = rel.published_at ? new Date(rel.published_at).toISOString().slice(0, 10) : "";
+  const when = iso ? iso.split("-").reverse().join("-") : "";
   intro.replaceChildren(`Kokino ${v}${when ? `, released ${when}` : ""}. Release notes and every file are on `, Object.assign(document.createElement("a"), { href: rel.html_url || "https://github.com/zeroscience/Kokino/releases/latest", rel: "noopener", textContent: "GitHub Releases" }), ".");
   const assets = Array.isArray(rel.assets) ? rel.assets : [];
   for (const box of document.querySelectorAll("[data-assets]")) {

@@ -260,7 +260,7 @@ impl Ctx<'_> {
     }
 }
 
-/// Day first, to the second (dd.mm.yyyy hh:mm:ss UTC).
+/// Day first, to the second (dd-mm-yyyy hh:mm:ss UTC).
 fn when(s: &str) -> String {
     kokino_core::time::human(s)
 }
