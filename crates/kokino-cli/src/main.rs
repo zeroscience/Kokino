@@ -173,6 +173,21 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Try a plugin you are writing on one file from this computer: runs it
+    /// as a real run would and checks what it prints
+    PluginTest {
+        /// The plugin's folder (with plugin.json)
+        plugin: PathBuf,
+        /// A sample file
+        file: PathBuf,
+        /// Where the file would be on a volume, for the "match" patterns
+        /// (default: /<the file's name>)
+        #[arg(long = "as")]
+        as_path: Option<String>,
+        /// Print the result as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// List every file with content (live and deleted) with its MD5, SHA-1
     /// and SHA-256, read from the image
     Files {
@@ -601,6 +616,30 @@ async fn main() -> anyhow::Result<()> {
         Cmd::User { cases, cmd } => user_cmd(cases.unwrap_or_else(default_cases), cmd)?,
         Cmd::Hashset { cases, cmd } => hashset_cmd(cases.unwrap_or_else(default_cases), cmd)?,
         Cmd::Purge { cases, confirm } => purge(cases.unwrap_or_else(default_cases), confirm)?,
+        Cmd::PluginTest { plugin, file, as_path, json } => {
+            let pl = kokino_analysis::plugins::load_one(&plugin)?;
+            let path = as_path.unwrap_or_else(|| format!("/{}", file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
+            let t = kokino_analysis::plugins::test_file(&pl, &file, &path)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&t)?);
+            } else {
+                println!("{} {} ({})", pl.name, pl.version, pl.id);
+                println!("matches {}: {}", path, if t.matches { "yes" } else { "NO (a real run would not give it this file)" });
+                println!("ran in {} ms, {} row(s)", t.millis, t.rows.len());
+                for (i, r) in t.rows.iter().enumerate() {
+                    println!("  {:>3}  {}  {}  {}{}", i + 1, if r.time.is_empty() { "-" } else { &r.time }, r.what, r.detail, if r.fields.is_empty() { String::new() } else { format!("  {}", serde_json::Value::Object(r.fields.clone())) });
+                }
+                for n in &t.notes {
+                    println!("note: {}", n);
+                }
+                for w in &t.warnings {
+                    println!("warning: {}", w);
+                }
+            }
+            if !t.matches || !t.warnings.is_empty() {
+                std::process::exit(1);
+            }
+        }
         Cmd::Plugins { image, plugins, only, unlock, json } => {
             let (mut list, bad) = kokino_analysis::plugins::load(&plugins);
             for b in &bad {

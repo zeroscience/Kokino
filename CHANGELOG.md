@@ -6,6 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Carving: PNGs split in two pieces are joined again through their chunk CRCs: the chunk whose CRC fails is where the first piece ends, and a join is kept only when that chunk's CRC and every chunk after it check out up to IEND.
+- Outlook PST and OST: deleted messages recovered from unused entries of the node index (Outlook removes a deleted item's entry, which often stays in the page's unused slot); kept only when the message's data is still a property context, listed as deleted with "[recovered deleted item]" after the folder, and in the search index. None are found in the public PST samples, which have no such leftovers. Fuzzed (`pst` 2.1 million and `carve` 44.8 million more inputs, nothing found; 868 million in all).
+- For plugin authors: `kokino plugin-test <plugin folder> <file> [--as <path>]` runs a plugin on one sample file as a real run would and reports whether the path matches, rows without a readable time and rows without "what" (exit code 1 if anything needs fixing); plugins/README.md has a step-by-step guide with templates in Python, PowerShell and sh.
 - Plugin rows on the timelines (each item's and the case timeline, source PLUGIN, with a Plugins filter) and in the watchlist (each row's text and fields, word by word); a row opens the file it came from.
 - Carving: JPEGs in three pieces are joined too, a run of JPEG data between the first and last piece as the middle one, under the same exact decode check; at most 48 joins are tried per picture. Fuzzed (`carve`, 71.9 million inputs, nothing found; 821 million inputs in all).
 - Validation every week: a scheduled GitHub workflow downloads the 83 NIST CFReDS images, analyzes them and compares every image's numbers with `tests/validation/cfreds-expected.json` (`scripts/validate_cfreds.py --record/--expect`, `scripts/fetch_cfreds.py`).

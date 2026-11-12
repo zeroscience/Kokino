@@ -78,6 +78,8 @@ const CRYPT_I: [u8; 256] = [
 ];
 
 const MAX_NODES: usize = 4_000_000;
+/// Deleted messages recovered from one file, at most.
+const MAX_RECOVERED: usize = 10_000;
 const MAX_DATA: usize = 256 << 20;
 const MAX_DEPTH: usize = 8;
 
@@ -164,6 +166,9 @@ pub struct Pst<R> {
     pub ost: bool,
     bbt: Arc<HashMap<u64, BlockRef>>,
     pub nodes: Arc<BTreeMap<u32, Node>>,
+    /// Messages found only in the unused slots of node index pages: deleted
+    /// from the index, their data still in the file.
+    pub recovered: Arc<std::collections::BTreeSet<u32>>,
     pub notes: Vec<String>,
 }
 
@@ -220,7 +225,7 @@ impl<R> Pst<R> {
     /// The same file through another reader, sharing the indexes (no
     /// re-reading of the B-trees).
     pub fn with_reader<R2>(&self, r: R2) -> Pst<R2> {
-        Pst { r, len: self.len, wide: self.wide, big: self.big, crypt: self.crypt, version: self.version, ost: self.ost, bbt: self.bbt.clone(), nodes: self.nodes.clone(), notes: self.notes.clone() }
+        Pst { r, len: self.len, wide: self.wide, big: self.big, crypt: self.crypt, version: self.version, ost: self.ost, bbt: self.bbt.clone(), nodes: self.nodes.clone(), recovered: self.recovered.clone(), notes: self.notes.clone() }
     }
 }
 
@@ -240,36 +245,79 @@ impl<R: Read + Seek> Pst<R> {
             v => anyhow::bail!("PST format version {} is not supported", v),
         };
         let (nbt, bbt, crypt) = if wide { (u64_at(&h, 224), u64_at(&h, 240), h[513]) } else { (u32_at(&h, 188) as u64, u32_at(&h, 196) as u64, h[461]) };
-        let mut p = Pst { r, len, wide, big, crypt, version, ost: &h[8..10] == b"SO", bbt: Arc::new(HashMap::new()), nodes: Arc::new(BTreeMap::new()), notes: vec![] };
+        let mut p = Pst { r, len, wide, big, crypt, version, ost: &h[8..10] == b"SO", bbt: Arc::new(HashMap::new()), nodes: Arc::new(BTreeMap::new()), recovered: Arc::default(), notes: vec![] };
         if crypt > 2 {
             anyhow::bail!("unknown PST encryption {}", crypt);
         }
         let mut leaves = vec![];
-        p.walk(bbt, 0x80, 0, &mut leaves)?;
+        let mut stale = vec![];
+        p.walk(bbt, 0x80, 0, &mut leaves, &mut stale)?;
         let es = if wide { 8 } else { 4 };
-        let mut bmap = HashMap::with_capacity(leaves.len());
-        for e in &leaves {
+        let block_ref = |e: &[u8]| -> (u64, BlockRef) {
             let bid = if wide { u64_at(e, 0) } else { u32_at(e, 0) as u64 };
             let ib = if wide { u64_at(e, 8) } else { u32_at(e, 4) as u64 };
             let cb = u16_at(e, 2 * es) as u32;
             let inflated = if big { u16_at(e, 2 * es + 2) as u32 } else { cb };
-            bmap.insert(bid & !1, BlockRef { ib, cb, inflated });
+            (bid & !1, BlockRef { ib, cb, inflated })
+        };
+        let mut bmap = HashMap::with_capacity(leaves.len());
+        for e in &leaves {
+            let (bid, b) = block_ref(e);
+            bmap.insert(bid, b);
+        }
+        // Blocks only in the unused slots of block index pages: their entries
+        // were removed, the bytes may still be there. Used only for nodes
+        // recovered the same way.
+        for e in &stale {
+            let (bid, b) = block_ref(e);
+            if bid != 0 && b.cb > 0 && b.ib.checked_add(b.cb as u64).is_some_and(|x| x <= len) {
+                bmap.entry(bid).or_insert(b);
+            }
         }
         p.bbt = Arc::new(bmap);
         let mut leaves = vec![];
-        p.walk(nbt, 0x81, 0, &mut leaves)?;
-        let mut nmap = BTreeMap::new();
-        for e in &leaves {
-            let n = if wide {
+        let mut stale = vec![];
+        p.walk(nbt, 0x81, 0, &mut leaves, &mut stale)?;
+        let node = |e: &[u8]| {
+            if wide {
                 Node { nid: u32_at(e, 0), data: u64_at(e, 8), sub: u64_at(e, 16), parent: u32_at(e, 24) }
             } else {
                 Node { nid: u32_at(e, 0), data: u32_at(e, 4) as u64, sub: u32_at(e, 8) as u64, parent: u32_at(e, 12) }
-            };
+            }
+        };
+        let mut nmap = BTreeMap::new();
+        for e in &leaves {
+            let n = node(e);
             nmap.insert(n.nid, n);
         }
         p.nodes = Arc::new(nmap);
         if p.nodes.is_empty() {
             anyhow::bail!("the PST node index is empty or unreadable");
+        }
+        // Deleted messages: message nodes left in the unused slots of node
+        // index pages, no longer in the index, whose data is still a
+        // property context.
+        let mut found = std::collections::BTreeSet::new();
+        let mut extra = vec![];
+        for e in &stale {
+            let n = node(e);
+            if n.nid & 0x1F != 4 || n.data == 0 || p.nodes.contains_key(&n.nid) || found.contains(&n.nid) || found.len() >= MAX_RECOVERED {
+                continue;
+            }
+            let pc = p.blocks(n.data).ok().and_then(|b| Self::hn(&b)).is_some_and(|(sig, _)| sig == 0xBC);
+            if pc {
+                found.insert(n.nid);
+                extra.push(n);
+            }
+        }
+        if !found.is_empty() {
+            let mut nmap = (*p.nodes).clone();
+            for n in extra {
+                nmap.insert(n.nid, n);
+            }
+            p.nodes = Arc::new(nmap);
+            p.notes.push(format!("{} deleted message(s) recovered from unused entries of the node index", found.len()));
+            p.recovered = Arc::new(found);
         }
         Ok(p)
     }
@@ -282,8 +330,9 @@ impl<R: Read + Seek> Pst<R> {
         }
     }
 
-    /// Leaf entries of a B-tree page and the pages below it.
-    fn walk(&mut self, ib: u64, ptype: u8, depth: usize, out: &mut Vec<Vec<u8>>) -> anyhow::Result<()> {
+    /// Leaf entries of a B-tree page and the pages below it, and in `stale`
+    /// the entries left in the unused slots of leaf pages.
+    fn walk(&mut self, ib: u64, ptype: u8, depth: usize, out: &mut Vec<Vec<u8>>, stale: &mut Vec<Vec<u8>>) -> anyhow::Result<()> {
         if depth > MAX_DEPTH || out.len() > MAX_NODES {
             return Ok(());
         }
@@ -315,7 +364,15 @@ impl<R: Read + Seek> Pst<R> {
                 out.push(e);
             } else {
                 let child = if self.wide { u64_at(&e, 16) } else { u32_at(&e, 8) as u64 };
-                self.walk(child, ptype, depth + 1, out)?;
+                self.walk(child, ptype, depth + 1, out, stale)?;
+            }
+        }
+        if level == 0 && stale.len() < MAX_NODES {
+            for i in c..area / cb {
+                let e = &pg[i * cb..(i + 1) * cb];
+                if e.iter().any(|&b| b != 0) {
+                    stale.push(e.to_vec());
+                }
             }
         }
         Ok(())
@@ -638,7 +695,8 @@ impl<R: Read + Seek> Pst<R> {
             .collect()
     }
 
-    /// Node ids of every message.
+    /// Node ids of every message (recovered deleted ones included; see
+    /// `recovered`).
     pub fn message_ids(&self) -> Vec<u32> {
         self.nodes.values().filter(|n| n.nid & 0x1F == 4).map(|n| n.nid).collect()
     }
@@ -1318,6 +1376,34 @@ pub(crate) mod tests {
         let t = m2.text();
         assert!(t.contains("Lunch at") && t.contains("noon") && !t.contains('<'), "{:?}", t);
         assert!(crate::mail::parse(&p.eml(0x200044).unwrap()).text.contains("Lunch at"));
+    }
+
+    /// Message 3 deleted the way Outlook does it: the node index page holds
+    /// one entry less, the entry itself stays in the page's unused slot.
+    #[test]
+    fn recovers_deleted_messages_from_the_node_index() {
+        let mut d = sample();
+        // Down the node index to the leaf with the highest node ids.
+        let mut pg = u64_at(&d, 224) as usize;
+        while d[pg + 491] > 0 {
+            let (c, cb) = (d[pg + 488] as usize, d[pg + 490] as usize);
+            pg = u64_at(&d, pg + (c - 1) * cb + 16) as usize;
+        }
+        let (c, cb) = (d[pg + 488] as usize, d[pg + 490] as usize);
+        assert_eq!(u32_at(&d, pg + (c - 1) * cb), 0x200064, "message 3 is the last entry of its page");
+        d[pg + 488] = (c - 1) as u8;
+        let mut p = Pst::open(std::io::Cursor::new(&d), d.len() as u64).unwrap();
+        assert_eq!(p.recovered.iter().copied().collect::<Vec<_>>(), [0x200064]);
+        assert_eq!(p.message_ids(), [0x200024, 0x200044, 0x200064]);
+        let (m, _) = p.message(0x200064).unwrap();
+        assert_eq!(m.subject, "wipe the laptop");
+        assert!(m.body.contains("sdelete"));
+        assert_eq!(p.nodes[&0x200064].parent, 0x8062, "still tied to Deleted Items");
+        assert!(p.notes.iter().any(|n| n.starts_with("1 deleted message(s) recovered")));
+        // The untouched file has nothing to recover.
+        let d = sample();
+        let p = Pst::open(std::io::Cursor::new(&d), d.len() as u64).unwrap();
+        assert!(p.recovered.is_empty());
     }
 
     #[test]

@@ -17,7 +17,10 @@
 //! sectors that look like JPEG data, ending with the end-of-image marker),
 //! with a run of JPEG data between as a middle piece when two pieces do not
 //! fit, and a join is kept only when the joined picture decodes into exactly
-//! the blocks its header promises and ends where its data ends.
+//! the blocks its header promises and ends where its data ends. PNG
+//! pictures split in two pieces are joined through their chunk CRCs: the
+//! chunk whose CRC fails is where the first piece ends, and a join is kept
+//! only when that chunk's CRC and every chunk after it check out to IEND.
 //!
 //! Nothing is copied: results are offsets and lengths in the image, with
 //! MD5 and SHA-256 of the carved bytes. Exports read from the image.
@@ -668,10 +671,141 @@ fn jpeg_two(src: &mut dyn Bytes, at: u64) -> Option<(Vec<(u64, u64)>, String)> {
     None
 }
 
-/// The JPEG join on raw bytes, for the fuzzer.
+/// The JPEG and PNG joins on raw bytes, for the fuzzer.
 pub fn fuzz_jpeg_two(d: &[u8]) {
     let mut s: &[u8] = d;
     let _ = jpeg_two(&mut s, 0);
+    let mut s: &[u8] = d;
+    let _ = png_two(&mut s, 0);
+}
+
+fn png_crc(d: &[u8]) -> u32 {
+    let mut c = flate2::Crc::new();
+    c.update(d);
+    c.sum()
+}
+
+/// A plausible PNG chunk header at `h`: a length that fits, four letters.
+fn png_header(h: &[u8]) -> Option<u64> {
+    let len = be32(h, 0)?;
+    (len <= 64 << 20 && h.get(4..8)?.iter().all(|b| b.is_ascii_alphabetic())).then_some(len)
+}
+
+/// Checks the chunks of `d` from `p` to IEND, every CRC. Returns the end.
+fn png_chunks_ok(d: &[u8], mut p: usize) -> Option<usize> {
+    for _ in 0..1_000_000 {
+        let len = png_header(d.get(p..p + 8)?)? as usize;
+        let end = p.checked_add(12)?.checked_add(len)?;
+        let body = d.get(p + 4..p + 8 + len)?;
+        if png_crc(body) != u32::from_be_bytes(d.get(p + 8 + len..end)?.try_into().ok()?) {
+            return None;
+        }
+        if &d[p + 4..p + 8] == b"IEND" {
+            return Some(end);
+        }
+        p = end;
+    }
+    None
+}
+
+/// A PNG at `at` whose chunks stop checking out before IEND, joined from
+/// two pieces: the pieces (start, length) and the dimensions.
+fn png_two(src: &mut dyn Bytes, at: u64) -> Option<(Vec<(u64, u64)>, String)> {
+    const MAX_CHUNK: u64 = 1 << 20;
+    if !src.read(at, 8).starts_with(b"\x89PNG\r\n\x1a\n") {
+        return None;
+    }
+    let ihdr = src.read(at + 8, 25);
+    if ihdr.get(4..8) != Some(b"IHDR".as_slice()) {
+        return None;
+    }
+    let dims = format!("{} x {}", be32(&ihdr, 8).unwrap_or(0), be32(&ihdr, 12).unwrap_or(0));
+    // Walk while the CRCs hold; the first chunk that fails is cut: (start,
+    // claimed end), or the same twice when its header is not one.
+    let mut p = at + 8;
+    let (cut, cut_end) = loop {
+        if p - at > 64 << 20 {
+            return None;
+        }
+        let h = src.read(p, 8);
+        let Some(len) = h.get(..8).and_then(png_header) else { break (p, p) };
+        if len > MAX_CHUNK {
+            // Too big to search through; and a CRC over it is costly.
+            return None;
+        }
+        let c = src.read(p + 4, len as usize + 8);
+        if c.len() < len as usize + 8 {
+            return None;
+        }
+        let want = u32::from_be_bytes(c[4 + len as usize..8 + len as usize].try_into().ok()?);
+        if png_crc(&c[..4 + len as usize]) != want {
+            break (p, p + 12 + len);
+        }
+        if &h[4..8] == b"IEND" {
+            return None; // whole
+        }
+        p += 12 + len;
+    };
+    if cut <= at + 8 || (cut == cut_end && cut % SECTOR != 0) {
+        return None;
+    }
+    // The first piece ends at a sector boundary inside the cut chunk (or at
+    // its start); the second starts at a sector boundary further on.
+    let first_b = if cut == cut_end { cut } else { (cut + 1).div_ceil(SECTOR) * SECTOR };
+    let last_b = if cut == cut_end { cut } else { cut_end.min(cut + MAX_CHUNK) };
+    let head = src.read(cut, (last_b - cut) as usize);
+    let limit = (first_b + SECTOR + MAX_GAP + (cut_end - cut)).min(src.size());
+    let region = src.read(first_b, limit.saturating_sub(first_b) as usize);
+    let mut joins = 0usize;
+    let mut b = first_b;
+    while b <= last_b {
+        let in_first = (b - cut) as usize; // of the cut chunk, in the first piece
+        let rest = (cut_end - b.min(cut_end)) as usize; // and in the second
+        let mut s = b + SECTOR;
+        while s >= first_b && ((s - first_b) as usize + rest + 8) <= region.len() {
+            let off = (s - first_b) as usize;
+            // Cheap first: a chunk header right after the cut chunk's tail.
+            if png_header(&region[off + rest..off + rest + 8]).is_some() {
+                joins += 1;
+                let chunk_ok = if cut == cut_end {
+                    true
+                } else {
+                    // CRC over type and data: the part in the first piece
+                    // (after the length) and the part in the second.
+                    let total = (cut_end - cut) as usize;
+                    let first = &head[..in_first.min(head.len())];
+                    let second = &region[off..off + rest];
+                    // Bytes [lo, hi) of the chunk as it is split over the two pieces.
+                    let span = |lo: usize, hi: usize, out: &mut dyn FnMut(&[u8])| {
+                        let f = first.len();
+                        if lo < f {
+                            out(&first[lo..hi.min(f)]);
+                        }
+                        if hi > f {
+                            out(&second[lo.max(f) - f..hi - f]);
+                        }
+                    };
+                    let mut c = flate2::Crc::new();
+                    span(4, total - 4, &mut |x| c.update(x));
+                    let mut stored = vec![];
+                    span(total - 4, total, &mut |x| stored.extend_from_slice(x));
+                    first.len() + second.len() == total && stored.len() == 4 && c.sum() == u32::from_be_bytes(stored[..4].try_into().unwrap())
+                };
+                if chunk_ok {
+                    if let Some(end) = png_chunks_ok(&region, off + rest) {
+                        let first_len = b - at;
+                        return Some((vec![(at, first_len), (s, (end - off) as u64)], dims));
+                    }
+                }
+                if joins > 4096 {
+                    return None;
+                }
+            }
+            s += SECTOR;
+        }
+        b += SECTOR;
+    }
+    None
 }
 
 /// Whether bytes read from `pieces` make a JPEG that decodes exactly.
@@ -1216,8 +1350,15 @@ pub fn carve(ev: &Evidence, analysis: &Analysis, progress: Progress) -> anyhow::
                 if candidate {
                     let at = p + i as u64;
                     let found = identify(&mut src, at);
-                    if b.starts_with(&[0xFF, 0xD8, 0xFF]) && found.as_ref().is_none_or(|h| h.kind == "jpeg") {
-                        if let Some((pieces, dims)) = jpeg_two(&mut src, at) {
+                    let split = if b.starts_with(&[0xFF, 0xD8, 0xFF]) && found.as_ref().is_none_or(|h| h.kind == "jpeg") {
+                        jpeg_two(&mut src, at).map(|(p, d)| (p, d, "jpeg", "jpg", "JPEG image"))
+                    } else if b.starts_with(b"\x89PNG\r\n\x1a\n") && found.as_ref().is_none_or(|h| h.kind == "png" && !h.complete) {
+                        png_two(&mut src, at).map(|(p, d)| (p, d, "png", "png", "PNG image"))
+                    } else {
+                        None
+                    };
+                    {
+                        if let Some((pieces, dims, kind, ext, kind_label)) = split {
                             let id = res.files.len() as u32;
                             let first = pieces[0].1;
                             let mut note = format!(
@@ -1233,9 +1374,9 @@ pub fn carve(ev: &Evidence, analysis: &Analysis, progress: Progress) -> anyhow::
                                 id,
                                 offset: at,
                                 len: pieces.iter().map(|p| p.1).sum(),
-                                kind: "jpeg".into(),
-                                ext: "jpg".into(),
-                                label: "JPEG image".into(),
+                                kind: kind.into(),
+                                ext: ext.into(),
+                                label: kind_label.into(),
                                 complete: true,
                                 detail: dims,
                                 note,
@@ -1633,6 +1774,43 @@ pub(crate) mod tests {
         r.read_to_end(&mut back).unwrap();
         assert_eq!(back, cam);
         assert!(c.where_label().contains("then") && c.where_label().matches("bytes at").count() == 2, "{}", c.where_label());
+    }
+
+    /// clean.png split inside a chunk by text and zeros: joined through the
+    /// chunk CRCs; a second piece from another picture is not taken.
+    #[test]
+    fn joins_a_png_in_two_pieces() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/photo");
+        let Ok(png) = std::fs::read(dir.join("clean.png")) else { return };
+        let at = 65_536usize;
+        let first = 98_304usize;
+        let mut gap = b"Minutes of the lab.test meeting, nothing to see. ".repeat(12)[..512].to_vec();
+        gap.extend(vec![0u8; 1024]);
+        let build = |second: &[u8]| {
+            let mut d = vec![0u8; at];
+            d.extend(&png[..first]);
+            d.extend(&gap);
+            d.extend(second);
+            d.extend(vec![0u8; 4096]);
+            d
+        };
+        let disk = build(&png[first..]);
+        let mut src: &[u8] = &disk;
+        let (pieces, dims) = png_two(&mut src, at as u64).expect("joined");
+        assert_eq!(pieces, vec![(at as u64, first as u64), ((at + first + gap.len()) as u64, (png.len() - first) as u64)]);
+        assert!(dims.contains(" x "));
+        // Whole: left to the ordinary walk.
+        let mut whole = vec![0u8; at];
+        whole.extend(&png);
+        let mut src: &[u8] = &whole;
+        assert!(png_two(&mut src, at as u64).is_none());
+        // Not the right second piece: the CRCs say no.
+        let mut other = png[first..].to_vec();
+        let mid = other.len() / 2;
+        other[mid] ^= 0x55;
+        let wrong = build(&other);
+        let mut src: &[u8] = &wrong;
+        assert!(png_two(&mut src, at as u64).is_none());
     }
 
     #[test]

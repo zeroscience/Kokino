@@ -111,6 +111,64 @@ pub fn load(dir: &Path) -> (Vec<Plugin>, Vec<String>) {
     (out, bad)
 }
 
+/// One plugin from its own folder (for testing it).
+pub fn load_one(dir: &Path) -> anyhow::Result<Plugin> {
+    let p = dir.join("plugin.json");
+    let text = std::fs::read_to_string(&p).map_err(|e| anyhow::anyhow!("{}: {}", p.display(), e))?;
+    let mut pl: Plugin = serde_json::from_str(&text).map_err(|e| anyhow::anyhow!("{}: {}", p.display(), e))?;
+    if pl.command.is_empty() || pl.patterns.is_empty() {
+        anyhow::bail!("{}: needs \"match\" and \"command\"", p.display());
+    }
+    pl.id = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    pl.dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    Ok(pl)
+}
+
+/// What a test run of a plugin on one file shows its author.
+#[derive(Debug, Default, Serialize)]
+pub struct TestRun {
+    /// Whether `path` matches the plugin's patterns (the plugin would be
+    /// given this file in a real run).
+    pub matches: bool,
+    pub rows: Vec<Row>,
+    pub notes: Vec<String>,
+    /// Things to fix: rows without a readable time or without "what".
+    pub warnings: Vec<String>,
+    pub millis: u128,
+}
+
+/// Runs a plugin on one local file the way a real run does (on a copy,
+/// with its time limit and the reduced environment). `path` is where the
+/// file would be on a volume ("/Users/alice/x.url"); it decides the match.
+pub fn test_file(pl: &Plugin, file: &Path, path: &str) -> anyhow::Result<TestRun> {
+    let mut t = TestRun { matches: pl.patterns.iter().any(|p| glob(p, path)), ..Default::default() };
+    let size = std::fs::metadata(file)?.len();
+    if size > pl.max_file_size.unwrap_or(DEFAULT_MAX_FILE) {
+        t.warnings.push(format!("{} bytes: larger than max_file_size, a real run would skip this file", size));
+    }
+    let work = std::env::temp_dir().join(format!("kokino-plugin-test-{}", uuid_like()));
+    std::fs::create_dir_all(&work)?;
+    let name = path.rsplit('/').next().unwrap_or("file");
+    let copy = work.join(safe_name(name));
+    std::fs::copy(file, &copy)?;
+    let start = Instant::now();
+    let res = exec(pl, &copy, name, path);
+    t.millis = start.elapsed().as_millis();
+    let _ = std::fs::remove_dir_all(&work);
+    let (rows, notes) = res?;
+    for (i, r) in rows.iter().enumerate() {
+        if !r.time.is_empty() && row_time(&r.time).is_none() {
+            t.warnings.push(format!("row {}: time \"{}\" is not ISO 8601; the row will not be on the timelines", i + 1, r.time));
+        }
+        if r.what.is_empty() {
+            t.warnings.push(format!("row {}: no \"what\"", i + 1));
+        }
+    }
+    t.rows = rows;
+    t.notes = notes;
+    Ok(t)
+}
+
 /// Glob match: `*` any run but /, `**` any run, `?` one character.
 pub fn glob(pattern: &str, text: &str) -> bool {
     // Tokens: literal byte, ? (one character but /), * (a run without /),
@@ -561,6 +619,23 @@ mod tests {
         let t = Instant::now();
         let err = exec(&plugin(&dir, slow, &["*"], Some(1)), &f, "in.json", "/x/in.json").unwrap_err().to_string();
         assert!(err.contains("time limit") && t.elapsed() < Duration::from_secs(4), "{}", err);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Testing one plugin on one file, as its author would.
+    #[test]
+    fn tests_a_plugin_on_one_file() {
+        let dir = scratch();
+        let cmd = script(&dir, "rows", "echo {\"what\": \"a\", \"time\": \"2026-10-20T08:05:30Z\"}\r\necho {\"what\": \"\", \"time\": \"last tuesday\"}", "echo '{\"what\": \"a\", \"time\": \"2026-10-20T08:05:30Z\"}'; echo '{\"what\": \"\", \"time\": \"last tuesday\"}'");
+        std::fs::write(dir.join("plugin.json"), serde_json::to_string(&serde_json::json!({"name": "Rows", "match": ["*.url"], "command": cmd})).unwrap()).unwrap();
+        let pl = load_one(&dir).unwrap();
+        let f = dir.join("x.bin");
+        std::fs::write(&f, b"anything").unwrap();
+        let t = test_file(&pl, &f, "/Users/alice/Lab.url").unwrap();
+        assert!(t.matches);
+        assert_eq!(t.rows.len(), 2);
+        assert_eq!(t.warnings.len(), 2, "{:?}", t.warnings);
+        assert!(!test_file(&pl, &f, "/Users/alice/Lab.txt").unwrap().matches);
         std::fs::remove_dir_all(&dir).ok();
     }
 

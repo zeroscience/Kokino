@@ -216,7 +216,14 @@ JPEGs in three pieces (after 1.5.0):
 |---|---|---|--:|---|
 | `carve` | again, with middle pieces kept while looking for the last one and three-piece joins | 10 min | 71,875,548 | none |
 
-In all: 821,061,700 inputs over 41 targets, and 40 distinct problems
+PNGs in two pieces and deleted PST items (after 1.5.0):
+
+| Target | What it covers | Rounds | Inputs in all | Distinct problems found |
+|---|---|---|--:|---|
+| `pst` | again, with the unused slots of node and block index pages read for deleted messages | 10 min | 2,133,614 | none |
+| `carve` | again, with the PNG join (chunk walk with CRCs, break points, second piece search) | 10 min | 44,752,447 | none |
+
+In all: 867,947,761 inputs over 41 targets, and 40 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed

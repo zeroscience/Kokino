@@ -597,8 +597,11 @@ fn pst_messages<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, f: &FileRow, file
             attachments: m.attachments.iter().map(|a| Attachment { name: if a.embedded && !a.name.to_ascii_lowercase().ends_with(".eml") { format!("{}.eml", a.name) } else { a.name.clone() }, content_type: if a.embedded { "message/rfc822".into() } else { a.mime.clone() }, size: a.size }).collect(),
             snippet,
             expunged: false,
-            deleted: f.e.deleted,
-            folder: folders.get(&parent).cloned().unwrap_or_else(|| "(folder not found)".into()),
+            deleted: f.e.deleted || p.recovered.contains(&nid),
+            folder: {
+                let f = folders.get(&parent).cloned().unwrap_or_else(|| "(folder not found)".into());
+                if p.recovered.contains(&nid) { format!("{} [recovered deleted item]", f) } else { f }
+            },
         });
     }
     Ok((if p.ost { "ost" } else { "pst" }, out))
