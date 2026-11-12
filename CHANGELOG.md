@@ -5,6 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Plugin rows on the timelines (each item's and the case timeline, source PLUGIN, with a Plugins filter) and in the watchlist (each row's text and fields, word by word); a row opens the file it came from.
+- Carving: JPEGs in three pieces are joined too, a run of JPEG data between the first and last piece as the middle one, under the same exact decode check; at most 48 joins are tried per picture. Fuzzed (`carve`, 71.9 million inputs, nothing found; 821 million inputs in all).
+- Validation every week: a scheduled GitHub workflow downloads the 83 NIST CFReDS images, analyzes them and compares every image's numbers with `tests/validation/cfreds-expected.json` (`scripts/validate_cfreds.py --record/--expect`, `scripts/fetch_cfreds.py`).
+- The Kokino website (zeroscience.github.io/kokino-ftk) on the About page, in the wiki's contact page and in Getting started; Zero Science Lab (www.zeroscience.mk) shown as the developer.
+
 ## [1.5.0] - 11-11-2026
 
 More of what was left: watchlists from STIX 2.1 and MISP with each sweep compared with the last, plugins for artifacts Kokino does not read itself, CD-R and DVD-RW discs (UDF virtual and sparable partitions, files from earlier sessions), ESXi snapshots, JPEGs carved from two pieces, names of long-deleted files from the ext journal, more of SRUM, dates shown day first everywhere, and a website.

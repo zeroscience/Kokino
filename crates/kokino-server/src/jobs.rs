@@ -314,6 +314,7 @@ fn run_plugins(st: &AppState, job: &Job, user: &str, cid: &str, eid: &str, chose
         std::fs::create_dir_all(dir)?;
     }
     write_json(&path, &res)?;
+    st.forget_plugin_rows(cid, eid);
     let ran: Vec<serde_json::Value> = chosen
         .iter()
         .zip(&res.runs)

@@ -4,6 +4,7 @@
 import { h, icon, debounce, api, ts } from "./lib.js";
 
 export const CONTACT = {
+  site: "https://zeroscience.github.io/kokino-ftk/",
   web: "https://www.zeroscience.mk",
   email: "lab@zeroscience.mk",
   github: "https://github.com/zeroscience",
@@ -107,7 +108,8 @@ export function aboutPage(info) {
       h("div.card.stack",
         h("h3", "Contact"),
         kv([
-          ["Website", link(CONTACT.web)],
+          ["Kokino website", link(CONTACT.site, "zeroscience.github.io/kokino-ftk")],
+          ["Developer", h("span", "Zero Science Lab, ", link(CONTACT.web, "www.zeroscience.mk"))],
           ["Email", mail(CONTACT.email)],
           ["GitHub", link(CONTACT.github)],
           ["Bugs and ideas", h("span", "Open an issue on GitHub, or write to ", mail(CONTACT.email), ".")],
@@ -148,6 +150,7 @@ const WIKI = [
     id: "start", title: "Getting started", icon: "chev",
     body: [
       p("Installed from a release package (Windows MSI, Linux .deb, macOS DMG): start \"Kokino Forensic Toolkit\" from the Start menu, the desktop's application menu or the DMG's \"Start Kokino\", or run ", code("kokino serve"), ". It opens your browser on this machine. To see whether a newer release exists, use Check for updates on the About page (nothing is checked on its own)."),
+      p("Downloads, release notes and an overview are on the Kokino website, ", link(CONTACT.site, "zeroscience.github.io/kokino-ftk"), "."),
       p("From source: build once, then start the server."),
       pre("cargo build --release", "./target/release/kokino serve"),
       p("On the very first start there are no accounts yet. The terminal prints a one-time setup link; open it to create the first administrator. Without that link nobody can claim the server. You can also create the first admin on the console:"),
@@ -208,7 +211,7 @@ const WIKI = [
       kv([
         ["Summary", "Disk layout, counts, the impact summary in plain sentences, the anti-forensics gauge and an activity histogram (click a day to open the timeline)."],
         ["Explorer", "The folder tree including deleted and orphaned entries. Click a file for its detail drawer: both timestamp sets side by side, data streams, signature, entropy, where its MFT record lies on disk, its timeline events and a hex preview."],
-        ["Timeline", "MACB events from $SI and $FN interleaved with browser visits, downloads and searches, Windows artifacts and, on NTFS, files created, deleted and renamed per the change journal (USN). Filter by text, date, source, deleted or flagged. The case page Case timeline merges the timelines of all items."],
+        ["Timeline", "MACB events from $SI and $FN interleaved with browser visits, downloads and searches, Windows artifacts, dated rows reported by plugins (source PLUGIN, filter Plugins) and, on NTFS, files created, deleted and renamed per the change journal (USN). Filter by text, date, source, deleted or flagged. The case page Case timeline merges the timelines of all items."],
         ["Web activity", "Browser history per profile (Chrome family, Firefox, Safari, Internet Explorer and the old Edge): visits, downloads, searches and Internet Explorer's cache and cookies. Click a profile card to filter by it."],
         ["Email", "Messages in Outlook PST and OST files, mbox mailboxes and .eml files, with their text and attachments."],
         ["Anti-forensics", "Each indicator with its weight, caveat and the exact files: click Show files to list them, then a file to open it."],
@@ -380,6 +383,7 @@ const WIKI = [
         h("span", h("b", "Domains and URLs:"), " web visits, downloads, cache and cookies of the domain and its subdomains, email from or to addresses at the domain, and files of exactly that name (", code("ld.so.preload"), " looks like a domain)."),
         h("span", h("b", "Email addresses:"), " senders and recipients (From, To, Cc)."),
         h("span", h("b", "Anything else:"), " a file name (exact, any case) or, with a / or \\ in it, a fragment of a path; deleted files included."),
+        h("span", h("b", "Plugin rows:"), " what plugins reported is searched too, word by word in each row's text and fields (addresses with a port, URLs, email addresses, hashes, paths); a hit opens the file the row came from."),
       ),
       p("Lines starting with # are comments; text after \" #\" on a line is kept as the indicator's note. Defanged forms from reports (hxxp://, [.], (.), [:], [@]) are read as the real thing. Up to 50,000 indicators and 20 MB; up to 500 hits each are listed."),
       p(h("b", "STIX 2.1:"), " the patterns of the bundle's indicators (file hashes and names, IPv4 and IPv6 addresses and networks, domain names, URLs, email addresses, the sender and recipients of email messages, process names), joined by AND or OR, and observable objects of the same kinds. Only equality is read: comparisons with !=, LIKE or MATCHES, and patterns in other languages (Sigma, YARA, Snort), are listed as not read. The indicator's name becomes the note. ",
@@ -435,7 +439,7 @@ const WIKI = [
         h("span", h("b", "Internet Explorer records:"), " every 128-byte boundary of free space is also checked for single index.dat records (history visits, cache entries, cookies, downloads, redirects), which keep that alignment when the file is deleted. They are listed under ie-records with the user, URL, time and whether they lie inside a carved index.dat. On a formatted disk this is often all that is left of the browsing history."),
         h("span", h("b", "Whole files:"), " each format's own structure says where the file ends (JPEG markers, PNG chunks, the ZIP central directory, the PE section table, the SQLite page count, the end of a GZIP stream...), so random bytes that only resemble a header are not listed. A file whose end is missing is kept and marked incomplete."),
         h("span", h("b", "Contiguous:"), " carving assumes a file's clusters were contiguous. One that runs past the end of its free region is marked: its tail may belong to another file."),
-        h("span", h("b", "JPEGs in two pieces:"), " where a JPEG's compressed data stops looking like JPEG data (a marker that cannot be there, a run of zeros, a sector of text), Kokino looks up to 16 MB further on for the rest: sectors of JPEG data ending with the end-of-image marker. The two are joined only when the joined picture decodes into exactly the blocks its header promises and ends exactly where its data ends, which bytes from another file almost never do. Such files say \"joined from two pieces\" with both offsets; preview, export, hashes and the search index read the joined bytes. Baseline JPEGs only; progressive JPEGs and pictures in three or more pieces are not joined."),
+        h("span", h("b", "JPEGs in two or three pieces:"), " where a JPEG's compressed data stops looking like JPEG data (a marker that cannot be there, a run of zeros, a sector of text), Kokino looks up to 16 MB further on for the rest: sectors of JPEG data ending with the end-of-image marker, with a run of JPEG data between them as a middle piece when two pieces do not fit. Pieces are joined only when the joined picture decodes into exactly the blocks its header promises and ends exactly where its data ends, which bytes from another file almost never do. Such files say \"joined from two pieces\" (or three) with every offset; preview, export, hashes and the search index read the joined bytes. Baseline JPEGs only, pieces in disk order; progressive JPEGs and pictures in four or more pieces are not joined."),
         h("span", h("b", "Deleted files:"), " when a carved file starts where a deleted file's data started, the deleted file's path is shown."),
         h("span", h("b", "BitLocker:"), " the free space of an unlocked BitLocker volume is carved decrypted. Those files show their offset as \"vol N: offset\" (inside the decrypted volume N) instead of an image offset; preview, export and hashes read them decrypted. The encrypted bytes themselves are not carved once the volume is unlocked."),
       ),
@@ -613,6 +617,8 @@ const WIKI = [
         "Carving assumes a file is stored in one piece, so fragmented pictures with no directory entry left are not rejoined.",
       ),
       p("VALIDATION.md in the source has every image's numbers, the method and how to repeat it; ", code("kokino files"), " and ", code("kokino carve"), " are the command-line tools it uses."),
+      h("h3", "Every week"),
+      p("A scheduled check downloads the NIST CFReDS images (FAT, exFAT, NTFS and ext2/3/4), analyzes them with the current code and compares every image's numbers (files listed, names right, blocks right, files recovered through the journal, wrong content without a warning) with the recorded ones; any difference fails the check. The recorded numbers are in the source, ", code("tests/validation/cfreds-expected.json"), "."),
       h("h3", "Golden results"),
       p("Every commit is also checked against recorded results for all the test images in the source (42 analyses: every file system, image format, collection type and virtual disk Kokino reads, BitLocker locked and unlocked), on Windows, Linux and macOS: the volumes found, file statistics, the anti-forensics score, the number of entries in every artifact list and a digest of the file listing. A change in what Kokino finds in any of them stops the build until it is explained."),
     ],
@@ -624,7 +630,7 @@ const WIKI = [
       h("h3", "Release integrity"),
       p("Every release has ", code("SHA256SUMS.txt"), ", a CycloneDX SBOM (", code("kokino-<version>-sbom.cdx.json"), ": every third-party crate in the build with its version, checksum and license) and a build provenance attestation for every file, signed through GitHub (Sigstore), which ties the file to the workflow run and commit that built it. Check a download with ", code("gh attestation verify <file> --repo zeroscience/Kokino"), ". The Windows and macOS packages are not yet code-signed with a publisher certificate."),
       h("h3", "Fuzzing"),
-      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks, optical media, Mac disks, NTFS folder indexes and $LogFile, the change journal, ShellBags, ESE databases (SRUM), scheduled tasks, Internet Explorer index.dat, deleted registry keys, legacy Office files, registry logs, legacy event logs, email, journald compression, ZIP and tar collections, shadow copies, BitLocker, VHDX logs, Outlook PST, property lists, FSEvents, WebCache, Apple Mail, the watchlist (with STIX and MISP) and plugins ran ", h("b", "749,186,152 inputs"), " and found ", h("b", "40 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
+      p("A purpose-built fuzzer (", code("crates/kokino-fuzz"), ") fed each parser valid samples changed by random and boundary-value mutations: flipped bits, extreme lengths and offsets, cut and spliced data. A failure is any crash, integer overflow, stack overflow, allocation of more than 256 MiB from a small file, or input that takes over 20 seconds. Three rounds over all 15 targets (5, 20 and 10 minutes each, new random seeds every time) and later rounds on pictures, NTFS compression, the file system walkers, the ext reader, the Linux log parsers, virtual disks, optical media, Mac disks, NTFS folder indexes and $LogFile, the change journal, ShellBags, ESE databases (SRUM), scheduled tasks, Internet Explorer index.dat, deleted registry keys, legacy Office files, registry logs, legacy event logs, email, journald compression, ZIP and tar collections, shadow copies, BitLocker, VHDX logs, Outlook PST, property lists, FSEvents, WebCache, Apple Mail, the watchlist (with STIX and MISP) and plugins ran ", h("b", "821,061,700 inputs"), " and found ", h("b", "40 distinct problems, all fixed"), "; review while fixing found 4 more. Every failing input is kept and replayed by the test suite."),
       h("div.scroll", h("table.tbl",
         h("thead", h("tr", h("th", "Target"), h("th", "Covers"), h("th", "Inputs"), h("th", "Found"))),
         h("tbody", [
@@ -665,7 +671,7 @@ const WIKI = [
         ["xpress", "LZXPRESS Huffman decompression", "2,321,551", "none"],
         ["doc", "Text extraction: ZIP (nested), Word, Excel, PowerPoint, OpenDocument, GZIP, PDF", "21,576,629", "1 (panic)"],
         ["photo", "Picture forensics: JPEG decoder, EXIF and thumbnails, quantization tables, PNG, BMP", "7,614,505", "5 (overflow, hang, crash)"],
-        ["carve", "File carving: header and end detection for every carved format, and joining JPEGs in two pieces", "62,506,668", "1 (panic)"],
+        ["carve", "File carving: header and end detection for every carved format, and joining JPEGs in two or three pieces", "134,382,216", "1 (panic)"],
         ["browser", "Browser history: Chromium and Firefox SQLite databases", "57,033", "none (1 hang found by review)"],
         ["strings", "Strings and byte map", "22,137,771", "none"]
         ].map(([t, d, n, f]) => h("tr", h("td.mono", t), h("td", d), h("td.num", n), h("td", f)))))),
@@ -732,7 +738,8 @@ const WIKI = [
     id: "contact", title: "Contact and support", icon: "user",
     body: [
       kv([
-        ["Website", link(CONTACT.web)],
+        ["Kokino website", link(CONTACT.site, "zeroscience.github.io/kokino-ftk")],
+        ["Developer", h("span", "Zero Science Lab, ", link(CONTACT.web, "www.zeroscience.mk"))],
         ["Email", mail(CONTACT.email)],
         ["GitHub", link(CONTACT.github)],
       ]),

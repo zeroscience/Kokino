@@ -1445,7 +1445,7 @@ fn tl_match(f: &FsAnalysis, e: &kokino_analysis::timeline::TimelineEvent, needle
             "deleted" => r.e.deleted,
             "si" => e.src == "SI" || e.src == "DEL",
             "fn" => e.src == "FN",
-            "web" | "windows" => false,
+            "web" | "windows" | "plugin" => false,
             _ => true,
         }
 }
@@ -1471,17 +1471,82 @@ fn tl_range(q: &TimelineQ) -> (u64, u64) {
     (from, to)
 }
 
+/// A timeline entry: an event of the analysis, or a dated plugin row
+/// (index into the plugin events).
+#[derive(Clone, Copy)]
+enum Tl<'a> {
+    Ev(&'a kokino_analysis::timeline::TimelineEvent),
+    Plugin(u64, u32, u32),
+}
+
+impl Tl<'_> {
+    fn t(&self) -> u64 {
+        match self {
+            Tl::Ev(e) => e.t,
+            Tl::Plugin(t, _, _) => *t,
+        }
+    }
+}
+
+/// Dated plugin rows of volume `fi` in [from, to) matching the filters.
+fn plugin_hits(p: Option<&kokino_analysis::plugins::Dated>, fi: usize, from: u64, to: u64, needle: &str, only: &str) -> Vec<Tl<'static>> {
+    let Some(p) = p else { return vec![] };
+    if !matches!(only, "" | "plugin") {
+        return vec![];
+    }
+    let start = p.events.partition_point(|e| e.0 < from);
+    p.events[start..]
+        .iter()
+        .take_while(|e| e.0 < to)
+        .filter(|e| {
+            p.row(e.1, e.2).is_some_and(|(run, r)| r.fi == fi && (needle.is_empty() || format!("{} {} {} {}", run.name, r.what, r.detail, r.path).to_lowercase().contains(needle)))
+        })
+        .map(|e| Tl::Plugin(e.0, e.1, e.2))
+        .collect()
+}
+
+/// Two time-ordered lists as one.
+fn merge_tl<'a>(a: Vec<Tl<'a>>, b: Vec<Tl<'a>>) -> Vec<Tl<'a>> {
+    if b.is_empty() {
+        return a;
+    }
+    let mut out = Vec::with_capacity(a.len() + b.len());
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() || j < b.len() {
+        if j >= b.len() || (i < a.len() && a[i].t() <= b[j].t()) {
+            out.push(a[i]);
+            i += 1;
+        } else {
+            out.push(b[j]);
+            j += 1;
+        }
+    }
+    out
+}
+
+fn tl_item_row(f: &FsAnalysis, p: Option<&kokino_analysis::plugins::Dated>, x: Tl) -> Value {
+    match x {
+        Tl::Ev(e) => tl_row(f, e),
+        Tl::Plugin(t, run, row) => match p.and_then(|p| p.row(run, row)) {
+            Some((r, w)) => json!({"t": filetime_to_iso(t), "macb": "", "src": "PLUGIN", "idx": w.file, "file": w.file, "path": w.what, "detail": format!("{}: {}{}{}", r.name, w.detail, if w.detail.is_empty() { "" } else { ", " }, w.path), "deleted": false, "flags": [], "is_dir": false, "size": 0, "plugin": true}),
+            None => json!({}),
+        },
+    }
+}
+
 async fn timeline(State(st): St, Path((cid, eid, fi)): Path<(String, String, usize)>, Query(q): Query<TimelineQ>) -> R {
     let l = st.loaded(&cid, &eid)?;
     let f = fs_of(&l, fi)?;
     let needle = q.q.clone().unwrap_or_default().to_lowercase();
     let (from, to) = tl_range(&q);
     let only = q.only.clone().unwrap_or_default();
-    let hits: Vec<&kokino_analysis::timeline::TimelineEvent> = l.fs[fi].timeline.iter().filter(|e| e.t >= from && e.t < to && tl_match(f, e, &needle, &only)).collect();
+    let hits: Vec<Tl> = l.fs[fi].timeline.iter().filter(|e| e.t >= from && e.t < to && tl_match(f, e, &needle, &only)).map(Tl::Ev).collect();
+    let plugins = st.plugin_rows(&cid, &eid);
+    let hits = merge_tl(hits, plugin_hits(plugins.as_deref(), fi, from, to, &needle, &only));
     let total = hits.len();
     let off = q.offset.unwrap_or(0);
     let lim = q.limit.unwrap_or(300).min(3000);
-    let items: Vec<Value> = hits.into_iter().skip(off).take(lim).map(|e| tl_row(f, e)).collect();
+    let items: Vec<Value> = hits.into_iter().skip(off).take(lim).map(|e| tl_item_row(f, plugins.as_deref(), e)).collect();
     Ok(Json(json!({"total": total, "offset": off, "items": items})))
 }
 
@@ -1501,17 +1566,21 @@ fn case_timeline_page(st: &AppState, cid: &str, q: &TimelineQ) -> anyhow::Result
         let mut skipped = vec![];
         for rec in case.evidence() {
             match st.loaded(cid, &rec.id) {
-                Ok(l) => loaded.push((rec, l)),
+                Ok(l) => {
+                    let p = st.plugin_rows(cid, &rec.id);
+                    loaded.push((rec, l, p));
+                }
                 Err(_) => skipped.push(rec.name.clone()),
             }
         }
-        // Per volume, the matching events (each list already in time order).
-        let mut lists: Vec<(usize, usize, Vec<&kokino_analysis::timeline::TimelineEvent>)> = vec![];
-        for (k, (_, l)) in loaded.iter().enumerate() {
+        // Per volume, the matching events and plugin rows (each list in time order).
+        let mut lists: Vec<(usize, usize, Vec<Tl>)> = vec![];
+        for (k, (_, l, p)) in loaded.iter().enumerate() {
             for (fi, f) in l.analysis.filesystems.iter().enumerate() {
                 let Some(ix) = l.fs.get(fi) else { continue };
                 let start = ix.timeline.partition_point(|e| e.t < from);
-                let hits: Vec<_> = ix.timeline[start..].iter().take_while(|e| e.t < to).filter(|e| tl_match(f, e, &needle, &only)).collect();
+                let hits: Vec<Tl> = ix.timeline[start..].iter().take_while(|e| e.t < to).filter(|e| tl_match(f, e, &needle, &only)).map(Tl::Ev).collect();
+                let hits = merge_tl(hits, plugin_hits(p.as_deref(), fi, from, to, &needle, &only));
                 if !hits.is_empty() {
                     lists.push((k, fi, hits));
                 }
@@ -1525,12 +1594,12 @@ fn case_timeline_page(st: &AppState, cid: &str, q: &TimelineQ) -> anyhow::Result
         let mut items = vec![];
         let mut n = 0usize;
         while n < off + lim {
-            let next = (0..lists.len()).filter(|&i| pos[i] < lists[i].2.len()).min_by_key(|&i| lists[i].2[pos[i]].t);
+            let next = (0..lists.len()).filter(|&i| pos[i] < lists[i].2.len()).min_by_key(|&i| lists[i].2[pos[i]].t());
             let Some(i) = next else { break };
             if n >= off {
                 let (k, fi, ref v) = lists[i];
-                let (rec, l) = &loaded[k];
-                let mut row = tl_row(&l.analysis.filesystems[fi], v[pos[i]]);
+                let (rec, l, p) = &loaded[k];
+                let mut row = tl_item_row(&l.analysis.filesystems[fi], p.as_deref(), v[pos[i]]);
                 row["evidence"] = json!(rec.id);
                 row["evidence_name"] = json!(rec.name);
                 row["fi"] = json!(fi);
@@ -2844,6 +2913,57 @@ mod tests {
         let fi = f["items"].as_array().unwrap();
         assert!(fi.iter().all(|x| x["path"].as_str().unwrap().contains("authorized_keys")));
         assert!(fi.iter().any(|x| x["evidence"] == "e1") && fi.iter().any(|x| x["evidence"] == "e2"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Plugin rows join the timelines (in time order, with their own
+    /// filter) and the watchlist (word by word).
+    #[test]
+    fn plugin_rows_on_timelines_and_in_the_watchlist() {
+        use kokino_analysis::plugins::{PluginResults, PluginRun, Row};
+        let fx = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+        let root = std::env::temp_dir().join(format!("kokino-plugrows-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let st = AppState::new(root.clone(), 7311, false, vec![]).unwrap();
+        let case = kokino_core::case::Case::create(&root, "Plugins", "tester", "").unwrap();
+        let cid = case.info.id.clone();
+        let p = fx.join("ext4.img");
+        let ev = kokino_image::Evidence::open(&p).unwrap();
+        let rec = kokino_core::case::EvidenceRecord { id: "e1".into(), name: "ext4.img".into(), path: p.display().to_string(), format: ev.format_label(), size: ev.size, added: String::new(), notes: String::new(), hashes: None, hashed_at: None, expected: None, embedded: None, acquisition: None };
+        case.save_evidence(&rec).unwrap();
+        let a = kokino_analysis::analyze(&ev, &mut |_, _, _| true).unwrap();
+        let l = st.put(&cid, "e1", a, ev);
+        let file = l.analysis.filesystems[0].files.iter().position(|r| r.e.path == "/hello.txt").unwrap();
+        let mut fields = serde_json::Map::new();
+        fields.insert("server".into(), json!("198.51.100.7:443"));
+        let rows = vec![
+            Row { fi: 0, file, path: "/hello.txt".into(), time: "2026-10-20T08:30:00Z".into(), what: "connected to https://c2.lab.test/beacon".into(), detail: "test".into(), fields },
+            Row { fi: 0, file, path: "/hello.txt".into(), time: String::new(), what: "undated".into(), ..Default::default() },
+        ];
+        let res = PluginResults { schema: kokino_analysis::plugins::PLUGIN_SCHEMA, runs: vec![PluginRun { plugin: "t".into(), name: "Test plugin".into(), rows, ..Default::default() }], ..Default::default() };
+        let path = case.plugins_path("e1").unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        kokino_core::case::write_json(&path, &res).unwrap();
+        // Watchlist: the IP in a field, the domain in the text.
+        let (list, _) = crate::watchlist::parse("198.51.100.7\nlab.test\n");
+        let r = crate::watchlist::sweep(&st, &cid, &list).unwrap();
+        for m in &r.results {
+            let h: Vec<_> = m.hits.iter().filter(|h| h.what == "plugin").collect();
+            assert_eq!(h.len(), 1, "{:?}: {:?}", m.indicator, m.hits);
+            assert_eq!((h[0].file, h[0].time.as_str()), (Some(file), "2026-10-20T08:30:00.0000000Z"));
+        }
+        // Timelines: the dated row, in order; the undated one is not there.
+        let q = |only: &str| TimelineQ { q: None, from: None, to: None, only: Some(only.into()), offset: Some(0), limit: Some(3000) };
+        let page = case_timeline_page(&st, &cid, &q("")).unwrap();
+        let items = page["items"].as_array().unwrap();
+        let pl: Vec<&Value> = items.iter().filter(|x| x["plugin"] == true).collect();
+        assert_eq!(pl.len(), 1);
+        assert_eq!((pl[0]["src"].as_str(), pl[0]["file"].as_u64(), pl[0]["evidence"].as_str()), (Some("PLUGIN"), Some(file as u64), Some("e1")));
+        let t: Vec<&str> = items.iter().map(|x| x["t"].as_str().unwrap()).collect();
+        assert!(t.windows(2).all(|w| w[0] <= w[1]));
+        let only = case_timeline_page(&st, &cid, &q("plugin")).unwrap();
+        assert_eq!(only["total"], 1);
+        assert_eq!(case_timeline_page(&st, &cid, &q("deleted")).unwrap()["items"].as_array().unwrap().iter().filter(|x| x["plugin"] == true).count(), 0);
         std::fs::remove_dir_all(&root).ok();
     }
 

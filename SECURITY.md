@@ -210,7 +210,13 @@ Plugins and UDF sessions (1.5.0):
 | `plugin` | what a plugin prints (one object with rows and notes, or one row per line) and the patterns that choose its files | 10 min | 32,622,403 | none |
 | `optical` | again, with a CD-R image holding two sessions' VATs (files of the earlier session walked through its own VAT) | 10 min | 1,140,617 | none |
 
-In all: 749,186,152 inputs over 41 targets, and 40 distinct problems
+JPEGs in three pieces (after 1.5.0):
+
+| Target | What it covers | Rounds | Inputs in all | Distinct problems found |
+|---|---|---|--:|---|
+| `carve` | again, with middle pieces kept while looking for the last one and three-piece joins | 10 min | 71,875,548 | none |
+
+In all: 821,061,700 inputs over 41 targets, and 40 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed

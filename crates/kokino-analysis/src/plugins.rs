@@ -237,6 +237,52 @@ pub struct PluginResults {
     pub runs: Vec<PluginRun>,
 }
 
+/// A row's time as a FILETIME: ISO 8601 with a zone or Z, or without one
+/// (taken as UTC), or a date alone (midnight UTC).
+pub fn row_time(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.len() < 10 {
+        return None;
+    }
+    if let Ok(t) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(kokino_core::time::datetime_to_filetime(t.with_timezone(&chrono::Utc)));
+    }
+    for f in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"] {
+        if let Ok(t) = chrono::NaiveDateTime::parse_from_str(s, f) {
+            return Some(kokino_core::time::datetime_to_filetime(t.and_utc()));
+        }
+    }
+    chrono::NaiveDate::parse_from_str(s.get(..10)?, "%Y-%m-%d").ok().and_then(|d| d.and_hms_opt(0, 0, 0)).map(|t| kokino_core::time::datetime_to_filetime(t.and_utc()))
+}
+
+/// The dated rows of a plugin run, in time order, for the timelines:
+/// (time, run, row).
+#[derive(Debug, Default)]
+pub struct Dated {
+    pub results: PluginResults,
+    pub events: Vec<(u64, u32, u32)>,
+}
+
+impl Dated {
+    pub fn new(results: PluginResults) -> Dated {
+        let mut events = vec![];
+        for (ri, run) in results.runs.iter().enumerate() {
+            for (k, row) in run.rows.iter().enumerate() {
+                if let Some(t) = row_time(&row.time).filter(|&t| t > 0) {
+                    events.push((t, ri as u32, k as u32));
+                }
+            }
+        }
+        events.sort_unstable();
+        Dated { results, events }
+    }
+
+    pub fn row(&self, run: u32, row: u32) -> Option<(&PluginRun, &Row)> {
+        let r = self.results.runs.get(run as usize)?;
+        Some((r, r.rows.get(row as usize)?))
+    }
+}
+
 /// Runs `plugins` over every matching file of the analyzed evidence.
 pub fn run(ev: &Evidence, analysis: &Analysis, plugins: &[Plugin], progress: Progress) -> anyhow::Result<PluginResults> {
     let mut res = PluginResults { schema: PLUGIN_SCHEMA, tool_version: kokino_core::TOOL_VERSION.into(), ran_at: kokino_core::time::now_iso(), runs: vec![] };
@@ -535,6 +581,19 @@ mod tests {
         assert!(r.rows.iter().all(|x| x.what == "seen" && x.time == "2026-10-20T08:05:30Z"));
         assert_eq!(r.files, 4);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn row_times() {
+        let iso = kokino_core::time::filetime_to_iso;
+        assert_eq!(iso(row_time("2026-10-20T08:05:30Z").unwrap()), "2026-10-20T08:05:30.0000000Z");
+        assert_eq!(iso(row_time("2026-10-20T10:05:30+02:00").unwrap()), "2026-10-20T08:05:30.0000000Z");
+        assert_eq!(iso(row_time("2026-10-20 08:05:30").unwrap()), "2026-10-20T08:05:30.0000000Z");
+        assert_eq!(iso(row_time("2026-10-20").unwrap()), "2026-10-20T00:00:00.0000000Z");
+        assert!(row_time("").is_none() && row_time("yesterday").is_none());
+        let res = PluginResults { runs: vec![PluginRun { rows: vec![Row { time: "2026-10-21".into(), ..Default::default() }, Row::default(), Row { time: "2026-10-20".into(), ..Default::default() }], ..Default::default() }], ..Default::default() };
+        let d = Dated::new(res);
+        assert_eq!(d.events.iter().map(|e| e.2).collect::<Vec<_>>(), [2, 0]);
     }
 
     #[test]

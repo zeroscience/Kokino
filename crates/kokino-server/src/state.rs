@@ -69,6 +69,7 @@ pub struct AppState {
     hash_cache: Mutex<HashMap<String, Arc<HashStatus>>>,
     /// The folder of plugins the administrator allowed (`serve --plugins`).
     pub plugins: Option<PathBuf>,
+    plugin_cache: Mutex<HashMap<String, Arc<kokino_analysis::plugins::Dated>>>,
 }
 
 /// Hash analysis of one evidence item, indexed for file listings.
@@ -124,6 +125,7 @@ impl AppState {
             bookmarks: Mutex::default(),
             cache: Mutex::default(),
             plugins: None,
+            plugin_cache: Mutex::default(),
         })
     }
 
@@ -154,6 +156,24 @@ impl AppState {
         let h = Arc::new(HashStatus::new(fh));
         self.hash_cache.lock().unwrap().insert(key, h.clone());
         Some(h)
+    }
+
+    /// The rows plugins reported for an evidence item, dated rows indexed by
+    /// time; None before plugins ran on it.
+    pub fn plugin_rows(&self, cid: &str, eid: &str) -> Option<Arc<kokino_analysis::plugins::Dated>> {
+        let key = format!("{}/{}", cid, eid);
+        if let Some(d) = self.plugin_cache.lock().unwrap().get(&key) {
+            return Some(d.clone());
+        }
+        let res = crate::jobs::load_plugins(&self.case(cid).ok()?, eid)?;
+        let d = Arc::new(kokino_analysis::plugins::Dated::new(res));
+        self.plugin_cache.lock().unwrap().insert(key, d.clone());
+        Some(d)
+    }
+
+    /// Forgets cached plugin rows (after a new run).
+    pub fn forget_plugin_rows(&self, cid: &str, eid: &str) {
+        self.plugin_cache.lock().unwrap().remove(&format!("{}/{}", cid, eid));
     }
 
     pub fn put_hashes(&self, cid: &str, eid: &str, fh: FileHashes) {

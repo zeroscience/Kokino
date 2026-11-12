@@ -11,7 +11,8 @@
 //!   cookies of the domain and its subdomains, email addresses at the
 //!   domain, and files of that exact name ("ld.so.preload" looks like a
 //!   domain);
-//! - file names (exact, any case) and path fragments; deleted files included.
+//! - file names (exact, any case) and path fragments; deleted files included;
+//! - and in the rows plugins reported (their text and fields, word by word).
 //!
 //! Each sweep is compared with the one before it: hits it did not have are
 //! marked new.
@@ -30,7 +31,7 @@ pub struct Hit {
     pub evidence: String,
     pub evidence_name: String,
     pub fi: usize,
-    /// "file", "web", "mail", "event", "logon"
+    /// "file", "web", "mail", "event", "logon", "plugin"
     pub what: String,
     pub detail: String,
     /// File index for files, so the GUI can open it.
@@ -172,9 +173,66 @@ pub fn sweep(st: &AppState, cid: &str, list: &[Indicator]) -> anyhow::Result<Rep
                 add(&m.ip(&x.from), fi, "logon", &|| format!("{} {} from {} ({})", x.kind, x.user, x.from, x.source), None, iso(x.time), false);
             }
         }
+        // What plugins reported: every word of a row's text and fields.
+        if let Some(p) = st.plugin_rows(cid, &rec.id) {
+            for run in &p.results.runs {
+                for row in &run.rows {
+                    let hit = plugin_row_hits(&m, row);
+                    if !hit.is_empty() {
+                        let t = kokino_analysis::plugins::row_time(&row.time).map(iso).unwrap_or_default();
+                        add(&hit, row.fi, "plugin", &|| format!("{}: {} ({})", run.name, row.what, row.path), Some(row.file), t, false);
+                    }
+                }
+            }
+        }
     }
     rep.results = results;
     Ok(rep)
+}
+
+/// Indicators found in a plugin row, word by word: addresses, URLs and hosts,
+/// email addresses, hashes, and paths or names.
+fn plugin_row_hits(m: &Matcher, row: &kokino_analysis::plugins::Row) -> Vec<usize> {
+    let mut texts: Vec<&str> = vec![&row.what, &row.detail];
+    for v in row.fields.values() {
+        if let Some(s) = v.as_str() {
+            texts.push(s);
+        }
+    }
+    let mut out = vec![];
+    for t in texts {
+        for w in t.split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}')).take(10_000) {
+            let w = w.trim_matches(|c: char| matches!(c, '.' | ':' | '|'));
+            if w.len() < 3 {
+                continue;
+            }
+            out.extend(m.ip(w));
+            // host:port, [v6]:port
+            if w.contains(':') && !w.contains("://") {
+                let h = kokino_analysis::ioc::host(w);
+                if h != w {
+                    out.extend(m.host(h.trim_start_matches('[').trim_end_matches(']')));
+                }
+            }
+            if w.contains("://") {
+                out.extend(m.url(w));
+            } else if w.contains('@') {
+                out.extend(m.mail_field(w));
+            } else if w.contains('.') && !w.contains('/') && !w.contains('\\') {
+                out.extend(m.host(w));
+            }
+            if matches!(w.len(), 32 | 40 | 64) && w.chars().all(|c| c.is_ascii_hexdigit()) {
+                out.extend(m.hash(w));
+            }
+            if w.contains('/') || w.contains('\\') || w.contains('.') {
+                let name = w.rsplit(['/', '\\']).next().unwrap_or(w);
+                out.extend(m.file(name, &w.replace('\\', "/")));
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 /// Marks the hits the previous sweep did not have (all of them for an

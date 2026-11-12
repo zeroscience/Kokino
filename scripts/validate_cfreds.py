@@ -16,6 +16,12 @@ For every deleted file Kokino lists, this script checks:
 and compares the number listed with NIST's "Metadata found".
 
     python scripts/validate_cfreds.py target/validation/cfreds [kokino] [fat|xfat|ntfs|ext]
+        [--record FILE] [--expect FILE]
+
+--record adds each image's key numbers to FILE (JSON, one entry per image);
+--expect compares them with FILE and exits with 1 if any differs, listing
+every difference: the check CI runs every week
+(.github/workflows/validation.yml, images fetched by scripts/fetch_cfreds.py).
 
 The folder holds the downloaded dfr-*.dd.bz2 images and the layout PDF.
 Each image is expanded to a temporary 1 GB file, analyzed and deleted again.
@@ -82,7 +88,23 @@ def same_name(kokino, tagged):
     return a == b or (len(a) == len(b) and a[1:] == b[1:])
 
 
+# The numbers that must not change between runs.
+KEYS = ["listed", "tagged", "name_ok", "complete", "blocks_good", "blocks", "incomplete", "wrong_unwarned", "no_content", "names_found", "journal_recovered"]
+
+
+def key_numbers(r):
+    return {k: r[k] for k in KEYS if k in r}
+
+
 def main():
+    args = sys.argv[1:]
+    opts = {}
+    for flag in ("--record", "--expect"):
+        if flag in args:
+            i = args.index(flag)
+            opts[flag] = args[i + 1]
+            del args[i:i + 2]
+    sys.argv = [sys.argv[0]] + args
     folder = sys.argv[1]
     exe = sys.argv[2] if len(sys.argv) > 2 else os.path.join(HERE, "target", "release", "kokino.exe" if os.name == "nt" else "kokino")
     meta = metadata_found(layout_text(folder))
@@ -164,6 +186,36 @@ def main():
             name, r["nist_metadata_found"], r["listed"], r["name_ok"], r["tagged"], r["complete"], r["blocks_good"], r["blocks"], r["incomplete"], r["other_file"], r["incomplete_warned"], r["wrong_unwarned"], r["untagged"], r["no_content"],
             " ".join("fs%s:%d/%d/%d" % (k, v["listed"], v["complete"], v["no_content"]) for k, v in sorted(r["by_fs"].items()))))
     json.dump(results, open(os.path.join(folder, "cfreds-results.json"), "w"), indent=1)
+    if "--record" in opts:
+        p = opts["--record"]
+        rec = json.load(open(p, encoding="utf-8")) if os.path.exists(p) else {}
+        rec.update({r["image"]: key_numbers(r) for r in results})
+        with open(p, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(dict(sorted(rec.items())), f, indent=1, sort_keys=True)
+            f.write("\n")
+        print("recorded %d image(s) in %s" % (len(results), p))
+    if "--expect" in opts:
+        want = json.load(open(opts["--expect"], encoding="utf-8"))
+        diffs = []
+        seen = set()
+        for r in results:
+            seen.add(r["image"])
+            w = want.get(r["image"])
+            if w is None:
+                diffs.append("%s: no recorded numbers" % r["image"])
+                continue
+            got = key_numbers(r)
+            for k in sorted(set(w) | set(got)):
+                if w.get(k) != got.get(k):
+                    diffs.append("%s %s: was %s, now %s" % (r["image"], k, w.get(k), got.get(k)))
+        kinds = {r["image"].split("-")[0] for r in results}
+        missing = [k for k in want if k.split("-")[0] in kinds and k not in seen]
+        diffs += ["%s: recorded but not checked (image missing?)" % k for k in missing]
+        if diffs:
+            print("%d difference(s) from %s:" % (len(diffs), opts["--expect"]))
+            print("\n".join(diffs))
+            sys.exit(1)
+        print("all %d image(s) as recorded" % len(results))
 
 
 if __name__ == "__main__":

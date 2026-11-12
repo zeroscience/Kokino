@@ -63,7 +63,9 @@ Kokino version and what the file system or artifact is.
 - [x] Golden results: every test image's key numbers checked on every commit, on Windows, Linux and macOS (1.4.0)
 - [x] Watchlists from STIX 2.1 and MISP exports, IP networks, and each sweep compared with the last (1.5.0)
 - [x] Plugins: separate programs for artifacts Kokino does not read, each run audited with the plugin's fingerprint (1.5.0)
-- [x] Carving: JPEGs in two pieces joined again (1.5.0)
+- [x] Carving: JPEGs in two pieces joined again (1.5.0), and in three pieces
+- [x] Plugin rows on the timelines and in the watchlist
+- [x] NIST CFReDS validation every week in CI, against recorded numbers
 - [x] Dates day first (dd-mm-yyyy) in the GUI, reports and summaries; a website (1.5.0)
 - [x] Release SBOM (CycloneDX) and signed build provenance (1.3.1)
 
@@ -76,7 +78,6 @@ start or be trusted; most items are blocked on test data rather than code.
 - [ ] **HFS+ and APFS on disks from real Macs.** Needs: images of real Mac disks (current tests use images made with Apple's tools). Risk: the parsers are complete for what the specification describes; real disks show what it does not.
 - [ ] **macOS on a real Mac image**: KnowledgeC, FSEvents and launchd across macOS versions. Needs: the same images.
 - [ ] **UDF 2.50 metadata partition on a real disc** (Blu-ray). Needs: a disc image.
-- [ ] **CFReDS validation in CI.** The 83 NIST images are checked by hand before each release ([VALIDATION.md](VALIDATION.md)); a scheduled CI job could download and check them. Needs: a way to cache the images in CI (each is about 1 GB expanded).
 
 ### 2. Encrypted and compressed data
 - [ ] **APFS: FileVault, snapshots and free space.** Needs: an encrypted test image with a known password; the keybag format (documented by Apple and in libfsapfs).
@@ -95,11 +96,10 @@ start or be trusted; most items are blocked on test data rather than code.
 - [ ] **ESXi snapshots from a real host**: VMFSSPARSE and SESPARSE are checked on images built to QEMU's reading of the formats. Needs: snapshots from an ESXi host.
 - [ ] **Written CDs and DVDs from real drives**: UDF sparable and virtual partitions are checked on images built from the specification. Needs: images of real CD-R, DVD-R and DVD-RW discs.
 - [ ] **macOS unified logs** (tracev3).
-- [ ] **Carving of other fragmented files**, and JPEGs in three or more pieces or progressive JPEGs.
+- [ ] **Carving of other fragmented files**, and JPEGs in four or more pieces or progressive JPEGs.
 
 ### 5. Workflow
 - [ ] **Code-signed Windows and macOS packages.** Needs: a code-signing certificate and an Apple Developer ID; no code.
-- [ ] **Plugin rows on the timeline and in the watchlist**, so what a plugin reports is searched and ordered with everything else.
 - [ ] **Optional AI summaries** that only cite linked evidence, off by default and never sending evidence anywhere without the examiner's choice.
 
 Nothing above is promised for a date. If one of these matters to a case you

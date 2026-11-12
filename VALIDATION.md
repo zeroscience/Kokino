@@ -624,6 +624,20 @@ After a deliberate change, review the differences, record the new results
 with `KOKINO_BLESS=1 cargo test -p kokino-analysis --test golden` and commit
 them with the change that explains them.
 
+## Every week in CI
+
+The CFReDS check above runs every week, and on demand, on GitHub
+(`.github/workflows/validation.yml`): `scripts/fetch_cfreds.py` downloads
+the 83 images and NIST's layout document from cfreds-archive.nist.gov (kept
+in the CI cache between runs), and `scripts/validate_cfreds.py --expect
+tests/validation/cfreds-expected.json` analyzes each with the current code
+and compares, per image, the files listed, test files tagged and named
+right, files complete, blocks right, incomplete files, wrong content without
+a warning, deleted names found and files recovered through the journal with
+the recorded numbers. Any difference fails the run and is listed in its log.
+After a deliberate change, `--record` writes the new numbers, committed with
+the change that explains them.
+
 ## Repeating it
 
 Download (about 240 MB) into `target/validation/` (ignored by git):

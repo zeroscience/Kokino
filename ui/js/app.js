@@ -574,7 +574,7 @@ async function caseTimelineView(c) {
   const to = day(`to ${datePattern()}`);
   let only = "";
   const seg = h("div.seg");
-  const opts = [["", "All"], ["web", "Web"], ["windows", "System"], ["deleted", "Deleted"], ["flagged", "Flagged"]];
+  const opts = [["", "All"], ["web", "Web"], ["windows", "System"], ["plugin", "Plugins"], ["deleted", "Deleted"], ["flagged", "Flagged"]];
   const drawSeg = () => seg.replaceChildren(...opts.map(([k, l]) => h("button", { class: only === k ? "on" : null, onclick: () => { only = k; drawSeg(); reload(); } }, l)));
   drawSeg();
   const tbody = h("tbody");
@@ -594,7 +594,7 @@ async function caseTimelineView(c) {
     const params = new URLSearchParams({ q: q.value, from: f ? dayStart(f) : "", to: t ? dayStart(next(t)) : "", only, offset, limit: 400 });
     const r = await api(`/cases/${cid}/timeline?${params}`);
     const rows = r.items.map((e) => {
-      const art = e.web || e.windows;
+      const art = e.web || e.windows || e.plugin;
       const sec = { EXEC: "exec", OPEN: "files", USB: "devices", NET: "devices", INST: "software", USN: "journal", REG: "registry" }[e.src] || "events";
       const click = e.web ? () => go(`/c/${cid}/e/${e.evidence}/web?fi=${e.fi}`)
         : e.windows ? () => go(`/c/${cid}/e/${e.evidence}/system?fi=${e.fi}&sec=${sec}`)
@@ -1209,7 +1209,7 @@ async function timelineTab(ctx) {
   let only = ctx.q.only || "";
   const seg = h("div.seg");
   const ntfs = !ctx.fs || isNtfs(ctx.fs.volume.fs_label);
-  const opts = [["", "All"], ...(ntfs ? [["si", "$SI"], ["fn", "$FN"]] : []), ["web", "Web"], ["windows", ntfs ? "Windows" : "System"], ["deleted", "Deleted"], ["flagged", "Flagged"]];
+  const opts = [["", "All"], ...(ntfs ? [["si", "$SI"], ["fn", "$FN"]] : []), ["web", "Web"], ["windows", ntfs ? "Windows" : "System"], ["plugin", "Plugins"], ["deleted", "Deleted"], ["flagged", "Flagged"]];
   const drawSeg = () => seg.replaceChildren(...opts.map(([k, l]) => h("button", { class: only === k ? "on" : null, onclick: () => { only = k; drawSeg(); reload(); } }, l)));
   drawSeg();
   const tbody = h("tbody");
@@ -1231,7 +1231,7 @@ async function timelineTab(ctx) {
     total = r.total;
     const WIN = { EXEC: "Program run", OPEN: "File or folder opened", USB: "USB device", INST: "Program installed", NET: "Network", EVT: "Event", USN: "File change (change journal)", REG: "Registry key deleted", MAIL: "Email" };
     const rows = r.items.map((e) => {
-      const art = e.web || e.windows;
+      const art = e.web || e.windows || e.plugin;
       const click = e.web ? () => webDetail(e.src === "DL" ? "Download" : e.src === "SEARCH" ? "Search" : "Page visit", [[`Time (${zoneName()})`, ts(e.t)], ["What", e.path], ["Where", e.detail]])
         : e.windows ? () => webDetail(WIN[e.src] || e.src, [[`Time (${zoneName()})`, ts(e.t)], ["What", e.path], ["Detail", e.detail], ["More", h("a", { href: `#/c/${ctx.cid}/e/${ctx.eid}/system?fi=${ctx.fi}&sec=${{ EXEC: "exec", OPEN: "files", USB: "devices", NET: "devices", INST: "software", USN: "journal", REG: "registry" }[e.src] || "events"}`, onclick: closeModal }, "Open in the System summary")]])
         : () => fileDrawer(ctx, e.idx);

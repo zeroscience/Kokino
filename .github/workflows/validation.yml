@@ -1,0 +1,47 @@
+name: Validation
+
+# Every week, and on demand: the NIST CFReDS deleted file recovery images
+# (83 images: FAT, exFAT, NTFS and ext2/3/4) analyzed with the current code
+# and compared with the numbers recorded in tests/validation/cfreds-expected.json
+# (scripts/validate_cfreds.py --expect). Any difference fails the run and is
+# listed in its log. After a deliberate change, record the new numbers with
+# --record and commit them with the change.
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cfreds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked -p kokino-cli
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "pymupdf==1.27.2.2"
+      - name: NIST images (cached between runs)
+        uses: actions/cache@v4
+        with:
+          path: cfreds
+          key: cfreds-${{ hashFiles('tests/validation/cfreds-expected.json') }}
+          restore-keys: cfreds-
+      - run: python scripts/fetch_cfreds.py cfreds
+      - name: FAT, exFAT and NTFS
+        run: |
+          mkdir -p cfreds-fat cfreds-ext
+          for f in cfreds/dfr-*-ext.dd.bz2; do ln -sf "$PWD/$f" cfreds-ext/; done
+          for f in cfreds/dfr-*.dd.bz2; do case "$f" in *-ext.dd.bz2) ;; *) ln -sf "$PWD/$f" cfreds-fat/ ;; esac; done
+          cp cfreds/setup-july-10-2012.pdf cfreds-fat/
+          cp cfreds/setup-july-10-2012.pdf cfreds-ext/
+          python scripts/validate_cfreds.py cfreds-fat "$PWD/target/release/kokino" --expect tests/validation/cfreds-expected.json
+      - name: ext2, ext3 and ext4
+        run: python scripts/validate_cfreds.py cfreds-ext "$PWD/target/release/kokino" ext --expect tests/validation/cfreds-expected.json

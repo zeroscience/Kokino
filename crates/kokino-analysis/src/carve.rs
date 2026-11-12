@@ -11,12 +11,13 @@
 //! partitions, and volumes whose file system is not parsed (carved whole).
 //! Files are assumed contiguous; one that runs past the end of its free
 //! region is kept but marked, because its tail may belong to another file
-//! or the original was fragmented. JPEG pictures split in two pieces are
-//! joined again (bifragment gap carving): where the compressed data stops
-//! looking like JPEG data, the second piece is looked for further on (a run
-//! of sectors that look like JPEG data, ending with the end-of-image
-//! marker), and a join is kept only when the joined picture decodes into
-//! exactly the blocks its header promises and ends where its data ends.
+//! or the original was fragmented. JPEG pictures split in two or three
+//! pieces are joined again (gap carving): where the compressed data stops
+//! looking like JPEG data, the last piece is looked for further on (a run of
+//! sectors that look like JPEG data, ending with the end-of-image marker),
+//! with a run of JPEG data between as a middle piece when two pieces do not
+//! fit, and a join is kept only when the joined picture decodes into exactly
+//! the blocks its header promises and ends where its data ends.
 //!
 //! Nothing is copied: results are offsets and lengths in the image, with
 //! MD5 and SHA-256 of the carved bytes. Exports read from the image.
@@ -104,26 +105,35 @@ pub struct Carved {
     /// which are not part of it. `len` counts the file's own bytes only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gap: Option<(u64, u64)>,
+    /// In three pieces: the bytes between the second and the third.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gap2: Option<(u64, u64)>,
 }
 
 impl Carved {
     /// The pieces of the file: (start, length), in order.
     pub fn pieces(&self) -> Vec<(u64, u64)> {
-        match self.gap {
-            Some((g, glen)) if g > self.offset && g - self.offset < self.len => {
-                let first = g - self.offset;
-                vec![(self.offset, first), (g.saturating_add(glen), self.len - first)]
+        let Some((g, glen)) = self.gap.filter(|&(g, _)| g > self.offset && g - self.offset < self.len) else {
+            return vec![(self.offset, self.len)];
+        };
+        let first = g - self.offset;
+        let second_at = g.saturating_add(glen);
+        match self.gap2 {
+            Some((g2, g2len)) if g2 > second_at && g2 - second_at < self.len - first => {
+                let second = g2 - second_at;
+                vec![(self.offset, first), (second_at, second), (g2.saturating_add(g2len), self.len - first - second)]
             }
-            _ => vec![(self.offset, self.len)],
+            _ => vec![(self.offset, first), (second_at, self.len - first)],
         }
     }
 
     /// "image offset 123", with the second piece when there is one.
     pub fn where_label(&self) -> String {
         let w = where_label(self.space, self.offset);
-        match self.pieces().get(1) {
-            Some((at, len)) => format!("{} ({} bytes), then {} bytes at {}", w, self.len - len, len, at),
-            None => w,
+        let p = self.pieces();
+        match p.len() {
+            1 => w,
+            _ => format!("{} ({} bytes), then {}", w, p[0].1, p[1..].iter().map(|(at, n)| format!("{} bytes at {}", n, at)).collect::<Vec<_>>().join(", then ")),
         }
     }
 }
@@ -516,9 +526,9 @@ fn look(b: &[u8]) -> Look {
 }
 
 /// A JPEG at `at` whose compressed data stops looking like JPEG data before
-/// its end: the second piece, joined. Returns (first piece length, second
-/// piece start, second piece length, dimensions).
-fn jpeg_two(src: &mut dyn Bytes, at: u64) -> Option<(u64, u64, u64, String)> {
+/// its end, joined from two or three pieces: the pieces (start, length) in
+/// order, and the dimensions.
+fn jpeg_two(src: &mut dyn Bytes, at: u64) -> Option<(Vec<(u64, u64)>, String)> {
     // The headers, up to the start of the compressed data.
     let head = src.read(at, 1 << 18);
     let mut p = 2usize;
@@ -569,8 +579,11 @@ fn jpeg_two(src: &mut dyn Bytes, at: u64) -> Option<(u64, u64, u64, String)> {
     if first_end <= data {
         return None;
     }
-    // Further on: sectors that end the picture, after a run of JPEG data.
+    // Further on: sectors that end the picture, after a run of JPEG data;
+    // runs that do not end it are kept as possible middle pieces.
     let mut tried = 0;
+    let mut joins = 0usize;
+    let mut middles: Vec<(u64, u64)> = vec![];
     let mut run_start: Option<u64> = None;
     let mut q = first_end + SECTOR;
     let limit = (first_end + MAX_GAP).min(src.size());
@@ -583,14 +596,24 @@ fn jpeg_two(src: &mut dyn Bytes, at: u64) -> Option<(u64, u64, u64, String)> {
             let here = q + k as u64 * SECTOR;
             // A new JPEG starts here: not a continuation.
             if sec.starts_with(&[0xFF, 0xD8, 0xFF]) {
-                run_start = None;
+                if let Some(s0) = run_start.take() {
+                    if middles.len() < MAX_MIDDLES {
+                        middles.push((s0, here - s0));
+                    }
+                }
                 continue;
             }
             match look(sec) {
                 Look::Data => {
                     run_start.get_or_insert(here);
                 }
-                Look::Foreign => run_start = None,
+                Look::Foreign => {
+                    if let Some(s0) = run_start.take() {
+                        if middles.len() < MAX_MIDDLES {
+                            middles.push((s0, here - s0));
+                        }
+                    }
+                }
                 Look::End(e) => {
                     let start = run_start.unwrap_or(here);
                     let end = here + e;
@@ -607,11 +630,28 @@ fn jpeg_two(src: &mut dyn Bytes, at: u64) -> Option<(u64, u64, u64, String)> {
                             if ss >= end {
                                 break;
                             }
-                            let mut joined = src.read(at, (fe - at) as usize);
-                            joined.extend(src.read(ss, (end - ss) as usize));
-                            if let Ok(j) = crate::photo::jpeg::parse(&joined) {
-                                if j.is_baseline() && crate::photo::jpeg::scan_fits(&joined, &j) {
-                                    return Some((fe - at, ss, end - ss, dims));
+                            joins += 1;
+                            if fits(src, &[(at, fe - at), (ss, end - ss)]) {
+                                return Some((vec![(at, fe - at), (ss, end - ss)], dims));
+                            }
+                        }
+                    }
+                    // Three pieces: a run of JPEG data between as the middle one.
+                    for &(ms, mlen) in middles.iter().rev() {
+                        for back in 0..2u64 {
+                            let fe = first_end.saturating_sub(back * SECTOR);
+                            if fe <= data || joins >= MAX_JOINS {
+                                break;
+                            }
+                            for fwd in 0..2u64 {
+                                let ss = start + fwd * SECTOR;
+                                if ss >= end || joins >= MAX_JOINS {
+                                    break;
+                                }
+                                joins += 1;
+                                let pieces = [(at, fe - at), (ms, mlen), (ss, end - ss)];
+                                if fits(src, &pieces) {
+                                    return Some((pieces.to_vec(), dims));
                                 }
                             }
                         }
@@ -633,6 +673,22 @@ pub fn fuzz_jpeg_two(d: &[u8]) {
     let mut s: &[u8] = d;
     let _ = jpeg_two(&mut s, 0);
 }
+
+/// Whether bytes read from `pieces` make a JPEG that decodes exactly.
+fn fits(src: &mut dyn Bytes, pieces: &[(u64, u64)]) -> bool {
+    let mut joined = vec![];
+    for &(at, n) in pieces {
+        joined.extend(src.read(at, n as usize));
+    }
+    match crate::photo::jpeg::parse(&joined) {
+        Ok(j) => j.is_baseline() && crate::photo::jpeg::scan_fits(&joined, &j),
+        Err(_) => false,
+    }
+}
+
+/// Middle pieces kept while looking for the last one, and joins tried.
+const MAX_MIDDLES: usize = 8;
+const MAX_JOINS: usize = 48;
 
 fn png(src: &mut dyn Bytes, at: u64) -> Option<Hit> {
     const MAX: u64 = 64 << 20;
@@ -1161,16 +1217,22 @@ pub fn carve(ev: &Evidence, analysis: &Analysis, progress: Progress) -> anyhow::
                     let at = p + i as u64;
                     let found = identify(&mut src, at);
                     if b.starts_with(&[0xFF, 0xD8, 0xFF]) && found.as_ref().is_none_or(|h| h.kind == "jpeg") {
-                        if let Some((first, second, second_len, dims)) = jpeg_two(&mut src, at) {
+                        if let Some((pieces, dims)) = jpeg_two(&mut src, at) {
                             let id = res.files.len() as u32;
-                            let mut note = format!("joined from two pieces: {} bytes here, {} bytes from offset {}", first, second_len, second);
+                            let first = pieces[0].1;
+                            let mut note = format!(
+                                "joined from {} pieces: {} bytes here, then {}",
+                                if pieces.len() == 2 { "two" } else { "three" },
+                                first,
+                                pieces[1..].iter().map(|(o, n)| format!("{} bytes from offset {}", n, o)).collect::<Vec<_>>().join(", then ")
+                            );
                             if let Some(path) = deleted_at.get(&(*space, at)) {
                                 note = format!("{}; same location as deleted file {}", note, path);
                             }
                             res.files.push(Carved {
                                 id,
                                 offset: at,
-                                len: first + second_len,
+                                len: pieces.iter().map(|p| p.1).sum(),
                                 kind: "jpeg".into(),
                                 ext: "jpg".into(),
                                 label: "JPEG image".into(),
@@ -1179,9 +1241,10 @@ pub fn carve(ev: &Evidence, analysis: &Analysis, progress: Progress) -> anyhow::
                                 note,
                                 region: label.clone(),
                                 fi: *fi,
-                                beyond_region: at + first > end || second + second_len > end,
+                                beyond_region: pieces.iter().any(|&(o, n)| o + n > end),
                                 space: *space,
-                                gap: Some((at + first, second - (at + first))),
+                                gap: Some((at + first, pieces[1].0 - (at + first))),
+                                gap2: pieces.get(2).map(|p| (pieces[1].0 + pieces[1].1, p.0 - (pieces[1].0 + pieces[1].1))),
                                 ..Default::default()
                             });
                             if res.files.len() >= MAX_FILES {
@@ -1516,8 +1579,9 @@ pub(crate) mod tests {
         };
         let disk = build(&cam[first..]);
         let mut src: &[u8] = &disk;
-        let (f, second, second_len, dims) = jpeg_two(&mut src, at as u64).expect("joined");
-        assert_eq!((f, second, second_len), (first as u64, (at + first + gap.len()) as u64, (cam.len() - first) as u64));
+        let (pieces, dims) = jpeg_two(&mut src, at as u64).expect("joined");
+        let (second, second_len) = pieces[1];
+        assert_eq!(pieces, vec![(at as u64, first as u64), ((at + first + gap.len()) as u64, (cam.len() - first) as u64)]);
         assert_eq!(dims, format!("{} x {}", j.width, j.height));
         // Read back through the pieces: the original file.
         let c = Carved { offset: at as u64, len: cam.len() as u64, gap: Some(((at + first) as u64, gap.len() as u64)), ..Default::default() };
@@ -1537,6 +1601,38 @@ pub(crate) mod tests {
         let wrong = build(&other[skip..]);
         let mut src: &[u8] = &wrong;
         assert!(jpeg_two(&mut src, at as u64).is_none());
+    }
+
+    /// camera.jpg in three pieces, in order on the disk, with text and zeros
+    /// between them.
+    #[test]
+    fn joins_a_jpeg_in_three_pieces() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/photo");
+        let Ok(cam) = std::fs::read(dir.join("camera.jpg")) else { return };
+        let at = 65_536usize;
+        let (a, b) = (40_960usize, 92_160usize);
+        let mut gap = b"Minutes of the lab.test meeting, nothing to see. ".repeat(12)[..512].to_vec();
+        gap.extend(vec![0u8; 512]);
+        let mut d = vec![0u8; at];
+        d.extend(&cam[..a]);
+        d.extend(&gap);
+        let mid = d.len();
+        d.extend(&cam[a..b]);
+        d.extend(&gap);
+        d.extend(&gap);
+        let last = d.len();
+        d.extend(&cam[b..]);
+        d.extend(vec![0u8; 8192]);
+        let mut src: &[u8] = &d;
+        let (pieces, _) = jpeg_two(&mut src, at as u64).expect("joined");
+        assert_eq!(pieces, vec![(at as u64, a as u64), (mid as u64, (b - a) as u64), (last as u64, (cam.len() - b) as u64)]);
+        let c = Carved { offset: at as u64, len: cam.len() as u64, gap: Some(((at + a) as u64, (mid - at - a) as u64)), gap2: Some(((mid + b - a) as u64, (last - mid - (b - a)) as u64)), ..Default::default() };
+        assert_eq!(c.pieces(), pieces);
+        let mut r = CarvedReader { r: Box::new(std::io::Cursor::new(d.clone())), pieces: c.pieces(), len: c.len, pos: 0 };
+        let mut back = vec![];
+        r.read_to_end(&mut back).unwrap();
+        assert_eq!(back, cam);
+        assert!(c.where_label().contains("then") && c.where_label().matches("bytes at").count() == 2, "{}", c.where_label());
     }
 
     #[test]
