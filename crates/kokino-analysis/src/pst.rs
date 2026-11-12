@@ -9,6 +9,11 @@
 //! - LTP: the heap on a node, property contexts and table contexts;
 //! - messaging: folders, messages, recipients and attachments.
 //!
+//! Deleted messages come back two ways: message nodes left in the unused
+//! slots of node index pages, and message property contexts found in the
+//! file's free space by their block trailers (size, signature, CRC, block
+//! id) whose blocks the index no longer lists.
+//!
 //! The file is read through `Read + Seek`, block by block, so large files
 //! are never held in memory. Every message node is listed, also one whose
 //! folder is gone. A message is rendered as an RFC 822 message (headers,
@@ -81,6 +86,37 @@ const MAX_NODES: usize = 4_000_000;
 /// Deleted messages recovered from one file, at most.
 const MAX_RECOVERED: usize = 10_000;
 const MAX_DATA: usize = 256 << 20;
+/// How much of a file is searched for blocks by their trailers.
+const MAX_SCAN: u64 = 16 << 30;
+/// Blocks found in free space that are looked at, at most.
+const MAX_ORPHANS: usize = 500_000;
+
+/// MS-PST 5.3: CRC-32 (reflected 0xEDB88320) from 0, not inverted.
+const CRC_TABLE: [u32; 256] = {
+    let mut t = [0u32; 256];
+    let mut i = 0;
+    while i < 256 {
+        let mut c = i as u32;
+        let mut k = 0;
+        while k < 8 {
+            c = if c & 1 != 0 { (c >> 1) ^ 0xEDB8_8320 } else { c >> 1 };
+            k += 1;
+        }
+        t[i] = c;
+        i += 1;
+    }
+    t
+};
+
+fn pst_crc(d: &[u8]) -> u32 {
+    d.iter().fold(0u32, |c, &b| CRC_TABLE[((c ^ b as u32) & 0xFF) as usize] ^ (c >> 8))
+}
+
+/// MS-PST 5.5: the block signature, from where the block is and its id.
+fn block_sig(ib: u64, bid: u64) -> u16 {
+    let x = ib ^ bid;
+    ((x >> 16) ^ x) as u16
+}
 const MAX_DEPTH: usize = 8;
 
 fn u16_at(b: &[u8], o: usize) -> u16 {
@@ -169,6 +205,9 @@ pub struct Pst<R> {
     /// Messages found only in the unused slots of node index pages: deleted
     /// from the index, their data still in the file.
     pub recovered: Arc<std::collections::BTreeSet<u32>>,
+    /// Of those, the ones found in the file's free space by their block
+    /// trailers (their folder is not known).
+    pub free_space: Arc<std::collections::BTreeSet<u32>>,
     pub notes: Vec<String>,
 }
 
@@ -225,7 +264,7 @@ impl<R> Pst<R> {
     /// The same file through another reader, sharing the indexes (no
     /// re-reading of the B-trees).
     pub fn with_reader<R2>(&self, r: R2) -> Pst<R2> {
-        Pst { r, len: self.len, wide: self.wide, big: self.big, crypt: self.crypt, version: self.version, ost: self.ost, bbt: self.bbt.clone(), nodes: self.nodes.clone(), recovered: self.recovered.clone(), notes: self.notes.clone() }
+        Pst { r, len: self.len, wide: self.wide, big: self.big, crypt: self.crypt, version: self.version, ost: self.ost, bbt: self.bbt.clone(), nodes: self.nodes.clone(), recovered: self.recovered.clone(), free_space: self.free_space.clone(), notes: self.notes.clone() }
     }
 }
 
@@ -245,7 +284,7 @@ impl<R: Read + Seek> Pst<R> {
             v => anyhow::bail!("PST format version {} is not supported", v),
         };
         let (nbt, bbt, crypt) = if wide { (u64_at(&h, 224), u64_at(&h, 240), h[513]) } else { (u32_at(&h, 188) as u64, u32_at(&h, 196) as u64, h[461]) };
-        let mut p = Pst { r, len, wide, big, crypt, version, ost: &h[8..10] == b"SO", bbt: Arc::new(HashMap::new()), nodes: Arc::new(BTreeMap::new()), recovered: Arc::default(), notes: vec![] };
+        let mut p = Pst { r, len, wide, big, crypt, version, ost: &h[8..10] == b"SO", bbt: Arc::new(HashMap::new()), nodes: Arc::new(BTreeMap::new()), recovered: Arc::default(), free_space: Arc::default(), notes: vec![] };
         if crypt > 2 {
             anyhow::bail!("unknown PST encryption {}", crypt);
         }
@@ -319,7 +358,230 @@ impl<R: Read + Seek> Pst<R> {
             p.notes.push(format!("{} deleted message(s) recovered from unused entries of the node index", found.len()));
             p.recovered = Arc::new(found);
         }
+        p.from_free_space()?;
         Ok(p)
+    }
+
+    /// Every block in the file found by its trailer: the block's size,
+    /// signature (from its place and id) and CRC must all agree.
+    fn trailer_blocks(&mut self) -> anyhow::Result<Vec<(u64, BlockRef)>> {
+        let (al, tl) = if self.big { (512u64, 24usize) } else if self.wide { (64, 16) } else { (64, 12) };
+        let max_slot: u64 = if self.big { 65_536 + 512 } else { 8_192 + 64 };
+        const CHUNK: u64 = 4 << 20;
+        let scan_end = self.len.min(MAX_SCAN);
+        if self.len > MAX_SCAN {
+            self.notes.push(format!("free space searched for deleted messages in the first {} GB only", MAX_SCAN >> 30));
+        }
+        let mut out = vec![];
+        let mut buf: Vec<u8> = vec![];
+        let mut pos = 0u64;
+        while pos < scan_end {
+            // The end of the previous chunk stays: a block may start there.
+            let keep = buf.len().min(max_slot as usize);
+            buf.drain(..buf.len() - keep);
+            let base = pos - keep as u64;
+            let old = buf.len();
+            let n = CHUNK.min(scan_end - pos) as usize;
+            buf.resize(old + n, 0);
+            self.r.seek(SeekFrom::Start(pos))?;
+            let got = read_full(&mut self.r, &mut buf[old..])?;
+            buf.truncate(old + got);
+            let mut end = (pos / al + 1) * al;
+            while end <= pos + got as u64 {
+                let t = (end - base) as usize - tl;
+                end += al;
+                let tr = &buf[t..t + tl];
+                let (cb, sig) = (u16_at(tr, 0) as u64, u16_at(tr, 2));
+                let (crc, bid, inflated) = match (self.big, self.wide) {
+                    (true, _) => (u32_at(tr, 4), u64_at(tr, 8), u16_at(tr, 18) as u32),
+                    (false, true) => (u32_at(tr, 4), u64_at(tr, 8), cb as u32),
+                    (false, false) => (u32_at(tr, 8), u32_at(tr, 4) as u64, cb as u32),
+                };
+                if cb == 0 || bid == 0 {
+                    continue;
+                }
+                let slot = (cb + tl as u64).div_ceil(al) * al;
+                let block_end = end - al;
+                let Some(ib) = block_end.checked_sub(slot) else { continue };
+                if slot > max_slot || ib < base || block_sig(ib, bid) != sig {
+                    continue;
+                }
+                let s = (ib - base) as usize;
+                if pst_crc(&buf[s..s + cb as usize]) != crc {
+                    continue;
+                }
+                out.push((bid & !1, BlockRef { ib, cb: cb as u32, inflated: inflated.max(cb as u32) }));
+            }
+            if got < n {
+                break;
+            }
+            pos += got as u64;
+        }
+        Ok(out)
+    }
+
+    /// Who a message is, to tell an old copy of one still in the file from
+    /// a deleted one: its search key, else its Internet message id, else
+    /// subject, sender and times.
+    fn identity(p: &Props) -> String {
+        if let Some(k) = p.get(&0x300B).filter(|x| !x.data.is_empty()) {
+            return format!("k:{:?}", k.data);
+        }
+        let s = |id: u16| p.get(&id).map(|x| x.text()).unwrap_or_default();
+        let t = |id: u16| p.get(&id).map(|x| x.int()).unwrap_or(0);
+        match s(0x1035) {
+            m if !m.is_empty() => format!("m:{}", m),
+            _ => format!("t:{}|{}|{}|{}", s(0x0037), s(0x0C1A), t(0x0E06), t(0x0039)),
+        }
+    }
+
+    /// Subnode ids a property context names (values kept in subnodes).
+    fn subnode_refs(&self, blocks: &[Vec<u8>]) -> Vec<u32> {
+        let Some((_, root)) = Self::hn(blocks) else { return vec![] };
+        let mut out: Vec<u32> = self
+            .bth(blocks, root)
+            .into_iter()
+            .filter(|(k, v)| k.len() == 2 && v.len() >= 6)
+            .filter_map(|(_, v)| {
+                let (ptype, val) = (u16_at(&v, 0), u32_at(&v, 2));
+                let fixed = matches!(ptype, 0x0002 | 0x0003 | 0x0004 | 0x000A | 0x000B);
+                (!fixed && val & 0x1F != 0).then_some(val)
+            })
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// Deleted messages in the file's free space: message property
+    /// contexts in blocks the block index no longer lists, found by their
+    /// trailers. A message whose values are in subnodes gets them only when
+    /// exactly one such subnode block names every one of them. Old copies
+    /// of messages still in the file (Outlook writes a changed message
+    /// anew) are left out, and of several copies of one deleted message the
+    /// newest is kept.
+    fn from_free_space(&mut self) -> anyhow::Result<()> {
+        let found = self.trailer_blocks()?;
+        let mut orphans: BTreeMap<u64, BlockRef> = BTreeMap::new();
+        for (bid, b) in found {
+            if !self.bbt.contains_key(&bid) && orphans.len() < MAX_ORPHANS {
+                orphans.entry(bid).or_insert(b);
+            }
+        }
+        if orphans.is_empty() {
+            return Ok(());
+        }
+        let mut bmap = (*self.bbt).clone();
+        for (bid, b) in &orphans {
+            bmap.insert(*bid, *b);
+        }
+        self.bbt = Arc::new(bmap);
+        // Data trees and subnode blocks among them.
+        let mut children = std::collections::HashSet::new();
+        let mut trees = vec![];
+        let mut sls: Vec<(u64, HashMap<u32, Node>)> = vec![];
+        for &bid in orphans.keys() {
+            if bid & 2 == 0 {
+                continue;
+            }
+            let Ok(d) = self.block(bid) else { continue };
+            match (d.first(), d.get(1)) {
+                (Some(1), Some(1)) => {
+                    let w = if self.wide { 8 } else { 4 };
+                    for i in 0..u16_at(&d, 2) as usize {
+                        let o = 8 + i * w;
+                        if o + w > d.len() {
+                            break;
+                        }
+                        children.insert(if self.wide { u64_at(&d, o) } else { u32_at(&d, o) as u64 } & !1);
+                    }
+                    trees.push(bid);
+                }
+                (Some(2), Some(0)) => {
+                    if let Ok(s) = self.subnodes(bid) {
+                        if s.values().all(|n| self.bbt.contains_key(&(n.data & !1))) {
+                            sls.push((bid, s));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut candidates: Vec<u64> = orphans.keys().copied().filter(|b| b & 2 == 0 && !children.contains(b)).collect();
+        candidates.extend(trees);
+        // Who the messages still in the file are.
+        let mut known = std::collections::HashSet::new();
+        let mut live_messages: Vec<Node> = self.nodes.values().filter(|n| n.nid & 0x1F == 4).copied().collect();
+        let mut keyed: BTreeMap<String, (u64, u64)> = BTreeMap::new(); // identity -> (data, sub)
+        for data in candidates {
+            if keyed.len() >= MAX_RECOVERED {
+                break;
+            }
+            let Ok(blocks) = self.blocks(data) else { continue };
+            if Self::hn(&blocks).is_none_or(|(sig, _)| sig != 0xBC) {
+                continue;
+            }
+            let Ok(p) = self.props_in(&blocks, &HashMap::new()) else { continue };
+            // A message (not an attachment, not a calendar exception).
+            let class = p.get(&0x001A).map(|c| c.text().to_ascii_uppercase()).unwrap_or_default();
+            if !class.starts_with("IPM.") || class.starts_with("IPM.OLE.CLASS") || p.contains_key(&0x3705) {
+                continue;
+            }
+            if known.is_empty() {
+                for n in live_messages.drain(..) {
+                    if let Ok(lp) = self.props(n.data, 0) {
+                        known.insert(Self::identity(&lp));
+                    }
+                }
+                known.insert(String::new());
+            }
+            let id = Self::identity(&p);
+            if known.contains(&id) {
+                continue;
+            }
+            let refs = self.subnode_refs(&blocks);
+            // Something to show: an empty draft or a hidden item is not.
+            let said = [0x0037u16, 0x0C1A, 0x0C1F, 0x0E04, 0x1000, 0x1013, 0x1009].iter().any(|id| p.get(id).is_some_and(|x| !x.data.is_empty()));
+            if !said && refs.is_empty() {
+                continue;
+            }
+            let mut sub = 0;
+            if !refs.is_empty() {
+                let fits: Vec<u64> = sls.iter().filter(|(_, s)| refs.iter().all(|r| s.contains_key(r))).map(|x| x.0).collect();
+                if fits.len() == 1 {
+                    sub = fits[0];
+                }
+            }
+            // Block ids grow with every write: the highest is the newest copy.
+            let e = keyed.entry(id).or_insert((data, sub));
+            if data > e.0 {
+                *e = (data, sub);
+            }
+        }
+        if keyed.is_empty() {
+            return Ok(());
+        }
+        let mut nmap = (*self.nodes).clone();
+        let mut recovered = (*self.recovered).clone();
+        let mut free = std::collections::BTreeSet::new();
+        let mut index = 0x0400_0000u32;
+        let mut entries: Vec<(u64, u64)> = keyed.into_values().collect();
+        entries.sort_unstable();
+        for (data, sub) in entries {
+            while nmap.contains_key(&((index << 5) | 4)) {
+                index += 1;
+            }
+            let nid = (index << 5) | 4;
+            index += 1;
+            nmap.insert(nid, Node { nid, data, sub, parent: 0 });
+            recovered.insert(nid);
+            free.insert(nid);
+        }
+        self.notes.push(format!("{} deleted message(s) recovered from the file's free space by their block trailers", free.len()));
+        self.nodes = Arc::new(nmap);
+        self.recovered = Arc::new(recovered);
+        self.free_space = Arc::new(free);
+        Ok(())
     }
 
     fn page_size(&self) -> usize {
@@ -1096,10 +1358,20 @@ pub(crate) mod tests {
                 self.file.push(0);
             }
             let ib = self.file.len() as u64;
+            let slot = (enc.len() + 16).div_ceil(64) * 64;
             self.file.extend(&enc);
-            self.file.extend([0u8; 16]); // block trailer (not read)
+            self.file.resize(ib as usize + slot - 16, 0);
+            le(&mut self.file, enc.len() as u64, 2);
+            le(&mut self.file, block_sig(ib, bid) as u64, 2);
+            le(&mut self.file, pst_crc(&enc) as u64, 4);
+            le(&mut self.file, bid, 8);
             self.bbt.push((bid, ib, data.len() as u16));
             bid
+        }
+
+        /// Takes the last block out of the block index (its bytes stay).
+        pub(crate) fn forget_last(&mut self) {
+            self.bbt.pop();
         }
 
         /// A property context in one block (values over 3 KB in subnodes,
@@ -1406,6 +1678,61 @@ pub(crate) mod tests {
         assert!(p.recovered.is_empty());
     }
 
+    /// Message 3 deleted with nothing left in the index: neither its node
+    /// nor its blocks. An old copy of message 1 (same message id) is in free
+    /// space too, and must not come back as a deleted message.
+    #[test]
+    fn recovers_deleted_messages_from_free_space() {
+        let mut b = Builder::new();
+        let mut none = vec![];
+        let root = b.pc(&[(0x3001, V::S(""))], &mut none);
+        b.node(0x122, root, 0, 0x122);
+        let inbox = b.pc(&[(0x3001, V::S("Inbox"))], &mut none);
+        b.node(0x8082, inbox, 0, 0x122);
+        let m1 = [(0x001A, V::S("IPM.Note")), (0x0037, V::S("Q3 numbers")), (0x0C1A, V::S("Alice Lab")), (0x0E06, V::T(FT)), (0x1035, V::S("<q3@lab.test>"))];
+        let old = b.pc(&m1, &mut none);
+        b.forget_last();
+        let _ = old;
+        let live = b.pc(&m1, &mut none);
+        b.node(0x200024, live, 0, 0x8082);
+        // Message 3: its HTML body in a subnode, all of it forgotten.
+        let html: Vec<u8> = format!("<html><body>{}</body></html>", "Use sdelete on everything. ".repeat(160)).into_bytes();
+        let mut subs = vec![];
+        let m3 = b.pc(&[(0x001A, V::S("IPM.Note")), (0x0037, V::S("wipe the laptop")), (0x0C1A, V::S("Alice Lab")), (0x0E06, V::T(FT + 72_000_000_000)), (0x1013, V::B(html.clone()))], &mut subs);
+        b.forget_last();
+        let _ = m3;
+        // The HTML data block came before the PC; forget it too.
+        let html_bid = subs[0].1;
+        b.bbt.retain(|x| x.0 != html_bid);
+        let _sl = b.subnodes(&subs);
+        b.forget_last();
+        let d = b.finish();
+        if std::env::var_os("KOKINO_WRITE_SEEDS").is_some() {
+            let seeds = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../kokino-fuzz/seeds/pst");
+            std::fs::write(seeds.join("free-space.pst"), &d).unwrap();
+        }
+        let mut p = Pst::open(std::io::Cursor::new(&d), d.len() as u64).unwrap();
+        assert_eq!(p.free_space.len(), 1, "{:?}", p.notes);
+        let nid = *p.free_space.iter().next().unwrap();
+        assert!(p.recovered.contains(&nid));
+        assert_eq!(p.message_ids().len(), 2);
+        let (m, _) = p.message(nid).unwrap();
+        assert_eq!(m.subject, "wipe the laptop");
+        assert_eq!(m.html, html, "the body from its subnode");
+        assert_eq!(p.nodes[&nid].parent, 0);
+        assert!(p.notes.iter().any(|n| n.starts_with("1 deleted message(s) recovered from the file's free space")));
+        // The ordinary sample has nothing in free space.
+        let d = sample();
+        let p = Pst::open(std::io::Cursor::new(&d), d.len() as u64).unwrap();
+        assert!(p.free_space.is_empty());
+    }
+
+    #[test]
+    fn block_trailers_check_out() {
+        assert_eq!(pst_crc(b""), 0);
+        assert_eq!(block_sig(0x23000, 0x2496), 0x1494, "from a real 2013 OST");
+    }
+
     #[test]
     fn damaged_files_are_refused_or_skipped() {
         let mut d = sample();
@@ -1461,7 +1788,12 @@ mod validation {
                     }
                 }
             }
-            eprintln!("   {} messages unreadable", errors);
+            eprintln!("   {} messages unreadable, {} from free space", errors, pst.free_space.len());
+            for id in pst.free_space.clone().iter().copied().take(5) {
+                if let Ok((m, _)) = pst.message(id) {
+                    eprintln!("   free {:#x} {:?} {:?} from {:?} date {} msgid {:?} sub {:#x} atts {} text {:?}", id, m.class, m.subject, m.from, m.date, m.message_id, pst.nodes[&id].sub, m.attachments.len(), m.text().chars().take(60).collect::<String>());
+                }
+            }
         }
     }
 }

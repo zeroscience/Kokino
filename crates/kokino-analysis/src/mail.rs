@@ -599,8 +599,12 @@ fn pst_messages<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, f: &FileRow, file
             expunged: false,
             deleted: f.e.deleted || p.recovered.contains(&nid),
             folder: {
-                let f = folders.get(&parent).cloned().unwrap_or_else(|| "(folder not found)".into());
-                if p.recovered.contains(&nid) { format!("{} [recovered deleted item]", f) } else { f }
+                if p.free_space.contains(&nid) {
+                    "(free space of the file) [recovered deleted item]".to_string()
+                } else {
+                    let f = folders.get(&parent).cloned().unwrap_or_else(|| "(folder not found)".into());
+                    if p.recovered.contains(&nid) { format!("{} [recovered deleted item]", f) } else { f }
+                }
             },
         });
     }

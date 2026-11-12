@@ -53,7 +53,7 @@ pub const TARGETS: &[Target] = &[
     Target { name: "lznt1", run: lznt1, seeds: &["tests/fixtures/win/lznt1-text.lznt", "tests/fixtures/win/lznt1-long.lznt", "tests/fixtures/win/lznt1-mixed.lznt"] },
     Target { name: "doc", run: doc, seeds: &["crates/kokino-fuzz/seeds/doc"] },
     Target { name: "photo", run: photo, seeds: &["crates/kokino-fuzz/seeds/photo"] },
-    Target { name: "carve", run: carve, seeds: &["crates/kokino-fuzz/seeds/photo", "crates/kokino-fuzz/seeds/doc", "tests/fixtures/win/Users_alice_AppData_Roaming_Microsoft_Windows_Recent_keys.txt.lnk", "tests/fixtures/win/CMD.EXE-4A81B364.pf"] },
+    Target { name: "carve", run: carve, seeds: &["crates/kokino-fuzz/seeds/photo", "crates/kokino-fuzz/seeds/doc", "crates/kokino-fuzz/seeds/split", "tests/fixtures/win/Users_alice_AppData_Roaming_Microsoft_Windows_Recent_keys.txt.lnk", "tests/fixtures/win/CMD.EXE-4A81B364.pf"] },
     Target { name: "browser", run: browser, seeds: &["crates/kokino-fuzz/seeds/browser"] },
     Target { name: "strings", run: strings, seeds: &["crates/kokino-fuzz/seeds/doc", "tests/fixtures/win/Users_alice_NTUSER.DAT"] },
 ];

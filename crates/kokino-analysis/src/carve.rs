@@ -25,6 +25,11 @@
 //! pieces are joined through their central directory: where it is found
 //! says how far the second piece is from the first, the local headers say
 //! which entry the break falls in, and that entry's CRC says where.
+//! PDFs with a cross-reference table are joined the same way: where the
+//! table is found says how far the second piece is, the objects still
+//! where the table says are in the first piece, and the object the break
+//! falls in must read whole across it (a compressed stream must inflate
+//! with its checksum); a join is kept only when exactly one break fits.
 //!
 //! Nothing is copied: results are offsets and lengths in the image, with
 //! MD5 and SHA-256 of the carved bytes. Exports read from the image.
@@ -683,6 +688,11 @@ pub fn fuzz_jpeg_two(d: &[u8]) {
     let _ = png_two(&mut s, 0);
     let mut s: &[u8] = d;
     let _ = zip_two(&mut s, 0);
+    let mut s: &[u8] = d;
+    if let Some(h) = pdf(&mut s, 0) {
+        let _ = pdf_two(&mut s, 0, h.len);
+    }
+    let _ = pdf_obj_ok(d, 1);
 }
 
 fn png_crc(d: &[u8]) -> u32 {
@@ -953,6 +963,212 @@ fn zip_two(src: &mut dyn Bytes, at: u64) -> Option<(Vec<(u64, u64)>, FileKind, S
         }
     }
     None
+}
+
+/// The number at the start of `b` (after spaces), and where it ends.
+fn pdf_int(b: &[u8]) -> Option<(u64, usize)> {
+    let s = b.iter().take_while(|c| c.is_ascii_whitespace()).count();
+    let n = b[s..].iter().take_while(|c| c.is_ascii_digit()).count();
+    if n == 0 || n > 12 {
+        return None;
+    }
+    Some((std::str::from_utf8(&b[s..s + n]).ok()?.parse().ok()?, s + n))
+}
+
+/// Whether `b` begins "num gen obj".
+fn pdf_obj_head(b: &[u8], num: u64) -> bool {
+    let Some((n, i)) = pdf_int(b) else { return false };
+    let Some((_, j)) = pdf_int(&b[i..]) else { return false };
+    let rest = &b[i + j..];
+    let s = rest.iter().take_while(|c| c.is_ascii_whitespace()).count();
+    n == num && i < b.len() && b[i].is_ascii_whitespace() && rest[s..].starts_with(b"obj")
+}
+
+fn pdf_is_xref(src: &mut dyn Bytes, abs: u64) -> bool {
+    let h = src.read(abs, 5);
+    h.starts_with(b"xref") && h.get(4).is_some_and(|c| c.is_ascii_whitespace())
+}
+
+/// One cross-reference section at `abs`: (object number, offset) of the
+/// objects in use, and the offset of the previous section.
+fn pdf_xref(src: &mut dyn Bytes, abs: u64) -> Option<(Vec<(u64, u64)>, Option<u64>)> {
+    const MAX_ENTRIES: u64 = 200_000;
+    let head = src.read(abs, 64 << 10);
+    let mut p = 4usize;
+    let mut out = vec![];
+    let mut buf = head;
+    loop {
+        let s = buf[p..].iter().take_while(|c| c.is_ascii_whitespace()).count();
+        p += s;
+        if buf[p..].starts_with(b"trailer") {
+            break;
+        }
+        let (start, i) = pdf_int(&buf[p..])?;
+        let (count, j) = pdf_int(&buf[p + i..])?;
+        p += i + j;
+        if out.len() as u64 + count > MAX_ENTRIES {
+            return None;
+        }
+        let need = p + count as usize * 20 + 4096;
+        if need > buf.len() {
+            buf = src.read(abs, need);
+        }
+        for k in 0..count {
+            let (off, a) = pdf_int(&buf[p..])?;
+            let (_, b) = pdf_int(&buf[p + a..])?;
+            p += a + b;
+            let s = buf[p..].iter().take_while(|c| c.is_ascii_whitespace()).count();
+            p += s;
+            let t = *buf.get(p)?;
+            p += 1;
+            if t == b'n' && off > 0 {
+                out.push((start + k, off));
+            } else if t != b'f' {
+                return None;
+            }
+        }
+    }
+    let tr = &buf[p..buf.len().min(p + 4096)];
+    let prev = tr.windows(5).position(|w| w == b"/Prev").and_then(|i| pdf_int(&tr[i + 5..])).map(|x| x.0);
+    Some((out, prev))
+}
+
+/// Whether `b` is one whole indirect object: "num gen obj" ... "endobj",
+/// text outside its stream, and a compressed stream that inflates whole.
+/// None when it cannot tell (a stream that is not compressed).
+fn pdf_obj_ok(b: &[u8], num: u64) -> Option<bool> {
+    if !pdf_obj_head(b, num) {
+        return Some(false);
+    }
+    let t = b.len() - b.iter().rev().take_while(|c| c.is_ascii_whitespace()).count();
+    if !b[..t].ends_with(b"endobj") {
+        return Some(false);
+    }
+    let text = |x: &[u8]| x.iter().all(|&c| c >= 0x20 || matches!(c, b'\t' | b'\n' | b'\r' | 0x0C));
+    let Some(s) = b.windows(6).position(|w| w == b"stream") else { return Some(text(&b[..t])) };
+    let dict = &b[..s];
+    if !text(dict) {
+        return Some(false);
+    }
+    let mut d = s + 6;
+    if b[d..].starts_with(b"\r\n") {
+        d += 2;
+    } else if b[d..].starts_with(b"\n") {
+        d += 1;
+    } else {
+        return Some(false);
+    }
+    let len = dict.windows(7).position(|w| w == b"/Length").and_then(|i| {
+        let (n, k) = pdf_int(&dict[i + 7..])?;
+        // An indirect length ("12 0 R") is not this number.
+        let after = &dict[i + 7 + k..];
+        let indirect = pdf_int(after).is_some_and(|(_, m)| after[m..].iter().find(|c| !c.is_ascii_whitespace()) == Some(&b'R'));
+        (!indirect).then_some(n as usize)
+    });
+    let e = b[..t].windows(9).rposition(|w| w == b"endstream")?;
+    let data = match len {
+        Some(n) if d + n <= e => {
+            let gap = &b[d + n..e];
+            if !gap.iter().all(|c| c.is_ascii_whitespace()) {
+                return Some(false);
+            }
+            &b[d..d + n]
+        }
+        Some(_) => return Some(false),
+        None => &b[d..e],
+    };
+    if !text(&b[e..t]) {
+        return Some(false);
+    }
+    if !dict.windows(12).any(|w| w == b"/FlateDecode") {
+        return None;
+    }
+    let mut z = flate2::read::ZlibDecoder::new(data);
+    let mut sink = vec![];
+    Some(std::io::Read::read_to_end(&mut std::io::Read::take(&mut z, 256 << 20), &mut sink).is_ok())
+}
+
+/// A PDF at `at` (the ordinary walk said `len` bytes) whose cross-reference
+/// table is not where the file says: the two pieces, and its version.
+fn pdf_two(src: &mut dyn Bytes, at: u64, len: u64) -> Option<(Vec<(u64, u64)>, String)> {
+    let end = at + len;
+    let tail_from = end.saturating_sub(1024).max(at);
+    let tail = src.read(tail_from, (end - tail_from) as usize);
+    let k = tail.windows(9).rposition(|w| w == b"startxref")?;
+    let (n, _) = pdf_int(&tail[k + 9..])?;
+    let sx = tail_from + k as u64;
+    if at + n >= sx || pdf_is_xref(src, at + n) {
+        return None;
+    }
+    // Where the table is: a whole number of sectors further on.
+    let mut q = at + n;
+    let gap = loop {
+        let x = src.find(q, sx, b"xref")?;
+        q = x + 1;
+        if x >= at + n + 5 && src.read(x - 5, 5) == b"start" {
+            continue;
+        }
+        let g = x - (at + n);
+        if g > MAX_GAP {
+            return None;
+        }
+        if g > 0 && g % SECTOR == 0 && pdf_is_xref(src, x) {
+            break g;
+        }
+    };
+    // Every section, newest first; a newer entry wins.
+    let mut objs: std::collections::BTreeMap<u64, u64> = std::collections::BTreeMap::new();
+    let mut next = Some(n);
+    for _ in 0..16 {
+        let Some(x) = next else { break };
+        let abs = if pdf_is_xref(src, at + x) { at + x } else if pdf_is_xref(src, at + x + gap) { at + x + gap } else { return None };
+        let (entries, prev) = pdf_xref(src, abs)?;
+        for (num, off) in entries {
+            objs.entry(num).or_insert(off);
+        }
+        next = prev.filter(|&p| p != x);
+    }
+    let mut list: Vec<(u64, u64)> = objs.into_iter().map(|(num, off)| (off, num)).filter(|&(off, _)| off < n).collect();
+    list.sort_unstable();
+    if list.is_empty() || list.len() > 200_000 {
+        return None;
+    }
+    let at_place = |src: &mut dyn Bytes, abs: u64, num: u64| pdf_obj_head(&src.read(abs, 32), num);
+    let k = list.iter().position(|&(off, num)| !at_place(src, at + off, num)).unwrap_or(list.len());
+    if k == 0 {
+        return None;
+    }
+    if !list[k..].iter().all(|&(off, num)| at_place(src, at + off + gap, num)) {
+        return None;
+    }
+    // The break is in object k-1, or between it and what follows.
+    let (ps, pnum) = list[k - 1];
+    let ne = if k < list.len() { list[k].0 } else { n };
+    if ne - ps > 64 << 20 {
+        return None;
+    }
+    let mut fits = vec![];
+    let mut unsure = vec![];
+    let mut b = (at + ps + 1).div_ceil(SECTOR) * SECTOR;
+    while b <= at + ne {
+        let mut obj = src.read(at + ps, (b - at - ps) as usize);
+        obj.extend(src.read(b + gap, (at + ne - b) as usize));
+        match pdf_obj_ok(&obj, pnum) {
+            Some(true) => fits.push(b),
+            None => unsure.push(b),
+            Some(false) => {}
+        }
+        b += SECTOR;
+    }
+    let brk = match (fits.len(), unsure.len()) {
+        (1, 0) => fits[0],
+        (0, 1) => unsure[0],
+        _ => return None,
+    };
+    let total = len - gap;
+    let first = brk - at;
+    let h = src.read(at, 8);
+    Some((vec![(at, first), (brk + gap, total - first)], format!("PDF {}", String::from_utf8_lossy(&h[5..h.len().min(8)]))))
 }
 
 /// Whether bytes read from `pieces` make a JPEG that decodes exactly.
@@ -1503,6 +1719,8 @@ pub fn carve(ev: &Evidence, analysis: &Analysis, progress: Progress) -> anyhow::
                         png_two(&mut src, at).map(|(p, d)| (p, d, "png", "png", "PNG image"))
                     } else if b.starts_with(b"PK\x03\x04") && found.is_none() {
                         zip_two(&mut src, at).map(|(p, (kind, ext, label), d)| (p, d, kind, ext, label))
+                    } else if let Some(h) = found.as_ref().filter(|h| h.kind == "pdf") {
+                        pdf_two(&mut src, at, h.len).map(|(p, d)| (p, d, "pdf", "pdf", "PDF document"))
                     } else {
                         None
                     };
@@ -1981,6 +2199,12 @@ pub(crate) mod tests {
             d
         };
         let disk = build(&kape[first..]);
+        // KOKINO_WRITE_SEEDS=1 also saves it as a fuzz seed.
+        if std::env::var_os("KOKINO_WRITE_SEEDS").is_some() {
+            let seeds = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../kokino-fuzz/seeds/split");
+            std::fs::create_dir_all(&seeds).unwrap();
+            std::fs::write(seeds.join("zip-two.bin"), &disk[at..]).unwrap();
+        }
         let mut src: &[u8] = &disk;
         assert!(zip(&mut src, at as u64).is_none(), "the ordinary walk cannot place the directory");
         assert!(identify(&mut src, at as u64).is_none());
@@ -2000,6 +2224,131 @@ pub(crate) mod tests {
         let wrong = build(&other);
         let mut src: &[u8] = &wrong;
         assert!(zip_two(&mut src, at as u64).is_none());
+    }
+
+    /// A PDF with a compressed page (object 4) over several sectors.
+    fn lab_pdf() -> Vec<u8> {
+        use std::io::Write;
+        let mut text = String::from("BT /F1 10 Tf 40 800 Td 12 TL\n");
+        let mut x = 12345u32;
+        for i in 0..400 {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12345);
+            text.push_str(&format!("(line {} of the lab report {:08x}) '\n", i, x));
+        }
+        text.push_str("ET\n");
+        let mut z = flate2::write::ZlibEncoder::new(vec![], flate2::Compression::default());
+        z.write_all(text.as_bytes()).unwrap();
+        let stream = z.finish().unwrap();
+        assert!(stream.len() > 3 * 512, "{}", stream.len());
+        let mut d = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
+        let mut offs = vec![];
+        let objs: Vec<Vec<u8>> = vec![
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+            [format!("<< /Length {} /Filter /FlateDecode >>\nstream\n", stream.len()).into_bytes(), stream, b"\nendstream".to_vec()].concat(),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        ];
+        for (i, o) in objs.iter().enumerate() {
+            offs.push(d.len());
+            d.extend(format!("{} 0 obj\n", i + 1).as_bytes());
+            d.extend(o);
+            d.extend(b"\nendobj\n");
+        }
+        let xref = d.len();
+        d.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+        for o in &offs {
+            d.extend(format!("{:010} 00000 n \n", o).as_bytes());
+        }
+        d.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n", objs.len() + 1, xref).as_bytes());
+        d
+    }
+
+    /// Split inside its compressed page: the stream must inflate whole
+    /// across the break, which leaves one place for it.
+    #[test]
+    fn joins_a_pdf_in_two_pieces() {
+        let pdf_file = lab_pdf();
+        let at = 65_536usize;
+        let first = 1024usize;
+        let gap = vec![0u8; 2 * 512];
+        let build = |second: &[u8], gap: &[u8]| {
+            let mut d = vec![0u8; at];
+            d.extend(&pdf_file[..first]);
+            d.extend(gap);
+            d.extend(second);
+            d.extend(vec![0u8; 4096]);
+            d
+        };
+        let disk = build(&pdf_file[first..], &gap);
+        // KOKINO_WRITE_SEEDS=1 also saves it as a fuzz seed.
+        if std::env::var_os("KOKINO_WRITE_SEEDS").is_some() {
+            let seeds = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../kokino-fuzz/seeds/split");
+            std::fs::create_dir_all(&seeds).unwrap();
+            std::fs::write(seeds.join("pdf-two.bin"), &disk[at..]).unwrap();
+        }
+        let mut src: &[u8] = &disk;
+        let h = identify(&mut src, at as u64).expect("the ordinary walk finds a PDF");
+        assert_eq!(h.len, (pdf_file.len() + gap.len()) as u64, "with the gap in it");
+        let (pieces, detail) = pdf_two(&mut src, at as u64, h.len).expect("joined");
+        assert_eq!(pieces, vec![(at as u64, first as u64), ((at + first + gap.len()) as u64, (pdf_file.len() - first) as u64)]);
+        assert_eq!(detail, "PDF 1.4");
+        // A gap of text: still only one break inflates.
+        let words: Vec<u8> = b"lorem ipsum dolor sit amet ".iter().copied().cycle().take(1024).collect();
+        let disk = build(&pdf_file[first..], &words);
+        let mut src: &[u8] = &disk;
+        let h = identify(&mut src, at as u64).unwrap();
+        assert_eq!(pdf_two(&mut src, at as u64, h.len).map(|x| x.0[0].1), Some(first as u64));
+        // The whole file: nothing to join.
+        let mut whole = vec![0u8; at];
+        whole.extend(&pdf_file);
+        let mut src: &[u8] = &whole;
+        let h = identify(&mut src, at as u64).unwrap();
+        assert!(pdf_two(&mut src, at as u64, h.len).is_none());
+        // A changed byte in the compressed page: no join.
+        let mut other = pdf_file[first..].to_vec();
+        other[200] ^= 0x55;
+        let wrong = build(&other, &gap);
+        let mut src: &[u8] = &wrong;
+        let h = identify(&mut src, at as u64).unwrap();
+        assert!(pdf_two(&mut src, at as u64, h.len).is_none());
+    }
+
+    /// Local check on public PDFs (not in the repository): every split at a
+    /// sector boundary is joined right or not at all, never wrong.
+    #[test]
+    fn real_pdfs_split_anywhere() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/validation");
+        let files = ["cfreds/setup-july-10-2012.pdf", "digital-detective/2011-10-19-Data/Users/Victor Bushell/AppData/Local/Microsoft/Windows/Temporary Internet Files/Low/Content.IE5/H34XEMZ7/Using%20CCleaner[1].pdf"];
+        for f in files {
+            let Ok(pdf_file) = std::fs::read(root.join(f)) else { continue };
+            let at = 65_536usize;
+            let mut whole = vec![0u8; at];
+            whole.extend(&pdf_file);
+            whole.extend(vec![0u8; 4096]);
+            let mut src: &[u8] = &whole;
+            let h = identify(&mut src, at as u64).unwrap();
+            assert!(pdf_two(&mut src, at as u64, h.len).is_none(), "{}: whole", f);
+            let (mut right, mut none) = (0, 0);
+            let step = (pdf_file.len() / 40).div_ceil(512).max(1) * 512;
+            for first in (512..pdf_file.len() - 512).step_by(step) {
+                let mut d = vec![0u8; at];
+                d.extend(&pdf_file[..first]);
+                d.extend(vec![0u8; 1536]);
+                d.extend(&pdf_file[first..]);
+                d.extend(vec![0u8; 4096]);
+                let mut src: &[u8] = &d;
+                let Some(h) = identify(&mut src, at as u64) else { none += 1; continue };
+                match pdf_two(&mut src, at as u64, h.len) {
+                    Some((pieces, _)) => {
+                        assert_eq!(pieces, vec![(at as u64, first as u64), ((at + first + 1536) as u64, (pdf_file.len() - first) as u64)], "{} at {}", f, first);
+                        right += 1;
+                    }
+                    None => none += 1,
+                }
+            }
+            eprintln!("{}: {} bytes, {} joined, {} not", f, pdf_file.len(), right, none);
+        }
     }
 
     #[test]

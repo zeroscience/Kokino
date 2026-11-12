@@ -48,7 +48,7 @@ Kokino version and what the file system or artifact is.
 - [x] macOS: property lists, accounts, launchd persistence, quarantine events, KnowledgeC, Safari, FSEvents (1.3.1)
 - [x] Browsers: Chrome, Edge, Brave, Opera, Vivaldi, Firefox, Safari, Internet Explorer 4 to 11 (index.dat, WebCache, cookies), with deleted and carved records (1.2.5 to 1.3.1)
 - [x] Email: mbox, .eml, Outlook PST and OST (RTF bodies included), Apple Mail .emlx (1.3.0, 1.3.1)
-- [x] Outlook: deleted messages recovered from unused entries of the node index (1.6.0)
+- [x] Outlook: deleted messages recovered from unused entries of the node index (1.6.0), and from the file's free space by their block trailers (1.6.1)
 - [x] Text from Office (old and new), PDF, Outlook .msg and RTF for search (1.3.0)
 
 ### Analysis and workflow
@@ -69,6 +69,7 @@ Kokino version and what the file system or artifact is.
 - [x] NIST CFReDS validation every week in CI, against recorded numbers (1.6.0)
 - [x] Carving: PNGs in two pieces, through their chunk CRCs (1.6.0)
 - [x] Carving: ZIP, Office and OpenDocument files in two pieces, through the central directory and the entry CRC (1.6.1)
+- [x] Carving: PDFs in two pieces, through the cross-reference table and the stream checksums (1.6.1)
 - [x] `kokino plugin-test` and a guide for plugin authors (1.6.0)
 - [x] Dates day first (dd-mm-yyyy) in the GUI, reports and summaries; a website (1.5.0)
 - [x] Release SBOM (CycloneDX) and signed build provenance (1.3.1)
@@ -93,14 +94,13 @@ start or be trusted; most items are blocked on test data rather than code.
 - [ ] **Windows Search** (Windows.edb): file names, contents and times the indexer kept, also for deleted files. The ESE reader exists (SRUM and WebCache use it). Needs: a test database.
 - [ ] **$LogFile in full**: redo and undo of MFT changes (what a file looked like before it changed). Needs: a large but well-documented effort (NTFS internals, libfsntfs notes).
 - [ ] **SRUM on a real computer's database**: the app timeline, push, battery and energy tables are checked on databases written by Windows' own engine. Needs: a SRUM database copied from a real computer (admin rights and a shadow copy).
-- [ ] **Deleted PST items** whose index entries are gone: found by the trailers of their blocks in the file's free space.
 
 ### 4. More formats
 - [ ] **XFS** (Red Hat and its derivatives default to it). Needs: test images (made with mkfs.xfs) and a parser comparable to ext's.
 - [ ] **ESXi snapshots from a real host**: VMFSSPARSE and SESPARSE are checked on images built to QEMU's reading of the formats. Needs: snapshots from an ESXi host.
 - [ ] **Written CDs and DVDs from real drives**: UDF sparable and virtual partitions are checked on images built from the specification. Needs: images of real CD-R, DVD-R and DVD-RW discs.
 - [ ] **macOS unified logs** (tracev3).
-- [ ] **Carving of other fragmented files** (PNG in three pieces, ZIP and Office documents in three or more, PDF), and JPEGs in four or more pieces or progressive JPEGs.
+- [ ] **Carving of other fragmented files** (PNG in three pieces, ZIP, Office and PDF documents in three or more, linearized PDFs and PDFs with cross-reference streams), and JPEGs in four or more pieces or progressive JPEGs.
 
 ### 5. Workflow
 - [ ] **Code-signed Windows and macOS packages.** Needs: a code-signing certificate and an Apple Developer ID; no code.
