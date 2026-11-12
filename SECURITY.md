@@ -223,7 +223,13 @@ PNGs in two pieces and deleted PST items (1.6.0):
 | `pst` | again, with the unused slots of node and block index pages read for deleted messages | 10 min | 2,133,614 | none |
 | `carve` | again, with the PNG join (chunk walk with CRCs, break points, second piece search) | 10 min | 44,752,447 | none |
 
-In all: 867,947,761 inputs over 41 targets, and 40 distinct problems
+ZIP files in two pieces (after 1.6.0):
+
+| Target | What it covers | Rounds | Inputs in all | Distinct problems found |
+|---|---|---|--:|---|
+| `carve` | again, with the ZIP join (central directory entries, shifted local headers, break search with inflate and CRC) | 10 min | 44,277,137 | none |
+
+In all: 912,224,898 inputs over 41 targets, and 40 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed

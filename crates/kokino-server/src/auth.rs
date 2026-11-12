@@ -329,7 +329,8 @@ async fn logout(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Response
 async fn me(State(st): State<Arc<AppState>>, Extension(cu): Extension<CurrentUser>) -> Response {
     match st.users.get(&cu.username) {
         Ok(Some(u)) => {
-            let root = if u.role >= Role::Examiner { Some(st.root.display().to_string()) } else { None };
+            // Where the cases are on the server (its account name, its folders): administrators only.
+            let root = if u.role == Role::Admin { Some(st.root.display().to_string()) } else { None };
             Json(json!({"user": UserView::from(&u), "cases_root": root, "idle_timeout_s": IDLE_TIMEOUT.as_secs()})).into_response()
         }
         _ => err(StatusCode::UNAUTHORIZED, "not signed in"),

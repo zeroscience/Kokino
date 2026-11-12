@@ -5,6 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Carving: ZIP archives split in two pieces are joined again, and with them Office (docx, xlsx, pptx), OpenDocument, JAR, APK and EPUB files. The central directory, found further on than it says, gives the distance to the second piece; the local headers give the entry the break falls in; that entry, stored or deflated, must match its CRC and size for the join to be kept. The end record is looked for up to 128 MB on, the gap up to 16 MB. Fuzzed (`carve`, 44.3 million more inputs, nothing found; 912 million in all).
+
+### Changed
+- The folder where the server keeps its cases (which shows the server's account name and folder layout) is shown to administrators only; examiners and reviewers see just their cases.
+
 ## [1.6.0] - 12-11-2026
 
 Plugins grown up: their rows on the timelines and in the watchlist, and `kokino plugin-test` with a guide for writing one. Carving joins JPEGs in three pieces and PNGs in two; deleted Outlook messages come back from the PST's node index; the NIST CFReDS validation now runs every week on GitHub; and the website is linked from the GUI.

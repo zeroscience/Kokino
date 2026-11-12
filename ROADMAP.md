@@ -68,6 +68,7 @@ Kokino version and what the file system or artifact is.
 - [x] Plugin rows on the timelines and in the watchlist (1.6.0)
 - [x] NIST CFReDS validation every week in CI, against recorded numbers (1.6.0)
 - [x] Carving: PNGs in two pieces, through their chunk CRCs (1.6.0)
+- [x] Carving: ZIP, Office and OpenDocument files in two pieces, through the central directory and the entry CRC (1.6.1)
 - [x] `kokino plugin-test` and a guide for plugin authors (1.6.0)
 - [x] Dates day first (dd-mm-yyyy) in the GUI, reports and summaries; a website (1.5.0)
 - [x] Release SBOM (CycloneDX) and signed build provenance (1.3.1)
@@ -99,7 +100,7 @@ start or be trusted; most items are blocked on test data rather than code.
 - [ ] **ESXi snapshots from a real host**: VMFSSPARSE and SESPARSE are checked on images built to QEMU's reading of the formats. Needs: snapshots from an ESXi host.
 - [ ] **Written CDs and DVDs from real drives**: UDF sparable and virtual partitions are checked on images built from the specification. Needs: images of real CD-R, DVD-R and DVD-RW discs.
 - [ ] **macOS unified logs** (tracev3).
-- [ ] **Carving of other fragmented files** (PNG in three pieces, ZIP and Office documents, PDF), and JPEGs in four or more pieces or progressive JPEGs.
+- [ ] **Carving of other fragmented files** (PNG in three pieces, ZIP and Office documents in three or more, PDF), and JPEGs in four or more pieces or progressive JPEGs.
 
 ### 5. Workflow
 - [ ] **Code-signed Windows and macOS packages.** Needs: a code-signing certificate and an Apple Developer ID; no code.

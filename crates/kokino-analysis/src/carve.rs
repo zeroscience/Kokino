@@ -21,6 +21,10 @@
 //! pictures split in two pieces are joined through their chunk CRCs: the
 //! chunk whose CRC fails is where the first piece ends, and a join is kept
 //! only when that chunk's CRC and every chunk after it check out to IEND.
+//! ZIP archives (and Office, OpenDocument, JAR, APK, EPUB) split in two
+//! pieces are joined through their central directory: where it is found
+//! says how far the second piece is from the first, the local headers say
+//! which entry the break falls in, and that entry's CRC says where.
 //!
 //! Nothing is copied: results are offsets and lengths in the image, with
 //! MD5 and SHA-256 of the carved bytes. Exports read from the image.
@@ -677,6 +681,8 @@ pub fn fuzz_jpeg_two(d: &[u8]) {
     let _ = jpeg_two(&mut s, 0);
     let mut s: &[u8] = d;
     let _ = png_two(&mut s, 0);
+    let mut s: &[u8] = d;
+    let _ = zip_two(&mut s, 0);
 }
 
 fn png_crc(d: &[u8]) -> u32 {
@@ -804,6 +810,147 @@ fn png_two(src: &mut dyn Bytes, at: u64) -> Option<(Vec<(u64, u64)>, String)> {
             s += SECTOR;
         }
         b += SECTOR;
+    }
+    None
+}
+
+/// One central directory entry: local header offset, compressed and
+/// uncompressed size, CRC, method, name.
+struct ZipEntry {
+    off: u64,
+    csize: u64,
+    usize: u64,
+    crc: u32,
+    method: u16,
+    name: Vec<u8>,
+}
+
+fn zip_entries(cd: &[u8], n: usize) -> Option<Vec<ZipEntry>> {
+    let mut out = vec![];
+    let mut p = 0usize;
+    for _ in 0..n {
+        let c = cd.get(p..p + 46)?;
+        if &c[0..4] != b"PK\x01\x02" {
+            return None;
+        }
+        let (nl, xl, cl) = (le16(c, 28)? as usize, le16(c, 30)? as usize, le16(c, 32)? as usize);
+        out.push(ZipEntry {
+            off: le32(c, 42)?,
+            csize: le32(c, 20)?,
+            usize: le32(c, 24)?,
+            crc: le32(c, 16)? as u32,
+            method: le16(c, 10)? as u16,
+            name: cd.get(p + 46..p + 46 + nl)?.to_vec(),
+        });
+        p += 46 + nl + xl + cl;
+    }
+    Some(out)
+}
+
+/// Whether `data` is entry `e`'s content: stored or deflated, its CRC.
+fn zip_entry_ok(e: &ZipEntry, data: &[u8]) -> bool {
+    let plain = match e.method {
+        0 => data.to_vec(),
+        8 => {
+            let mut out = Vec::with_capacity(e.usize.min(64 << 20) as usize);
+            let mut d = flate2::read::DeflateDecoder::new(data);
+            if std::io::Read::read_to_end(&mut std::io::Read::take(&mut d, e.usize.saturating_add(1)), &mut out).is_err() {
+                return false;
+            }
+            out
+        }
+        _ => return false,
+    };
+    plain.len() as u64 == e.usize && png_crc(&plain) == e.crc
+}
+
+/// Kind, extension and label of a carved file.
+type FileKind = (&'static str, &'static str, &'static str);
+
+/// A ZIP at `at` whose central directory is not where it says (the file is
+/// in two pieces): the pieces, and its kind (zip, docx, odt...).
+fn zip_two(src: &mut dyn Bytes, at: u64) -> Option<(Vec<(u64, u64)>, FileKind, String)> {
+    const MAX_ENTRY: u64 = 64 << 20;
+    // Split archives worth joining are documents and small archives: the
+    // end record is looked for no further than 128 MB on.
+    const REACH: u64 = 128 << 20;
+    let h = src.read(at, 30);
+    let (version, method, nlen) = (le16(&h, 4)?, le16(&h, 8)?, le16(&h, 26)?);
+    if version > 63 || !matches!(method, 0 | 8) || nlen == 0 || nlen > 1024 {
+        return None;
+    }
+    let mut p = at + 4;
+    let end = (at + REACH).min(src.size());
+    let mut tried = 0;
+    while let Some(e) = src.find(p, end, b"PK\x05\x06") {
+        p = e + 4;
+        tried += 1;
+        if tried > 16 {
+            return None;
+        }
+        let r = src.read(e, 22);
+        let (n, cd_size, cd_off, comment) = (le16(&r, 10)? as usize, le32(&r, 12)?, le32(&r, 16)?, le16(&r, 20)?);
+        let rel_end = cd_off + cd_size; // where the end record would be, from the start
+        if cd_off == 0xFFFF_FFFF || n == 0 || e - at <= rel_end {
+            continue;
+        }
+        let gap = (e - at) - rel_end;
+        if gap % SECTOR != 0 || gap > MAX_GAP {
+            continue;
+        }
+        let cd = src.read(e - cd_size, cd_size as usize);
+        let Some(mut entries) = zip_entries(&cd, n.min(65_535)) else { continue };
+        entries.sort_by_key(|x| x.off);
+        if entries.first().is_none_or(|x| x.off != 0) {
+            continue;
+        }
+        // The entries whose local header is where it says are before the
+        // break; the first one found `gap` further on is after it.
+        let header_at = |src: &mut dyn Bytes, abs: u64, name: &[u8]| {
+            let h = src.read(abs, 30);
+            h.starts_with(b"PK\x03\x04") && le16(&h, 26).is_some_and(|nl| src.read(abs + 30, nl as usize) == name)
+        };
+        let mut k = entries.len(); // index of the first entry after the break
+        for (i, x) in entries.iter().enumerate() {
+            if header_at(src, at + x.off, &x.name) {
+                continue;
+            }
+            if header_at(src, at + x.off + gap, &x.name) {
+                k = i;
+                break;
+            }
+            k = usize::MAX;
+            break;
+        }
+        if k == usize::MAX || k == 0 {
+            continue;
+        }
+        // Every later entry, and the directory, are `gap` further on.
+        if !entries[k..].iter().all(|x| header_at(src, at + x.off + gap, &x.name)) {
+            continue;
+        }
+        // The break is in entry k-1 (or between it and what follows).
+        let x = &entries[k - 1];
+        let h = src.read(at + x.off, 30);
+        let data_rel = x.off + 30 + le16(&h, 26)? + le16(&h, 28)?;
+        let next_rel = if k < entries.len() { entries[k].off } else { cd_off };
+        if x.csize > MAX_ENTRY || data_rel + x.csize > next_rel {
+            continue;
+        }
+        let total = rel_end + 22 + comment;
+        let mut b = (at + data_rel).div_ceil(SECTOR) * SECTOR;
+        while b <= at + next_rel {
+            let in_first = (b - at).saturating_sub(data_rel).min(x.csize);
+            let mut data = src.read(at + data_rel, in_first as usize);
+            data.extend(src.read(b + gap, (x.csize - in_first) as usize));
+            if data.len() as u64 == x.csize && zip_entry_ok(x, &data) {
+                let names: Vec<String> = entries.iter().map(|x| String::from_utf8_lossy(&x.name).into_owned()).collect();
+                let kind = office_kind(&names, src, at);
+                let first = b - at;
+                return Some((vec![(at, first), (b + gap, total - first)], kind, format!("{} entries", n)));
+            }
+            b += SECTOR;
+        }
     }
     None
 }
@@ -1354,6 +1501,8 @@ pub fn carve(ev: &Evidence, analysis: &Analysis, progress: Progress) -> anyhow::
                         jpeg_two(&mut src, at).map(|(p, d)| (p, d, "jpeg", "jpg", "JPEG image"))
                     } else if b.starts_with(b"\x89PNG\r\n\x1a\n") && found.as_ref().is_none_or(|h| h.kind == "png" && !h.complete) {
                         png_two(&mut src, at).map(|(p, d)| (p, d, "png", "png", "PNG image"))
+                    } else if b.starts_with(b"PK\x03\x04") && found.is_none() {
+                        zip_two(&mut src, at).map(|(p, (kind, ext, label), d)| (p, d, kind, ext, label))
                     } else {
                         None
                     };
@@ -1811,6 +1960,46 @@ pub(crate) mod tests {
         let wrong = build(&other);
         let mut src: &[u8] = &wrong;
         assert!(png_two(&mut src, at as u64).is_none());
+    }
+
+    /// The KAPE collection ZIP split inside its SRUM database entry: the
+    /// central directory says how far away the rest is, the entry's CRC
+    /// where the break is.
+    #[test]
+    fn joins_a_zip_in_two_pieces() {
+        let fx = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+        let Ok(kape) = std::fs::read(fx.join("collection-kape.zip")) else { return };
+        let at = 65_536usize;
+        let first = 20_480usize;
+        let gap = vec![0u8; 3 * 512];
+        let build = |second: &[u8]| {
+            let mut d = vec![0u8; at];
+            d.extend(&kape[..first]);
+            d.extend(&gap);
+            d.extend(second);
+            d.extend(vec![0u8; 4096]);
+            d
+        };
+        let disk = build(&kape[first..]);
+        let mut src: &[u8] = &disk;
+        assert!(zip(&mut src, at as u64).is_none(), "the ordinary walk cannot place the directory");
+        assert!(identify(&mut src, at as u64).is_none());
+        let (pieces, kind, detail) = zip_two(&mut src, at as u64).expect("joined");
+        assert_eq!(pieces, vec![(at as u64, first as u64), ((at + first + gap.len()) as u64, (kape.len() - first) as u64)]);
+        assert_eq!((kind.0, detail.as_str()), ("zip", "28 entries"));
+        // Read back through the pieces: the original archive.
+        let c = Carved { offset: at as u64, len: kape.len() as u64, gap: Some(((at + first) as u64, gap.len() as u64)), ..Default::default() };
+        assert_eq!(c.pieces(), pieces);
+        let mut r = CarvedReader { r: Box::new(std::io::Cursor::new(disk.clone())), pieces: c.pieces(), len: c.len, pos: 0 };
+        let mut back = vec![];
+        r.read_to_end(&mut back).unwrap();
+        assert_eq!(back, kape);
+        // A changed byte in the entry that spans the break: its CRC says no.
+        let mut other = kape[first..].to_vec();
+        other[100] ^= 0x55;
+        let wrong = build(&other);
+        let mut src: &[u8] = &wrong;
+        assert!(zip_two(&mut src, at as u64).is_none());
     }
 
     #[test]
