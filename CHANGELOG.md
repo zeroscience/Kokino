@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.6.0] - 12-11-2026
+
+Plugins grown up: their rows on the timelines and in the watchlist, and `kokino plugin-test` with a guide for writing one. Carving joins JPEGs in three pieces and PNGs in two; deleted Outlook messages come back from the PST's node index; the NIST CFReDS validation now runs every week on GitHub; and the website is linked from the GUI.
+
 ### Added
 - Carving: PNGs split in two pieces are joined again through their chunk CRCs: the chunk whose CRC fails is where the first piece ends, and a join is kept only when that chunk's CRC and every chunk after it check out up to IEND.
 - Outlook PST and OST: deleted messages recovered from unused entries of the node index (Outlook removes a deleted item's entry, which often stays in the page's unused slot); kept only when the message's data is still a property context, listed as deleted with "[recovered deleted item]" after the folder, and in the search index. None are found in the public PST samples, which have no such leftovers. Fuzzed (`pst` 2.1 million and `carve` 44.8 million more inputs, nothing found; 868 million in all).

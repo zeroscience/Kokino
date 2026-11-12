@@ -100,7 +100,7 @@ export function aboutPage(info) {
     ),
     h("div.card.stack",
       h("h3", "What's next"),
-      p("1.5 finished most of what could be built without new test data. What comes next mostly waits for samples: disks from real Macs, encrypted APFS volumes and LZFSE compression, Windows Search databases, XFS and Ex01 images; then NTFS $LogFile in full and carving files in more than two pieces. Security reports and wrong results (an artifact read incorrectly, a crash on real evidence) are always fixed first."),
+      p("1.5 and 1.6 finished most of what could be built without new test data. What comes next mostly waits for samples: disks from real Macs, encrypted APFS volumes and LZFSE compression, Windows Search databases, XFS and Ex01 images; then NTFS $LogFile in full and carving files in more than two pieces. Security reports and wrong results (an artifact read incorrectly, a crash on real evidence) are always fixed first."),
       p("The full list, with what each item needs, is in ", link("https://github.com/zeroscience/Kokino/blob/main/ROADMAP.md", "ROADMAP.md"), "; if one matters to a case you work on, say so: that moves it up. The website: ", link("https://zeroscience.github.io/kokino-ftk/", "zeroscience.github.io/kokino-ftk"), "."),
     ),
     updateCard(info),

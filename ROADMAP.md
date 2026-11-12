@@ -8,9 +8,9 @@ Every new parser is fuzzed before it ships ([SECURITY.md](SECURITY.md)) and
 checked against public test images with known answers where they exist
 ([VALIDATION.md](VALIDATION.md)).
 
-## Status: 1.5
+## Status: 1.6
 
-1.5.0 finished most of what could be built without new test data. What is
+1.5.0 and 1.6.0 finished most of what could be built without new test data. What is
 left below mostly waits for samples: disks from real Macs, encrypted APFS
 volumes, Windows Search databases, XFS and Ex01 images. Security reports
 ([SECURITY.md](SECURITY.md)) and wrong results (an artifact read
@@ -48,6 +48,7 @@ Kokino version and what the file system or artifact is.
 - [x] macOS: property lists, accounts, launchd persistence, quarantine events, KnowledgeC, Safari, FSEvents (1.3.1)
 - [x] Browsers: Chrome, Edge, Brave, Opera, Vivaldi, Firefox, Safari, Internet Explorer 4 to 11 (index.dat, WebCache, cookies), with deleted and carved records (1.2.5 to 1.3.1)
 - [x] Email: mbox, .eml, Outlook PST and OST (RTF bodies included), Apple Mail .emlx (1.3.0, 1.3.1)
+- [x] Outlook: deleted messages recovered from unused entries of the node index (1.6.0)
 - [x] Text from Office (old and new), PDF, Outlook .msg and RTF for search (1.3.0)
 
 ### Analysis and workflow
@@ -63,11 +64,11 @@ Kokino version and what the file system or artifact is.
 - [x] Golden results: every test image's key numbers checked on every commit, on Windows, Linux and macOS (1.4.0)
 - [x] Watchlists from STIX 2.1 and MISP exports, IP networks, and each sweep compared with the last (1.5.0)
 - [x] Plugins: separate programs for artifacts Kokino does not read, each run audited with the plugin's fingerprint (1.5.0)
-- [x] Carving: JPEGs in two pieces joined again (1.5.0), and in three pieces
-- [x] Plugin rows on the timelines and in the watchlist
-- [x] NIST CFReDS validation every week in CI, against recorded numbers
-- [x] Carving: PNGs in two pieces, through their chunk CRCs
-- [x] `kokino plugin-test` and a guide for plugin authors
+- [x] Carving: JPEGs in two pieces joined again (1.5.0), in three pieces (1.6.0)
+- [x] Plugin rows on the timelines and in the watchlist (1.6.0)
+- [x] NIST CFReDS validation every week in CI, against recorded numbers (1.6.0)
+- [x] Carving: PNGs in two pieces, through their chunk CRCs (1.6.0)
+- [x] `kokino plugin-test` and a guide for plugin authors (1.6.0)
 - [x] Dates day first (dd-mm-yyyy) in the GUI, reports and summaries; a website (1.5.0)
 - [x] Release SBOM (CycloneDX) and signed build provenance (1.3.1)
 
@@ -91,7 +92,6 @@ start or be trusted; most items are blocked on test data rather than code.
 - [ ] **Windows Search** (Windows.edb): file names, contents and times the indexer kept, also for deleted files. The ESE reader exists (SRUM and WebCache use it). Needs: a test database.
 - [ ] **$LogFile in full**: redo and undo of MFT changes (what a file looked like before it changed). Needs: a large but well-documented effort (NTFS internals, libfsntfs notes).
 - [ ] **SRUM on a real computer's database**: the app timeline, push, battery and energy tables are checked on databases written by Windows' own engine. Needs: a SRUM database copied from a real computer (admin rights and a shadow copy).
-- [x] **Deleted PST items** whose node index entry survived in an unused slot of the index page.
 - [ ] **Deleted PST items** whose index entries are gone: found by the trailers of their blocks in the file's free space.
 
 ### 4. More formats
