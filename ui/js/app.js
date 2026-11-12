@@ -495,7 +495,7 @@ function deleteCase(c) {
 }
 
 function addEvidence(cid) {
-  const path = h("input", { placeholder: "Full path to .E01 / .dd / .raw / .img / .001 / .vhd / .vhdx / .vmdk / .zip / .tar.gz, or a folder" });
+  const path = h("input", { placeholder: "Full path to .E01 / .aff4 / .ad1 / .dd / .raw / .img / .001 / .vhd / .vhdx / .vmdk / .zip / .tar.gz, or a folder" });
   const name = h("input", { placeholder: "Defaults to file name" });
   const notes = h("textarea", { rows: 2, placeholder: "Acquisition notes, chain of custody reference..." });
   const md5 = h("input.mono", { placeholder: "optional" });

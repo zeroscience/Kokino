@@ -16,6 +16,8 @@ pub enum Fs {
     Apfs(kokino_mac::apfs::ApfsContainer),
     Zip(crate::zipfs::ZipVolume),
     Tar(crate::tarfs::TarVolume),
+    Ad1(crate::ad1fs::Ad1Volume),
+    Aff4L(crate::aff4lfs::Aff4LVolume),
 }
 
 /// What a file-system walk produced.
@@ -29,7 +31,7 @@ pub struct FsScan {
 
 /// File systems with a parser.
 pub fn supported(k: FsKind) -> bool {
-    matches!(k, FsKind::Ntfs | FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat | FsKind::Ext | FsKind::Iso9660 | FsKind::Udf | FsKind::HfsPlus | FsKind::Apfs | FsKind::Zip | FsKind::Tar)
+    matches!(k, FsKind::Ntfs | FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat | FsKind::Ext | FsKind::Iso9660 | FsKind::Udf | FsKind::HfsPlus | FsKind::Apfs | FsKind::Zip | FsKind::Tar | FsKind::Ad1 | FsKind::Aff4L)
 }
 
 impl Fs {
@@ -56,6 +58,8 @@ impl Fs {
             FsKind::Apfs => Ok(Fs::Apfs(kokino_mac::apfs::open(r, v.length)?)),
             FsKind::Zip => Ok(Fs::Zip(crate::zipfs::open(r, v.length)?)),
             FsKind::Tar => Ok(Fs::Tar(crate::tarfs::open(r, v.length)?)),
+            FsKind::Ad1 => Ok(Fs::Ad1(crate::ad1fs::open(r, v.length)?)),
+            FsKind::Aff4L => Ok(Fs::Aff4L(crate::aff4lfs::open(r, v.length)?)),
             _ => anyhow::bail!("no parser for {}", v.fs_label),
         }
     }
@@ -77,9 +81,10 @@ impl Fs {
         matches!(self, Fs::Ext(_))
     }
 
-    /// A triage collection read as a file system (ZIP, tar).
+    /// A triage collection or logical image read as a file system (ZIP,
+    /// tar, AD1, AFF4-L).
     pub fn is_collection(&self) -> bool {
-        matches!(self, Fs::Zip(_) | Fs::Tar(_))
+        matches!(self, Fs::Zip(_) | Fs::Tar(_) | Fs::Ad1(_) | Fs::Aff4L(_))
     }
 
     pub fn is_optical(&self) -> bool {
@@ -130,6 +135,21 @@ impl Fs {
                 notes.extend(t.notes.iter().cloned());
                 Ok(FsScan { info: t.info(), entries: t.entries(), unreadable: vec![], notes })
             }
+            Fs::Ad1(a) => {
+                let mut notes = vec![format!(
+                    "An AccessData AD1 logical image (FTK Imager custom content image, version {}) of {}: files are read from it as FTK stored them; it has no free space. Times are those FTK recorded (UTC). FTK recorded MD5 and SHA-1 hashes for {} file(s).",
+                    a.version,
+                    if a.source.is_empty() { "an unnamed source".to_string() } else { a.source.clone() },
+                    a.recorded.len()
+                )];
+                notes.extend(a.notes.iter().cloned());
+                Ok(FsScan { info: a.info(), entries: a.entries(), unreadable: vec![], notes })
+            }
+            Fs::Aff4L(a) => {
+                let mut notes = vec!["An AFF4-L logical image: files are read from the container as stored, with the names, times (UTC) and hashes it recorded; it has no free space.".to_string()];
+                notes.extend(a.notes.iter().cloned());
+                Ok(FsScan { info: a.info(), entries: a.entries(), unreadable: vec![], notes })
+            }
         }
     }
 
@@ -158,6 +178,9 @@ impl Fs {
             Fs::Zip(z) => z.read(r, e, offset, len),
             Fs::Tar(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
             Fs::Tar(t) => t.read(r, e, offset, len),
+            Fs::Ad1(_) | Fs::Aff4L(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
+            Fs::Ad1(a) => a.read(r, e, offset, len),
+            Fs::Aff4L(a) => a.read(r, e, offset, len),
         }
     }
 
@@ -183,6 +206,9 @@ impl Fs {
             Fs::Zip(z) => Ok(z.extents(r, e)),
             Fs::Tar(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
             Fs::Tar(t) => Ok(t.extents(e)),
+            Fs::Ad1(_) | Fs::Aff4L(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
+            Fs::Ad1(a) => Ok(a.extents(e)),
+            Fs::Aff4L(a) => Ok(a.extents(r, e)),
         }
     }
 
@@ -197,7 +223,7 @@ impl Fs {
             Fs::Hfs(v) => Ok(v.free_runs(r)),
             // APFS free space (space manager) is not read yet.
             Fs::Apfs(_) => Ok(vec![]),
-            Fs::Zip(_) | Fs::Tar(_) => Ok(vec![]),
+            Fs::Zip(_) | Fs::Tar(_) | Fs::Ad1(_) | Fs::Aff4L(_) => Ok(vec![]),
         }
     }
 }

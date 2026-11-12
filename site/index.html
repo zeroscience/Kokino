@@ -8,8 +8,8 @@
 <title>Kokino Forensic Toolkit</title>
 <meta name="description" content="Kokino Forensic Toolkit (Kokino FTK): open-source disk forensics by Zero Science Lab. One portable binary with a browser GUI for Windows, Linux and macOS. Every finding, traceable to the byte.">
 <link rel="icon" href="img/favicon.png" type="image/png">
-<link rel="stylesheet" href="css/site.css?v=1.6.0">
-<script src="js/site.js?v=1.6.0" defer></script>
+<link rel="stylesheet" href="css/site.css?v=1.6.1">
+<script src="js/site.js?v=1.6.1" defer></script>
 </head>
 <body>
 <div class="ambient" id="ambient" aria-hidden="true"></div>
@@ -39,7 +39,7 @@
     <span class="pill" id="version">Open source, Apache-2.0</span>
     <h1>Every finding, traceable to the byte.</h1>
     <p class="lead">Kokino Forensic Toolkit is an open-source digital forensics workbench for disk images. One portable program with a browser interface, on Windows, Linux and macOS, alone on a workstation or for a whole lab.</p>
-    <p class="muted">Give it an E01, raw or virtual disk, a disc image or a triage collection, and it reads every volume down to the last record, live and deleted, brings back what was erased, and rebuilds what happened on the machine. Every finding links to the bytes it came from, and every examiner action lands in a hash-chained audit log.</p>
+    <p class="muted">Give it an E01, AFF4, raw or virtual disk, a disc image, a logical image (AD1, AFF4-L) or a triage collection, and it reads every volume down to the last record, live and deleted, brings back what was erased, and rebuilds what happened on the machine. Every finding links to the bytes it came from, and every examiner action lands in a hash-chained audit log.</p>
     <div class="row">
       <a class="btn primary" href="#download">Download</a>
       <a class="btn" href="https://github.com/zeroscience/Kokino" rel="noopener">Source on GitHub</a>
@@ -53,15 +53,15 @@
 <section id="features">
   <h2>What it reads</h2>
   <div class="grid">
-    <div class="card"><h3>Images and volumes</h3><p>E01 (with its stored hash checked), raw and split raw, VHD, VHDX and VMDK with snapshot chains (ESXi snapshots too), ISO and UDF discs, including CD-R and DVD-RW written in sessions. BitLocker volumes unlocked with a password, recovery password or startup key; every Volume Shadow Copy as a volume of its own.</p></div>
+    <div class="card"><h3>Images and volumes</h3><p>E01 (with its stored hash checked), AFF4 (striped and sparse images too, with the case notes and read errors they recorded), raw and split raw, VHD, VHDX and VMDK with snapshot chains (ESXi snapshots too), ISO and UDF discs, including CD-R and DVD-RW written in sessions. BitLocker volumes unlocked with a password, recovery password or startup key; every Volume Shadow Copy as a volume of its own.</p></div>
     <div class="card"><h3>File systems</h3><p>NTFS, FAT12/16/32, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF: every record, live and deleted, with deleted names recovered from slack, journals and old tree nodes.</p></div>
     <div class="card"><h3>Windows</h3><p>Registry (deleted keys too), event logs, Prefetch, LNK, Jump Lists, ShellBags, ShimCache, Amcache, BAM, scheduled tasks, the NTFS change journal, and SRUM: network use, time each program was in the foreground and in use, and the battery.</p></div>
     <div class="card"><h3>Linux and macOS</h3><p>Accounts, logons, auth and system logs, journald, cron, systemd, shell histories and SSH keys; macOS accounts, launchd persistence, quarantine events, KnowledgeC, FSEvents and Safari.</p></div>
-    <div class="card"><h3>Web and email</h3><p>Chrome, Edge, Firefox, Safari and Internet Explorer history, downloads and cookies, records carved from free space; Outlook PST and OST (deleted messages recovered from the index too), Apple Mail, mbox and .eml.</p></div>
-    <div class="card"><h3>Collections</h3><p>Velociraptor, KAPE and UAC triage collections, and plain folders, read as file systems with every artifact found where it was on the collected system.</p></div>
-    <div class="card"><h3>Analysis</h3><p>Timelines (one per item and one for the whole case), full-text search, file carving (JPEGs split in two or three pieces and PNGs in two joined again), picture forensics, hash sets and hash analysis, anti-forensics indicators with a scored likelihood that explains itself.</p></div>
+    <div class="card"><h3>Web and email</h3><p>Chrome, Edge, Firefox, Safari and Internet Explorer history, downloads and cookies, records carved from free space; Outlook PST and OST (deleted messages recovered from the index and the file's free space too), Apple Mail, mbox and .eml.</p></div>
+    <div class="card"><h3>Collections</h3><p>Velociraptor, KAPE and UAC triage collections, FTK Imager AD1 and AFF4-L logical images, and plain folders, read as file systems with every artifact found where it was on the collected system.</p></div>
+    <div class="card"><h3>Analysis</h3><p>Timelines (one per item and one for the whole case), full-text search, file carving (JPEGs split in two or three pieces, and PNGs, PDFs and Office documents in two, joined again), picture forensics, hash sets and hash analysis, anti-forensics indicators with a scored likelihood that explains itself.</p></div>
     <div class="card"><h3>Case work</h3><p>Correlation across evidence items, a watchlist that sweeps a case for known indicators (pasted, STIX 2.1 or MISP) and marks what is new, plugins for artifacts Kokino does not read itself (their rows on the timelines and in the watchlist), bookmarks and tags, case reports in HTML and Word, CSV and JSON exports.</p></div>
-    <div class="card"><h3>Built to be trusted</h3><p>Evidence opened read-only; accounts, roles and a hash-chained audit log; checked against NIST and Digital Corpora test images (the NIST ones every week, automatically); every parser fuzzed; no unsafe Rust; a signed SBOM and build provenance with every release.</p></div>
+    <div class="card"><h3>Built to be trusted</h3><p>Evidence opened read-only; accounts, roles and a hash-chained audit log; checked against NIST, Digital Corpora and AFF4 reference images (the NIST ones every week, automatically); every parser fuzzed; no unsafe Rust; a signed SBOM and build provenance with every release.</p></div>
   </div>
 </section>
 

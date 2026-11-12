@@ -12,7 +12,7 @@ pub struct Nested {
     /// The image's first (or only) file, as an index into the file list.
     pub file: u32,
     pub path: String,
-    /// "E01", "VHD", "VHDX", "VMDK", "ISO 9660", "Raw disk", "QCOW"...
+    /// "E01", "VHD", "VHDX", "VMDK", "AFF4", "AD1", "ISO 9660", "Raw disk", "QCOW"...
     pub format: String,
     /// Bytes of all its files.
     pub size: u64,
@@ -48,6 +48,13 @@ pub fn probe(head: &[u8], tail: &[u8], ext: &str) -> Option<(&'static str, bool)
     }
     if head.starts_with(b"QFI\xfb") {
         return Some(("QCOW", false));
+    }
+    if head.starts_with(b"ADSEGMENTEDFILE") {
+        // Only the first segment names the image.
+        return (head.get(24..28) == Some(&[1, 0, 0, 0])).then_some(("AD1", true));
+    }
+    if ext == "aff4" && head.starts_with(b"PK") {
+        return Some(("AFF4", true));
     }
     if head.get(0x8001..0x8006) == Some(b"CD001") {
         return Some(("ISO 9660", true));
@@ -88,6 +95,7 @@ pub fn parts(files: &[FileRow], first: usize, format: &str) -> Vec<u32> {
                 "E01" => gs == stem && ge.len() == 3 && ge.starts_with('e') && ge != "e01" && ge[1..].chars().all(|c| c.is_ascii_alphanumeric()),
                 "Raw disk" if ext_of(&f.e.name) == "001" => gs == stem && ge.len() == 3 && ge.chars().all(|c| c.is_ascii_digit()) && ge != "001",
                 "VMDK" => ge == "vmdk" && gs != stem && gs.starts_with(&format!("{}-", stem)),
+                "AD1" => gs == stem && ge.starts_with("ad") && ge != "ad1" && ge.len() > 2 && ge[2..].chars().all(|c| c.is_ascii_digit()),
                 _ => false,
             }
         })
@@ -108,7 +116,7 @@ pub fn find(files: &[FileRow], read: &mut dyn FnMut(&kokino_ntfs::FsEntry, u64, 
         let ext = ext_of(&f.e.name);
         let cat = f.sig.as_deref().unwrap_or("");
         let likely = matches!(cat, "vhdx" | "vmdk" | "ewf" | "iso" | "qcow")
-            || matches!(ext.as_str(), "vhd" | "vhdx" | "avhdx" | "vmdk" | "e01" | "ex01" | "iso" | "dd" | "raw" | "img" | "001" | "bin" | "ima" | "qcow" | "qcow2");
+            || matches!(ext.as_str(), "vhd" | "vhdx" | "avhdx" | "vmdk" | "e01" | "ex01" | "iso" | "dd" | "raw" | "img" | "001" | "bin" | "ima" | "qcow" | "qcow2" | "ad1" | "aff4");
         if !likely {
             continue;
         }

@@ -10,7 +10,7 @@ checked against public test images with known answers where they exist
 
 ## Status: 1.6
 
-1.5.0 and 1.6.0 finished most of what could be built without new test data. What is
+1.5.0, 1.6.0 and 1.6.1 finished most of what could be built without new test data. What is
 left below mostly waits for samples: disks from real Macs, encrypted APFS
 volumes, Windows Search databases, XFS and Ex01 images. Security reports
 ([SECURITY.md](SECURITY.md)) and wrong results (an artifact read
@@ -70,6 +70,8 @@ Kokino version and what the file system or artifact is.
 - [x] Carving: PNGs in two pieces, through their chunk CRCs (1.6.0)
 - [x] Carving: ZIP, Office and OpenDocument files in two pieces, through the central directory and the entry CRC (1.6.1)
 - [x] Carving: PDFs in two pieces, through the cross-reference table and the stream checksums (1.6.1)
+- [x] AFF4 disk images (maps, image streams, striped sets) and AFF4-L logical images (1.6.1)
+- [x] AccessData AD1 logical images, versions 3 and 4 (1.6.1)
 - [x] `kokino plugin-test` and a guide for plugin authors (1.6.0)
 - [x] Dates day first (dd-mm-yyyy) in the GUI, reports and summaries; a website (1.5.0)
 - [x] Release SBOM (CycloneDX) and signed build provenance (1.3.1)

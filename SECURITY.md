@@ -223,7 +223,7 @@ PNGs in two pieces and deleted PST items (1.6.0):
 | `pst` | again, with the unused slots of node and block index pages read for deleted messages | 10 min | 2,133,614 | none |
 | `carve` | again, with the PNG join (chunk walk with CRCs, break points, second piece search) | 10 min | 44,752,447 | none |
 
-ZIP and PDF files in two pieces, deleted PST items in free space (after 1.6.0):
+ZIP and PDF files in two pieces, deleted PST items in free space (1.6.1):
 
 | Target | What it covers | Rounds | Inputs in all | Distinct problems found |
 |---|---|---|--:|---|
@@ -231,7 +231,14 @@ ZIP and PDF files in two pieces, deleted PST items in free space (after 1.6.0):
 | `pst` | again, with blocks found by their trailers in free space, orphan messages, subnode matching | 10 min | 4,416,179 | none |
 | `carve` | again, with the PDF join (cross-reference sections, object placement, break search with stream inflate), split ZIP and PDF seeds | 10 min | 9,942,283 | none |
 
-In all: 926,583,360 inputs over 41 targets, and 40 distinct problems
+AD1 and AFF4 images (1.6.1):
+
+| Target | What it covers | Rounds | Inputs in all | Distinct problems found |
+|---|---|---|--:|---|
+| `ad1` | AD1 logical images: image header, item tree (loops, damage), metadata records, chunk tables, zlib chunks | short rounds, then 10 min | 5,132,730 | 1 (memory) |
+| `aff4` | AFF4 containers: ZIP64 directory, Turtle, maps and their indexes, image streams and bevy indexes, snappy and LZ4, symbolic streams, AFF4-L files | short rounds, then 10 min | 10,077,348 | 2 (memory, hang) |
+
+In all: 941,793,438 inputs over 43 targets, and 43 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed
@@ -278,6 +285,9 @@ found by fuzzing, all fixed.
 | 38 | Watchlist | Wrong result | Fuzzing | Only one side of an IP comparison was unmapped, so an IPv4-mapped IPv6 indicator never matched | Both sides normalized before comparing |
 | 39 | Watchlist (STIX) | Crash (slice inside a character) | Fuzzing | The start of an object name was found one byte after a multi-byte character | Character boundaries kept |
 | 40 | SRUM | Integer overflow | Fuzzing | Per-program totals added hourly values near 2^63 | Saturating arithmetic |
+| 41 | AD1 | Runaway memory | Fuzzing | The chunk size from the image header (up to 4 GB) and a chunk count sized buffers before anything was read | Chunk size limited to 16 MiB, the chunk table to what the image holds, reads grow with the data |
+| 42 | AFF4 | Runaway memory | Fuzzing | Member sizes claimed by a damaged ZIP directory sized the read buffers | Reads grow with the bytes really there |
+| 43 | AFF4 | Hang | Fuzzing | A map run ending at the top of the 64-bit range left a gap of length 0 that was read for ever; a map naming itself was read again at every level | The read stops there (zeros); every stream is known before it is read, so a map naming itself reads as missing |
 
 Before the fixes, every one of these could stop or slow an ingest, a carving
 job or a picture scan, or exhaust the examiner's memory, on purpose-made

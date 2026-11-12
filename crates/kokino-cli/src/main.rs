@@ -794,7 +794,12 @@ async fn main() -> anyhow::Result<()> {
         }
         Cmd::Hash { image } => {
             let ev = kokino_image::Evidence::open(&image)?;
-            let (h, n) = kokino_core::hashing::hash_reader(ev.reader()?, |_| true)?;
+            let (h, n) = if ev.hash_containers() {
+                eprintln!("note: the image is {} bytes, mostly unmapped; its container files are hashed instead", ev.size);
+                kokino_core::hashing::hash_reader(ev.containers_reader()?, |_| true)?
+            } else {
+                kokino_core::hashing::hash_reader(ev.reader()?, |_| true)?
+            };
             println!("format  {}\nbytes   {}\nmd5     {}\nsha1    {}\nsha256  {}", ev.format_label(), n, h.md5, h.sha1, h.sha256);
             // EWF images carry the hash the imaging tool computed; check it.
             if let Some(info) = ev.ewf_info() {

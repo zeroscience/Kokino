@@ -34,6 +34,10 @@ pub enum FsKind {
     Zip,
     /// A tar or .tar.gz archive added as evidence (triage collections: UAC).
     Tar,
+    /// An AccessData AD1 logical image (FTK Imager custom content image).
+    Ad1,
+    /// An AFF4-L logical image (files in an AFF4 container).
+    Aff4L,
     Unknown,
 }
 
@@ -53,6 +57,8 @@ impl FsKind {
             FsKind::Udf => "UDF",
             FsKind::Zip => "ZIP",
             FsKind::Tar => "TAR",
+            FsKind::Ad1 => "AD1",
+            FsKind::Aff4L => "AFF4-L",
             FsKind::Unknown => "Unknown",
         }
     }
@@ -115,8 +121,17 @@ pub fn detect_fs<R: Read + Seek>(r: &mut R, start: u64) -> FsKind {
     if &b[3..11] == b"NTFS    " {
         return FsKind::Ntfs;
     }
-    // A ZIP added as evidence (only where the evidence starts).
+    // An AD1 logical image: the joined segments start with its header.
+    if start == 0 && b.starts_with(b"ADLOGICALIMAGE") {
+        return FsKind::Ad1;
+    }
+    // A ZIP added as evidence (only where the evidence starts); an AFF4
+    // container of logical files is a ZIP too.
     if start == 0 && (b.starts_with(b"PK\x03\x04") || b.starts_with(b"PK\x05\x06")) {
+        let len = r.seek(std::io::SeekFrom::End(0)).unwrap_or(0);
+        if crate::aff4::is_logical(r, len) {
+            return FsKind::Aff4L;
+        }
         return FsKind::Zip;
     }
     // A tar archive added as evidence, plain or gzip-compressed.

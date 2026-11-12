@@ -409,8 +409,15 @@ fn run_ingest(st: &AppState, job: &Job, user: &str, cid: &str, eid: &str, rehash
     let ev = crate::state::open_evidence(&case, &rec)?;
 
     if rehash || rec.hashes.is_none() {
-        let total = ev.size;
-        let (hashes, n) = kokino_core::hashing::hash_reader(ev.reader()?, |d| job.progress("Hashing (MD5, SHA-1, SHA-256)", d, total))?;
+        let containers = ev.hash_containers();
+        let (hashes, n) = if containers {
+            // A sparse image of exabytes: every byte of it would take years.
+            let total: u64 = ev.files().iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum();
+            kokino_core::hashing::hash_reader(ev.containers_reader()?, |d| job.progress("Hashing the AFF4 container files (MD5, SHA-1, SHA-256)", d, total))?
+        } else {
+            let total = ev.size;
+            kokino_core::hashing::hash_reader(ev.reader()?, |d| job.progress("Hashing (MD5, SHA-1, SHA-256)", d, total))?
+        };
         let check = |x: &kokino_core::hashing::Hashes| {
             (x.md5.is_empty() || x.md5.eq_ignore_ascii_case(&hashes.md5))
                 && (x.sha1.is_empty() || x.sha1.eq_ignore_ascii_case(&hashes.sha1))
@@ -421,9 +428,9 @@ fn run_ingest(st: &AppState, job: &Job, user: &str, cid: &str, eid: &str, rehash
         case.audit.append(
             user,
             "evidence.hash",
-            serde_json::json!({"evidence": eid, "bytes": n, "hashes": hashes, "matches_expected": verified, "matches_embedded": embedded}),
+            serde_json::json!({"evidence": eid, "bytes": n, "hashes": hashes, "of": if containers { "container files" } else { "image" }, "matches_expected": verified, "matches_embedded": embedded}),
         )?;
-        if rec.size != n {
+        if !containers && rec.size != n {
             // The file changed size since it was added: record it, the audit
             // entry above already holds the new hashes.
             case.audit.append(user, "evidence.size_changed", serde_json::json!({"evidence": eid, "was": rec.size, "now": n}))?;

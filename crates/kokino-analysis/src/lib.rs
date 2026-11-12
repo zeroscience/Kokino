@@ -8,6 +8,8 @@
 
 pub mod ioc;
 pub mod plugins;
+pub mod ad1fs;
+pub mod aff4lfs;
 pub mod antiforensics;
 pub mod binview;
 pub mod signatures;

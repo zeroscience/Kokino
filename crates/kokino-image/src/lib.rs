@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod aff4;
 pub mod bde;
 pub mod ewf;
 pub mod source;

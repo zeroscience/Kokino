@@ -43,6 +43,7 @@ Run on Windows 10.
 | yarp test hives (dirty hives with their transaction logs, 1.3.0) | Hives after log replay against the hives Windows 10 and Windows 7 recovered | New format identical; old format identical apart from two fields Windows rewrites on load; damaged logs refused |
 | Digital Detective practice files: SOFTWARE and SYSTEM hives (1.2.9) | Deleted keys and values in the hives' free space | 181 deleted keys (176 with full paths) and 627 values without a key recovered: Windows Installer and servicing entries removed at setup, a removed shadow copy device |
 | Digital Detective practice files: Internet Explorer 9 index.dat files and the formatted E01 (1.2.9) | History, cache and downloads read live; records carved from free space against the live counts | All 16 files read; all 15 index.dat files and all 5,920 records recovered from the formatted volume, the same counts as live, after two fixes (below) |
+| AFF4 reference images and an FTK Imager AD1 image (1.6.1) | Image streams against their recorded hashes; files against their recorded MD5 | All match; the same device imaged three ways reads the same |
 | NIST CFReDS DFR, 61 images (FAT12/16/32, exFAT, NTFS) | Every deleted file Kokino lists, block by block, against the files' own tags; counts against NIST's layout | 3,048 of 3,323 deleted test files complete, 1,367,020 of 1,370,338 blocks right (99.8%); exFAT 100%, NTFS 100% of blocks; wrong content without a warning in 4 files |
 
 The validation found real problems in Kokino, all fixed before these
@@ -433,6 +434,27 @@ uses high (cyclic) encryption or the ANSI format; those paths follow the
 specification and are covered only by the fuzzer. The synthetic PST in
 `crates/kokino-analysis/src/pst.rs` (two-level B-trees, a recipient
 table, an attachment spread over three blocks) is checked byte for byte.
+
+## AFF4 and AD1: reference images (1.6.1)
+
+Public test images, read locally (not included in Kokino): the AFF4
+Canonical Reference Images (aff4/ReferenceImages, made with Evimetry) and
+the AD1 image of pyad1 (Apache-2.0), made with FTK Imager 3.4.3.3.
+
+| Image | What it is | Result |
+|---|---|---|
+| AFF4 Base-Linear | 256 MB device, map over a snappy image stream | Stream MD5 and SHA-1 match the recorded ones; the NTFS volume read (14 files, 1 deleted) |
+| AFF4 Base-Linear-AllHashes | Same device, block hashes in five algorithms | Stream hashes match; the whole image reads the same as Base-Linear |
+| AFF4 Base-Allocated | Only the allocated blocks imaged | Stream hashes match; the gaps read as zeros |
+| AFF4 Base-Linear-ReadError | Same device with a read error | Stream hashes match; the unreadable run reads as UNREADABLEDATA, and the Summary says so |
+| AFF4 Striped Base-Linear_1/_2 | One image over two containers | Opened from either file; both stream hashes match; the whole image reads the same as Base-Linear |
+| AFF4 Base-ExabyteSparse (errata) | 9 EB image, mostly unmapped | Opens; reads at its start and in its middle; hashed by its container files |
+| AFF4-L dream.aff4, unicode.aff4 | Logical images: a ZIP member, and files kept as snappy image streams | Every file with a recorded MD5 matches it (8 files) |
+| AD1 text-and-pictures (4 segments) | FTK Imager custom content image, version 4 | All 8 files match the MD5 FTK recorded, including a 6.5 MB text read across segment boundaries |
+
+The unit tests build their own AFF4 containers (a map over a snappy stream
+with a stored chunk, a gap and a read error; a logical container) and AD1
+images, so CI checks the readers without these files.
 
 ## WebCache (1.3.1)
 

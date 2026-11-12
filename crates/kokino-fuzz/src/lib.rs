@@ -34,6 +34,8 @@ pub const TARGETS: &[Target] = &[
     Target { name: "bde", run: bde, seeds: &["crates/kokino-fuzz/seeds/bde"] },
     Target { name: "vss", run: vss, seeds: &["crates/kokino-fuzz/seeds/vss"] },
     Target { name: "tar", run: tarfs, seeds: &["crates/kokino-fuzz/seeds/tar"] },
+    Target { name: "ad1", run: ad1, seeds: &["crates/kokino-fuzz/seeds/ad1"] },
+    Target { name: "aff4", run: aff4, seeds: &["crates/kokino-fuzz/seeds/aff4"] },
     Target { name: "pst", run: pst, seeds: &["crates/kokino-fuzz/seeds/pst"] },
     Target { name: "plist", run: plist, seeds: &["crates/kokino-fuzz/seeds/plist"] },
     Target { name: "ioc", run: ioc, seeds: &["crates/kokino-fuzz/seeds/ioc"] },
@@ -376,6 +378,24 @@ fn vss(d: &[u8]) {
 
 /// A tar or tar.gz read as a file system (UAC collections): headers, GNU
 /// long names, PAX records, hard links, reads.
+/// AD1 logical images: the item tree, metadata, chunk tables and zlib
+/// chunks of every file.
+fn ad1(d: &[u8]) {
+    let mut r = std::io::Cursor::new(d);
+    if let Ok(v) = kokino_analysis::ad1fs::open(&mut r, d.len() as u64) {
+        for e in v.entries().iter().filter(|e| !e.is_dir).take(32) {
+            let _ = v.read(&mut r, e, 0, 1 << 17);
+            let _ = v.read(&mut r, e, e.size.saturating_sub(10), 100);
+        }
+    }
+}
+
+/// AFF4 containers: ZIP64 directory, Turtle, maps, image streams (snappy,
+/// LZ4, deflate), symbolic streams and AFF4-L files.
+fn aff4(d: &[u8]) {
+    kokino_image::aff4::fuzz(d);
+}
+
 fn tarfs(d: &[u8]) {
     let mut r = std::io::Cursor::new(d);
     let _ = kokino_image::volume::detect_fs(&mut r, 0);
