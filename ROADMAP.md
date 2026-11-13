@@ -10,7 +10,7 @@ checked against public test images with known answers where they exist
 
 ## Status: 1.6
 
-1.5.0, 1.6.0 and 1.6.1 finished most of what could be built without new test data. What is
+1.5.0 and 1.6.0 to 1.6.2 finished most of what could be built without new test data. What is
 left below mostly waits for samples: disks from real Macs, encrypted APFS
 volumes, Windows Search databases and XFS images. Security reports
 ([SECURITY.md](SECURITY.md)) and wrong results (an artifact read

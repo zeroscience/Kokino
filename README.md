@@ -22,7 +22,7 @@
   <img src="https://img.shields.io/badge/rust-1.80%2B-orange?logo=rust&logoColor=white" alt="Rust 1.80+">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey" alt="Platforms: Windows, Linux, macOS">
   <img src="https://img.shields.io/badge/GUI-browser-1f6feb" alt="Browser GUI">
-  <img src="https://img.shields.io/badge/version-1.6.1-00bcd4" alt="Version 1.6.1">
+  <img src="https://img.shields.io/badge/version-1.6.2-00bcd4" alt="Version 1.6.2">
   <img src="https://img.shields.io/badge/evidence-read--only-2ea44f" alt="Evidence read-only">
   <img src="https://img.shields.io/badge/audit%20log-hash--chained-2ea44f" alt="Hash-chained audit log">
   <a href="SECURITY.md#fuzzing-the-parsers"><img src="https://img.shields.io/badge/parsers%20fuzzed-952M%20inputs-2ea44f" alt="Parsers fuzzed: 952 million inputs"></a>
@@ -70,7 +70,7 @@ Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workben
 
 Every finding links to the exact bytes it came from, every indicator of anti-forensic activity explains itself, and every examiner action lands in a hash-chained audit log, so the results hold up in a report and in court.
 
-> Status: 1.6.1 reads AFF4 disk images (striped and sparse ones too) and AFF4-L and AccessData AD1 logical images, brings back deleted Outlook messages from the PST's free space, and joins ZIP-based files (Office, OpenDocument) and PDFs split in two pieces when carving. 1.6 put plugin rows on the timelines and in the watchlist; 1.5 brought STIX and MISP watchlists, plugins, written CDs and DVDs, ESXi snapshots and dates day first; 1.4 the case timeline and the watchlist. Reads E01, AFF4, raw and virtual disks, and NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF; BitLocker, shadow copies, triage collections and logical images. Validated against NIST CFReDS, Digital Corpora, dfvfs and AFF4 reference images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed with 952 million inputs ([SECURITY.md](SECURITY.md)). See [What's next](#whats-next).
+> Status: 1.6.2 reads Ex01 (EnCase 7 and later) images with their stored hashes and acquisition details, joins PDFs with cross-reference streams and linearized PDFs split in two when carving, and imports HashKeeper and hashdeep hash sets. 1.6.1 brought AFF4 disk images, AFF4-L and AD1 logical images and deleted Outlook messages from the PST's free space; 1.6 plugin rows on the timelines and in the watchlist; 1.5 STIX and MISP watchlists, plugins, written CDs and DVDs and ESXi snapshots. Reads E01, Ex01, AFF4, raw and virtual disks, and NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF; BitLocker, shadow copies, triage collections and logical images. Validated against NIST CFReDS, Digital Corpora, dfvfs and AFF4 reference images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed with 952 million inputs ([SECURITY.md](SECURITY.md)). See [What's next](#whats-next).
 
 ## Features
 

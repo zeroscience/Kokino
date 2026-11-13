@@ -238,7 +238,7 @@ AD1 and AFF4 images (1.6.1):
 | `ad1` | AD1 logical images: image header, item tree (loops, damage), metadata records, chunk tables, zlib chunks | short rounds, then 10 min | 5,132,730 | 1 (memory) |
 | `aff4` | AFF4 containers: ZIP64 directory, Turtle, maps and their indexes, image streams and bevy indexes, snappy and LZ4, symbolic streams, AFF4-L files | short rounds, then 10 min | 10,077,348 | 2 (memory, hang) |
 
-Ex01 and more PDF carving (after 1.6.1):
+Ex01 and more PDF carving (1.6.2):
 
 | Target | What it covers | Rounds | Inputs in all | Distinct problems found |
 |---|---|---|--:|---|
