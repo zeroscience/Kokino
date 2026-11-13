@@ -24,7 +24,7 @@ pub const TARGETS: &[Target] = &[
     Target { name: "vdisk", run: vdisk, seeds: &["tests/fixtures/vd-dynamic.vhd", "tests/fixtures/vd-dynamic.vhdx", "tests/fixtures/vd-sparse.vmdk", "tests/fixtures/vd-stream.vmdk", "crates/kokino-fuzz/seeds/vdisk", "tests/fixtures/vd-esx-vmfssparse-delta.vmdk", "tests/fixtures/vd-esx-sesparse-sesparse.vmdk"] },
     Target { name: "optical", run: optical, seeds: &["tests/fixtures/iso-rr-joliet.iso", "tests/fixtures/iso-udf.iso", "tests/fixtures/iso-multisession.iso", "tests/fixtures/udf-sparable.img", "tests/fixtures/udf-vat.img"] },
     Target { name: "mac", run: mac, seeds: &["tests/fixtures/hfsplus.img", "tests/fixtures/apfs.img"] },
-    Target { name: "ewf", run: ewf, seeds: &["tests/fixtures/disk-af-odd.E01", "tests/fixtures/disk-af.E01"] },
+    Target { name: "ewf", run: ewf, seeds: &["tests/fixtures/disk-af-odd.E01", "tests/fixtures/disk-af.E01", "tests/fixtures/disk-fat-raw.Ex01", "tests/fixtures/disk-win-ex.Ex01"] },
     Target { name: "indx", run: indx, seeds: &["crates/kokino-fuzz/seeds/indx"] },
     Target { name: "usn", run: usn, seeds: &["crates/kokino-fuzz/seeds/usn"] },
     Target { name: "shellbags", run: shellbags, seeds: &["crates/kokino-fuzz/seeds/shellbags"] },

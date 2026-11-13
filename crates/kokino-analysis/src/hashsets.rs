@@ -7,7 +7,9 @@
 //! binary hash as primary key, and are shared by every case.
 //!
 //! Sources: NSRL RDS v3 (SQLite, table FILE), NSRL RDS 2.x `NSRLFile.txt`
-//! and other CSV files with a header naming the hash columns, and plain
+//! and other CSV files with a header naming the hash columns, HashKeeper
+//! hash sets (MD5 in the column "hash"), hashdeep and md5deep output
+//! (the columns from its "%%%% size,md5,..." line), and plain
 //! lists (one hash per line, md5sum / sha256sum output, hashes mixed with
 //! names): every token of 32, 40 or 64 hex digits is taken as MD5, SHA-1 or
 //! SHA-256.
@@ -561,13 +563,40 @@ fn import_text(src: &Path, size: u64, w: &mut Writer, progress: Progress) -> any
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
+        // hashdeep / md5deep: "%%%% HASHDEEP-1.0", then "%%%% size,md5,sha256,filename".
+        if let Some(rest) = line.strip_prefix("%%%%") {
+            let rest = rest.trim();
+            if rest.to_ascii_uppercase().starts_with("HASHDEEP") {
+                format = "hashdeep".into();
+            } else if header.is_none() {
+                let fields: Vec<String> = rest.split(',').map(|f| f.trim().to_ascii_lowercase()).collect();
+                let col = |n: &str| fields.iter().position(|f| f == n);
+                header = Some([col("md5"), col("sha1"), col("sha256")]);
+                if format != "hashdeep" {
+                    format = "hashdeep".into();
+                }
+            }
+            first = false;
+            continue;
+        }
         if first {
             first = false;
             let fields: Vec<String> = csv_fields(line).into_iter().map(|f| f.trim().to_ascii_lowercase()).collect();
             let col = |names: &[&str]| fields.iter().position(|f| names.contains(&f.as_str()));
-            let h = [col(&["md5"]), col(&["sha-1", "sha1"]), col(&["sha-256", "sha256"])];
+            let mut h = [col(&["md5"]), col(&["sha-1", "sha1"]), col(&["sha-256", "sha256"])];
+            // HashKeeper: file_id, hashset_id, file_name, directory, hash, ...
+            let hashkeeper = h.iter().all(Option::is_none) && col(&["hash"]).is_some() && col(&["hashset_id", "file_id"]).is_some();
+            if hashkeeper {
+                h[0] = col(&["hash"]);
+            }
             if h.iter().any(Option::is_some) && fields.iter().all(|f| unhex(f).is_none()) {
-                format = if fields.first().map(|f| f == "sha-1").unwrap_or(false) && fields.iter().any(|f| f == "productcode") { "NSRL RDS 2.x (CSV)".into() } else { "CSV with a header".into() };
+                format = if hashkeeper {
+                    "HashKeeper (CSV)".into()
+                } else if fields.first().map(|f| f == "sha-1").unwrap_or(false) && fields.iter().any(|f| f == "productcode") {
+                    "NSRL RDS 2.x (CSV)".into()
+                } else {
+                    "CSV with a header".into()
+                };
                 header = Some(h);
                 continue;
             }
@@ -804,6 +833,30 @@ mod tests {
         store.delete(&nsrl2.id).unwrap();
         assert_eq!(store.list().unwrap().len(), 2);
         assert!(!d.join("sets").join(format!("{}.sqlite", nsrl2.id)).exists());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// HashKeeper takes only the "hash" column (a file name of 32 hex
+    /// digits is not a hash); hashdeep takes the columns its header names.
+    #[test]
+    fn imports_hashkeeper_and_hashdeep() {
+        let d = tmp("hk");
+        let store = Store::open(d.join("sets"));
+        let (a, b) = (hashes(b"alpha"), hashes(b"bravo"));
+        let hk = d.join("lab.hke");
+        std::fs::write(&hk, format!("\"file_id\",\"hashset_id\",\"file_name\",\"directory\",\"hash\",\"file_size\",\"date_modified\",\"time_modified\",\"time_zone\",\"comments\",\"date_accessed\",\"time_accessed\"\n1,7,\"{}.dat\",\"C:\\Lab\\\",\"{}\",5,10/21/2026,02:30:00,UTC,\"\",,\n", b.md5, a.md5.to_uppercase())).unwrap();
+        let set = store.import(&hk, "HashKeeper lab", SetKind::Notable, "", "tester", &mut |_, _, _| true).unwrap();
+        assert_eq!(set.format, "HashKeeper (CSV)");
+        assert_eq!((set.md5, set.sha1, set.sha256), (1, 0, 0));
+        let m = store.matcher().unwrap();
+        assert_eq!(m.lookup(&a).unwrap().len(), 1);
+        assert!(m.lookup(&b).unwrap().is_empty(), "the file name is not a hash");
+        drop(m);
+        let hd = d.join("hashdeep.txt");
+        std::fs::write(&hd, format!("%%%% HASHDEEP-1.0\n%%%% size,md5,sha256,filename\n## Invoked from: C:\\Lab\n## $ hashdeep -r .\n##\n5,{},{},C:\\Lab\\{}.bin\n", a.md5, a.sha256, b.sha256)).unwrap();
+        let set = store.import(&hd, "hashdeep lab", SetKind::Known, "", "tester", &mut |_, _, _| true).unwrap();
+        assert_eq!(set.format, "hashdeep");
+        assert_eq!((set.md5, set.sha1, set.sha256), (1, 0, 1));
         std::fs::remove_dir_all(&d).ok();
     }
 

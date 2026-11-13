@@ -40,6 +40,8 @@ struct Chunk {
     offset: u64,
     stored: u32,
     compressed: bool,
+    /// EWF2: the chunk is this 8-byte pattern repeated (nothing stored).
+    pattern: Option<u64>,
 }
 
 /// What the acquisition tool recorded about the media and the acquisition.
@@ -73,6 +75,10 @@ pub struct EwfImage {
 
 impl EwfImage {
     pub fn open(first: &Path) -> anyhow::Result<EwfImage> {
+        let mut sig = [0u8; 8];
+        if File::open(first).and_then(|mut f| f.read_exact(&mut sig)).is_ok() && &sig == SIGNATURE_V2 {
+            return Self::open_v2(first);
+        }
         let mut paths = vec![];
         let mut chunks: Vec<Chunk> = vec![];
         let mut info = EwfInfo::default();
@@ -93,7 +99,7 @@ impl EwfImage {
             let mut fh = [0u8; 13];
             f.read_exact(&mut fh).with_context(|| format!("{}: truncated file header", path.display()))?;
             if &fh[..8] == SIGNATURE_V2 {
-                bail!("Ex01 (EWF version 2) is not supported yet; export it to E01 or raw");
+                return Self::open_v2(first);
             }
             if &fh[..8] != SIGNATURE {
                 bail!("{}: not an EWF segment (bad signature)", path.display());
@@ -297,7 +303,7 @@ fn parse_table(t: &[u8], seg: u32, sectors: Option<(u64, u64)>, table_off: u64, 
         if end <= o || end - o > (MAX_CHUNK as u64) + 4 {
             bail!("chunk {} has an implausible size", out.len());
         }
-        out.push(Chunk { seg, offset: o, stored: (end - o) as u32, compressed: comp });
+        out.push(Chunk { seg, offset: o, stored: (end - o) as u32, compressed: comp, pattern: None });
     }
     Ok(n)
 }
@@ -412,6 +418,241 @@ pub fn segment_path(first: &Path, n: u32) -> Option<PathBuf> {
     Some(first.with_extension(ext))
 }
 
+/// The `.Ex01` segment names: `.Ex01` .. `.Ex99`, then `.ExAA` .. `.ExZZ`,
+/// `.EyAA` .. `.EzZZ`, keeping the case of the first segment.
+pub fn segment_path_v2(first: &Path, n: u32) -> Option<PathBuf> {
+    let ext = first.extension()?.to_str()?;
+    let mut c = ext.chars();
+    let (lead, second) = (c.next()?, c.next()?);
+    let lower = second.is_ascii_lowercase();
+    let ext = if n <= 99 {
+        format!("{}{}{:02}", lead, second, n)
+    } else {
+        let k = n - 100;
+        let s2 = (second.to_ascii_lowercase() as u8).checked_add((k / 676) as u8)?;
+        if s2 > b'z' {
+            return None;
+        }
+        let tail = format!("{}{}", (b'A' + (k / 26 % 26) as u8) as char, (b'A' + (k % 26) as u8) as char);
+        format!("{}{}{}", lead, s2 as char, if lower { tail } else { tail.to_ascii_uppercase() })
+    };
+    Some(first.with_extension(ext))
+}
+
+/// An EWF2 serialized object ("1", "main", tags, values): tag to value.
+fn ewf2_object(t: &str) -> BTreeMap<String, String> {
+    let lines: Vec<&str> = t.split('\n').map(|l| l.trim_end_matches('\r')).collect();
+    let mut out = BTreeMap::new();
+    let Some(mi) = lines.iter().position(|l| *l == "main") else { return out };
+    let keys: Vec<&str> = lines.get(mi + 1).map(|l| l.split('\t').collect()).unwrap_or_default();
+    let vals: Vec<&str> = lines.get(mi + 2).map(|l| l.split('\t').collect()).unwrap_or_default();
+    for (k, v) in keys.iter().zip(vals.iter()) {
+        let v = v.trim().replace(['\u{1}', '\u{2}', '\u{3}'], " ");
+        if !v.is_empty() {
+            out.insert(k.to_string(), v);
+        }
+    }
+    out
+}
+
+impl EwfImage {
+    /// EWF version 2 (EnCase 7 and later `.Ex01`): every segment's sections
+    /// read back to front from the descriptor at its end; device information
+    /// and case data as serialized objects; 16-byte chunk table entries
+    /// (offset or fill pattern, size, flags); MD5 and SHA-1 sections; the
+    /// error table. Encrypted images are refused; bzip2 chunks are reported.
+    fn open_v2(first: &Path) -> anyhow::Result<EwfImage> {
+        let mut paths = vec![];
+        let mut chunks: Vec<Chunk> = vec![];
+        let mut info = EwfInfo::default();
+        let mut device: Option<BTreeMap<String, String>> = None;
+        let mut case: Option<BTreeMap<String, String>> = None;
+        let mut set_id: Option<[u8; 16]> = None;
+        let mut bzip2 = false;
+        let mut done = false;
+        // Named .Ex01, .Ex02 ... as EnCase does; an image named .E01 by
+        // mistake continues as .E02 ...
+        let v2_names = first.extension().is_some_and(|e| e.len() == 4);
+        for seg_no in 1u32.. {
+            let path = match seg_no {
+                1 => Some(first.to_path_buf()),
+                n if v2_names => segment_path_v2(first, n),
+                n => segment_path(first, n),
+            }
+            .with_context(|| format!("too many segments after {}", first.display()))?;
+            if !path.exists() {
+                if seg_no == 1 {
+                    bail!("{} not found", path.display());
+                }
+                bail!("segment {} of the image is missing: expected {}", seg_no, path.display());
+            }
+            let mut f = File::open(&path).with_context(|| format!("cannot open {}", path.display()))?;
+            let flen = f.metadata()?.len();
+            let mut fh = [0u8; 32];
+            f.read_exact(&mut fh).with_context(|| format!("{}: truncated file header", path.display()))?;
+            if &fh[..8] != SIGNATURE_V2 {
+                bail!("{}: not an Ex01 segment (bad signature)", path.display());
+            }
+            if fh[8] != 2 {
+                bail!("{}: EWF version {}.{} is not supported", path.display(), fh[8], fh[9]);
+            }
+            let comp = u16::from_le_bytes([fh[10], fh[11]]);
+            bzip2 |= comp == 2;
+            let found = le32(&fh[12..]);
+            if found != seg_no {
+                bail!("{}: holds segment {} where segment {} was expected", path.display(), found, seg_no);
+            }
+            let id: [u8; 16] = fh[16..32].try_into().unwrap();
+            match set_id {
+                None => set_id = Some(id),
+                Some(s) if s != id => bail!("{}: belongs to another image (set identifier differs)", path.display()),
+                _ => {}
+            }
+            let seg_idx = paths.len() as u32;
+            paths.push(path.clone());
+            // The descriptors, last to first.
+            let mut secs: Vec<(u32, u64, u64)> = vec![];
+            let mut off = flen.checked_sub(64).filter(|&o| o >= 32).with_context(|| format!("{}: too short", path.display()))?;
+            loop {
+                let d = read_at(&mut f, off, 64)?;
+                if adler32(&d[..60]) != le32(&d[60..]) {
+                    bail!("{}: section descriptor checksum mismatch at offset {}", path.display(), off);
+                }
+                let (kind, flags, prev, size) = (le32(&d), le32(&d[4..]), le64(&d[8..]), le64(&d[16..]));
+                if flags & 2 != 0 {
+                    bail!("this Ex01 image is encrypted; encrypted Ex01 images are not supported yet");
+                }
+                if size > off {
+                    bail!("{}: section at offset {} is larger than what comes before it", path.display(), off);
+                }
+                secs.push((kind, off - size, size));
+                if prev == 0 {
+                    break;
+                }
+                if prev >= off || prev < 32 || secs.len() > 1 << 20 {
+                    bail!("{}: section chain goes forward or loops at offset {}", path.display(), off);
+                }
+                off = prev;
+            }
+            secs.reverse();
+            for (kind, data_off, size) in secs {
+                let text = |f: &mut File| -> Option<BTreeMap<String, String>> {
+                    let raw = read_at(f, data_off, size.min(16 << 20) as usize).ok()?;
+                    let t = match comp {
+                        0 => {
+                            let u: Vec<u16> = raw.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+                            String::from_utf16_lossy(u.strip_prefix(&[0xfeff]).unwrap_or(&u))
+                        }
+                        _ => inflate_text(&raw, true).ok()?,
+                    };
+                    Some(ewf2_object(&t))
+                };
+                match kind {
+                    1 if device.is_none() => device = text(&mut f),
+                    2 if case.is_none() => case = text(&mut f),
+                    4 => {
+                        let t = read_at(&mut f, data_off, size.min(64 << 20) as usize)?;
+                        if t.len() < 20 || adler32(&t[..16]) != le32(&t[16..]) {
+                            bail!("{}: chunk table header checksum mismatch", path.display());
+                        }
+                        let (first_chunk, n) = (le64(&t), le32(&t[8..]) as usize);
+                        if first_chunk != chunks.len() as u64 {
+                            bail!("{}: chunk table starts at chunk {} where {} was expected", path.display(), first_chunk, chunks.len());
+                        }
+                        let entries = t.get(32..32 + n * 16).with_context(|| format!("{}: chunk table holds fewer entries than it declares", path.display()))?;
+                        if let Some(sum) = t.get(32 + n * 16..36 + n * 16) {
+                            if adler32(entries) != le32(sum) {
+                                bail!("{}: chunk table entries checksum mismatch", path.display());
+                            }
+                        }
+                        for e in entries.chunks_exact(16) {
+                            let (o, stored, flags) = (le64(e), le32(&e[8..]), le32(&e[12..]));
+                            let compressed = flags & 1 != 0;
+                            let pattern = (compressed && flags & 4 != 0).then_some(o);
+                            if pattern.is_none() && (stored == 0 || stored > MAX_CHUNK + 4 || o.checked_add(stored as u64).is_none_or(|x| x > flen)) {
+                                bail!("{}: chunk {} has an implausible place or size", path.display(), chunks.len());
+                            }
+                            chunks.push(Chunk { seg: seg_idx, offset: o, stored, compressed, pattern });
+                        }
+                    }
+                    5 => {
+                        let e = read_at(&mut f, data_off, size.min(64 << 20) as usize)?;
+                        let n = le32(&e) as usize;
+                        for i in 0..n.min(1 << 20) {
+                            let Some(x) = e.get(32 + i * 16..48 + i * 16) else { break };
+                            info.read_errors.push((le64(x), le32(&x[8..]) as u64));
+                        }
+                    }
+                    8 => info.md5 = Some(hexs(&read_at(&mut f, data_off, 16)?)),
+                    9 => info.sha1 = Some(hexs(&read_at(&mut f, data_off, 20)?)),
+                    0xf => done = true,
+                    _ => {}
+                }
+            }
+            if done {
+                break;
+            }
+        }
+        let device = device.context("no device information section found")?;
+        let case = case.unwrap_or_default();
+        let num = |m: &BTreeMap<String, String>, k: &str| m.get(k).and_then(|v| v.parse::<u64>().ok());
+        let bps = num(&device, "bp").unwrap_or(512) as u32;
+        let spc = num(&case, "sb").unwrap_or(64) as u32;
+        let sectors_n = num(&device, "ts").context("the device information has no sector count")?;
+        if spc == 0 || bps == 0 || (spc as u64) * (bps as u64) > MAX_CHUNK as u64 {
+            bail!("implausible geometry ({} sectors per chunk, {} bytes per sector)", spc, bps);
+        }
+        let chunk_size = spc * bps;
+        let media_size = sectors_n.checked_mul(bps as u64).context("media size out of range")?;
+        let chunk_count = chunks.len() as u64;
+        if let Some(tb) = num(&case, "tb") {
+            if tb != chunk_count {
+                bail!("chunk tables list {} chunks but the case data says {}", chunk_count, tb);
+            }
+        }
+        if chunk_count.checked_mul(chunk_size as u64).is_none_or(|cap| media_size > cap) {
+            bail!("media size {} exceeds what {} chunks can hold", media_size, chunk_count);
+        }
+        if bzip2 && chunks.iter().any(|c| c.compressed && c.pattern.is_none()) {
+            bail!("this Ex01 image is compressed with bzip2, which Kokino does not read yet");
+        }
+        info.media_type = match device.get("dt").map(|s| s.as_str()) {
+            Some("f") => "fixed".into(),
+            Some("r") => "removable".into(),
+            Some("c") => "optical".into(),
+            Some("l") => "logical".into(),
+            Some("m") => "memory".into(),
+            Some(x) => x.to_string(),
+            None => String::new(),
+        };
+        if let Some(id) = set_id {
+            info.set_identifier = guid(&id);
+        }
+        for (k, name) in [("sn", "serial_number"), ("md", "model"), ("lb", "device_label")] {
+            if let Some(v) = device.get(k) {
+                info.acquisition.insert(name.into(), v.clone());
+            }
+        }
+        for (k, name) in [("nm", "description"), ("cn", "case_number"), ("en", "evidence_number"), ("ex", "examiner"), ("nt", "notes"), ("av", "acquisition_software"), ("os", "acquisition_os"), ("tt", "acquired"), ("at", "system_date")] {
+            if let Some(v) = case.get(k) {
+                let v = if k == "tt" || k == "at" { header_date(v, true) } else { v.clone() };
+                info.acquisition.insert(name.into(), v);
+            }
+        }
+        if let Some(w) = case.get("wb") {
+            info.acquisition.insert("write_blocker".into(), match w.as_str() { "1" => "FastBloc".into(), "2" => "Tableau".into(), x => x.to_string() });
+        }
+        info.acquisition.insert("format".into(), "EWF2 (Ex01)".into());
+        info.segments = paths.iter().map(|p| p.display().to_string()).collect();
+        info.media_size = media_size;
+        info.bytes_per_sector = bps;
+        info.sectors_per_chunk = spc;
+        info.chunk_count = chunk_count;
+        info.compressed_chunks = chunks.iter().filter(|c| c.compressed).count() as u64;
+        Ok(EwfImage { paths, chunks, chunk_size, info })
+    }
+}
+
 /// Logical media stream of an EWF image. Keeps a few decompressed chunks.
 pub struct EwfReader {
     img: Arc<EwfImage>,
@@ -428,6 +669,11 @@ impl EwfReader {
             return Ok(hit.1);
         }
         let c = self.img.chunks[idx as usize];
+        if let Some(p) = c.pattern {
+            let size = self.img.chunk_size as usize;
+            let data: Vec<u8> = p.to_le_bytes().iter().copied().cycle().take(size).collect();
+            return Ok(Arc::new(data));
+        }
         if self.files.len() < self.img.paths.len() {
             self.files.resize_with(self.img.paths.len(), || None);
         }
@@ -635,6 +881,55 @@ mod tests {
             r.read_exact(&mut b).unwrap();
             assert_eq!(&b[..], &raw[off as usize..off as usize + 10], "offset {off}");
         }
+    }
+
+    /// Ex01 written by an independent tool (ewf-image's ewf-cli, which
+    /// checks its output against libewf) from the lab disks: four segments
+    /// of zlib chunks, and one uncompressed set with pattern-filled chunks.
+    #[test]
+    fn ex01_fixtures_match_raw() {
+        for (img, raw, segs, case) in [("disk-win-ex.Ex01", "disk-win.img", 4, Some(("LAB-2026-014", "alice"))), ("disk-fat-raw.Ex01", "disk-fat.img", 1, None)] {
+            let raw = std::fs::read(fixture(raw)).unwrap();
+            let e = Arc::new(EwfImage::open(&fixture(img)).unwrap());
+            assert_eq!(e.size(), raw.len() as u64, "{img}");
+            assert_eq!(sha256_of(&mut e.reader()), sha256_of(&mut &raw[..]), "{img}");
+            assert_eq!(e.info.segments.len(), segs, "{img}");
+            {
+                use md5::Digest;
+                assert_eq!(e.info.md5.as_deref(), Some(hexs(&md5::Md5::digest(&raw)).as_str()), "{img}");
+            }
+            assert_eq!(e.info.acquisition["format"], "EWF2 (Ex01)");
+            if let Some((cn, ex)) = case {
+                assert_eq!((e.info.acquisition["case_number"].as_str(), e.info.acquisition["examiner"].as_str()), (cn, ex));
+            }
+            // Random access across chunks and segments.
+            let mut r = e.reader();
+            for &off in &[0u64, 32_767, 40 * 32_768 - 3, 81 * 32_768 + 5, raw.len() as u64 - 10] {
+                let mut b = [0u8; 10];
+                r.seek(SeekFrom::Start(off)).unwrap();
+                r.read_exact(&mut b).unwrap();
+                assert_eq!(&b[..], &raw[off as usize..off as usize + 10], "{img} at {off}");
+            }
+        }
+        let fat = EwfImage::open(&fixture("disk-fat-raw.Ex01")).unwrap();
+        assert!(fat.chunks.iter().any(|c| c.pattern.is_some()), "pattern-filled chunks read");
+        assert_eq!(segment_path_v2(Path::new("a.Ex01"), 100).unwrap(), Path::new("a.ExAA"));
+        assert_eq!(segment_path_v2(Path::new("a.ex01"), 2).unwrap(), Path::new("a.ex02"));
+        // A changed byte in a section descriptor is caught.
+        let d = std::env::temp_dir().join(format!("kokino-ex01-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let mut b = std::fs::read(fixture("disk-fat-raw.Ex01")).unwrap();
+        let n = b.len();
+        b[n - 70] ^= 1;
+        std::fs::write(d.join("bad.Ex01"), &b).unwrap();
+        assert!(EwfImage::open(&d.join("bad.Ex01")).is_err());
+        // A missing segment is named.
+        for i in [1, 2, 4] {
+            std::fs::copy(fixture(&format!("disk-win-ex.Ex0{i}")), d.join(format!("w.Ex0{i}"))).unwrap();
+        }
+        let err = EwfImage::open(&d.join("w.Ex01")).unwrap_err().to_string();
+        assert!(err.contains("segment 3"), "{err}");
+        std::fs::remove_dir_all(&d).ok();
     }
 
     #[test]

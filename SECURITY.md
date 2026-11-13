@@ -238,7 +238,14 @@ AD1 and AFF4 images (1.6.1):
 | `ad1` | AD1 logical images: image header, item tree (loops, damage), metadata records, chunk tables, zlib chunks | short rounds, then 10 min | 5,132,730 | 1 (memory) |
 | `aff4` | AFF4 containers: ZIP64 directory, Turtle, maps and their indexes, image streams and bevy indexes, snappy and LZ4, symbolic streams, AFF4-L files | short rounds, then 10 min | 10,077,348 | 2 (memory, hang) |
 
-In all: 941,793,438 inputs over 43 targets, and 43 distinct problems
+Ex01 and more PDF carving (after 1.6.1):
+
+| Target | What it covers | Rounds | Inputs in all | Distinct problems found |
+|---|---|---|--:|---|
+| `ewf` | again, with Ex01 (EWF2): sections read back to front, serialized case and device objects, 16-byte chunk tables, pattern-filled chunks; Ex01 seeds | 10 min | 57,238 | none |
+| `carve` | again, with PDF cross-reference streams (predictors), /Prev and /XRefStm chains, gaps found from sections or objects, DCT pictures checked | 10 min | 9,896,461 | none |
+
+In all: 951,747,137 inputs over 43 targets, and 43 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed

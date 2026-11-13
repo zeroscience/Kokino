@@ -456,6 +456,24 @@ The unit tests build their own AFF4 containers (a map over a snappy stream
 with a stored chunk, a gap and a read error; a logical container) and AD1
 images, so CI checks the readers without these files.
 
+## Ex01 (1.6.2)
+
+No public Ex01 image with real content was found. Two small Ex01 files that
+libewf made (SecurityRonin/ewf-forensic, Apache-2.0: 128 sectors of zeros,
+one uncompressed, one compressed) and Ex01 written from Kokino's own test
+disks by ewf-image's `ewf-cli` (github.com/ebrig/ewf-image, Apache-2.0; an
+independent writer that checks its output against libewf) were read:
+
+| Image | What it is | Result |
+|---|---|---|
+| zeros_128s.Ex01, zeros_128s_compressed.Ex01 | libewf, uncompressed and zlib | Read as 64 KiB of zeros; stored MD5 matches; case details shown |
+| disk-win-ex.Ex01 .. .Ex04 | The NTFS test disk, zlib, four segments | Byte for byte the raw disk; stored MD5 matches; analysis identical to the raw disk's |
+| disk-fat-raw.Ex01 | The FAT test disk, uncompressed, 109 of 115 chunks pattern-filled | Byte for byte the raw disk; stored MD5 matches |
+| ext4.Ex01 | The ext4 test disk, zlib | Byte for byte the raw disk; stored MD5 matches |
+
+The second and third are in the repository as test fixtures, so CI checks
+them on every commit.
+
 ## WebCache (1.3.1)
 
 Checked on `tests/fixtures/win/WebCacheV01.dat`, written by Windows' own

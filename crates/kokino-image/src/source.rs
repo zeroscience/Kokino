@@ -1,11 +1,11 @@
 //! Evidence image formats.
 //!
-//! Supported: raw (dd/img/bin), split raw (.001, .002, ...), EWF / E01 (all
-//! segments), VHD (fixed, dynamic, differencing), VHDX, VMDK (flat, sparse,
+//! Supported: raw (dd/img/bin), split raw (.001, .002, ...), EWF / E01 and
+//! EWF2 / Ex01 (all segments), VHD (fixed, dynamic, differencing), VHDX, VMDK (flat, sparse,
 //! streamOptimized, split, snapshots; see `vdisk`), AFF4 disk images
 //! (see `aff4`), AccessData AD1 logical images (the segments joined without
 //! their 512-byte margins; the items are read by the analysis as a file
-//! system). Detected but not yet readable: Ex01, encrypted AD1.
+//! system). Detected but not yet readable: encrypted Ex01 and AD1.
 
 use anyhow::{bail, Context};
 use serde::Serialize;
@@ -87,7 +87,8 @@ impl Evidence {
 
         if n >= 8 && (&head == crate::ewf::SIGNATURE || &head == crate::ewf::SIGNATURE_V2) {
             // Any segment opens the whole set; the evidence is named by its first segment.
-            let first = crate::ewf::segment_path(&path, 1).unwrap_or(path);
+            let v2_names = &head == crate::ewf::SIGNATURE_V2 && path.extension().is_some_and(|e| e.len() == 4);
+            let first = if v2_names { crate::ewf::segment_path_v2(&path, 1) } else { crate::ewf::segment_path(&path, 1) }.unwrap_or(path);
             let img = Arc::new(EwfImage::open(&first)?);
             return Ok(Evidence { size: img.size(), path: first, format: ImageFormat::Ewf, parts: vec![], ewf: Some(img), vdisk: None, aff4: None, bitlocker: vec![] });
         }
@@ -170,6 +171,9 @@ impl Evidence {
 
     /// The format as shown to people: the virtual disk kind when there is one.
     pub fn format_label(&self) -> String {
+        if self.ewf_info().is_some_and(|i| i.acquisition.get("format").is_some_and(|f| f.starts_with("EWF2"))) {
+            return "EWF2 (Ex01)".into();
+        }
         if let Some(a) = &self.aff4 {
             return a.label.clone();
         }

@@ -25,8 +25,9 @@
 //! pieces are joined through their central directory: where it is found
 //! says how far the second piece is from the first, the local headers say
 //! which entry the break falls in, and that entry's CRC says where.
-//! PDFs with a cross-reference table are joined the same way: where the
-//! table is found says how far the second piece is, the objects still
+//! PDFs are joined the same way through their cross-reference sections
+//! (tables and streams, followed through /Prev, so linearized files too):
+//! where a section is found says how far the second piece is, the objects still
 //! where the table says are in the first piece, and the object the break
 //! falls in must read whole across it (a compressed stream must inflate
 //! with its checksum); a join is kept only when exactly one break fits.
@@ -984,55 +985,6 @@ fn pdf_obj_head(b: &[u8], num: u64) -> bool {
     n == num && i < b.len() && b[i].is_ascii_whitespace() && rest[s..].starts_with(b"obj")
 }
 
-fn pdf_is_xref(src: &mut dyn Bytes, abs: u64) -> bool {
-    let h = src.read(abs, 5);
-    h.starts_with(b"xref") && h.get(4).is_some_and(|c| c.is_ascii_whitespace())
-}
-
-/// One cross-reference section at `abs`: (object number, offset) of the
-/// objects in use, and the offset of the previous section.
-fn pdf_xref(src: &mut dyn Bytes, abs: u64) -> Option<(Vec<(u64, u64)>, Option<u64>)> {
-    const MAX_ENTRIES: u64 = 200_000;
-    let head = src.read(abs, 64 << 10);
-    let mut p = 4usize;
-    let mut out = vec![];
-    let mut buf = head;
-    loop {
-        let s = buf[p..].iter().take_while(|c| c.is_ascii_whitespace()).count();
-        p += s;
-        if buf[p..].starts_with(b"trailer") {
-            break;
-        }
-        let (start, i) = pdf_int(&buf[p..])?;
-        let (count, j) = pdf_int(&buf[p + i..])?;
-        p += i + j;
-        if out.len() as u64 + count > MAX_ENTRIES {
-            return None;
-        }
-        let need = p + count as usize * 20 + 4096;
-        if need > buf.len() {
-            buf = src.read(abs, need);
-        }
-        for k in 0..count {
-            let (off, a) = pdf_int(&buf[p..])?;
-            let (_, b) = pdf_int(&buf[p + a..])?;
-            p += a + b;
-            let s = buf[p..].iter().take_while(|c| c.is_ascii_whitespace()).count();
-            p += s;
-            let t = *buf.get(p)?;
-            p += 1;
-            if t == b'n' && off > 0 {
-                out.push((start + k, off));
-            } else if t != b'f' {
-                return None;
-            }
-        }
-    }
-    let tr = &buf[p..buf.len().min(p + 4096)];
-    let prev = tr.windows(5).position(|w| w == b"/Prev").and_then(|i| pdf_int(&tr[i + 5..])).map(|x| x.0);
-    Some((out, prev))
-}
-
 /// Whether `b` is one whole indirect object: "num gen obj" ... "endobj",
 /// text outside its stream, and a compressed stream that inflates whole.
 /// None when it cannot tell (a stream that is not compressed).
@@ -1080,6 +1032,14 @@ fn pdf_obj_ok(b: &[u8], num: u64) -> Option<bool> {
     if !text(&b[e..t]) {
         return Some(false);
     }
+    if dict.windows(10).any(|w| w == b"/DCTDecode") && !dict.windows(12).any(|w| w == b"/FlateDecode") {
+        // A JPEG picture: whole when it decodes exactly (baseline only).
+        return match crate::photo::jpeg::parse(data) {
+            Ok(j) if j.is_baseline() => Some(crate::photo::jpeg::scan_fits(data, &j)),
+            Ok(_) => None,
+            Err(_) => Some(false),
+        };
+    }
     if !dict.windows(12).any(|w| w == b"/FlateDecode") {
         return None;
     }
@@ -1088,62 +1048,315 @@ fn pdf_obj_ok(b: &[u8], num: u64) -> Option<bool> {
     Some(std::io::Read::read_to_end(&mut std::io::Read::take(&mut z, 256 << 20), &mut sink).is_ok())
 }
 
-/// A PDF at `at` (the ordinary walk said `len` bytes) whose cross-reference
-/// table is not where the file says: the two pieces, and its version.
+/// A cross-reference section at `abs`: a table ("xref"), or a stream object
+/// whose dictionary says /Type /XRef (true).
+fn pdf_section_kind(src: &mut dyn Bytes, abs: u64) -> Option<bool> {
+    let h = src.read(abs, 1024);
+    if h.starts_with(b"xref") && h.get(4).is_some_and(|c| c.is_ascii_whitespace()) {
+        return Some(false);
+    }
+    let (num, _) = pdf_int(&h)?;
+    if !pdf_obj_head(&h, num) {
+        return None;
+    }
+    let dict_end = h.windows(6).position(|w| w == b"stream").unwrap_or(h.len());
+    h[..dict_end].windows(5).any(|w| w == b"/XRef").then_some(true)
+}
+
+/// One cross-reference section: (object number, offset) of the objects in
+/// use at an offset, and the offsets of the sections it names (/Prev,
+/// /XRefStm).
+struct PdfSection {
+    entries: Vec<(u64, u64)>,
+    more: Vec<u64>,
+}
+
+const PDF_MAX_ENTRIES: u64 = 200_000;
+
+/// The integer after `key` in a dictionary.
+fn pdf_key_int(dict: &[u8], key: &[u8]) -> Option<u64> {
+    let mut from = 0;
+    while let Some(i) = dict[from..].windows(key.len()).position(|w| w == key) {
+        let at = from + i + key.len();
+        // "/Prev" must not match "/PrevX".
+        if dict.get(at).is_some_and(|c| c.is_ascii_alphanumeric()) {
+            from = at;
+            continue;
+        }
+        return pdf_int(&dict[at..]).map(|x| x.0);
+    }
+    None
+}
+
+/// The integers in the array after `key` ("/W [1 3 1]").
+fn pdf_key_ints(dict: &[u8], key: &[u8]) -> Option<Vec<u64>> {
+    let i = dict.windows(key.len()).position(|w| w == key)? + key.len();
+    let rest = &dict[i..];
+    let open = rest.iter().position(|&c| c == b'[')?;
+    if !rest[..open].iter().all(|c| c.is_ascii_whitespace()) {
+        return None;
+    }
+    let close = rest[open..].iter().position(|&c| c == b']')? + open;
+    let mut out = vec![];
+    let mut p = open + 1;
+    while let Some((v, k)) = pdf_int(&rest[p..close]) {
+        out.push(v);
+        p += k;
+        if out.len() > 4096 {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+fn pdf_xref_table(src: &mut dyn Bytes, abs: u64) -> Option<PdfSection> {
+    let mut buf = src.read(abs, 64 << 10);
+    let mut p = 4usize;
+    let mut out = vec![];
+    loop {
+        let s = buf.get(p..)?.iter().take_while(|c| c.is_ascii_whitespace()).count();
+        p += s;
+        if buf[p..].starts_with(b"trailer") {
+            break;
+        }
+        let (start, i) = pdf_int(&buf[p..])?;
+        let (count, j) = pdf_int(&buf[p + i..])?;
+        p += i + j;
+        if out.len() as u64 + count > PDF_MAX_ENTRIES {
+            return None;
+        }
+        let need = p + count as usize * 20 + 4096;
+        if need > buf.len() {
+            buf = src.read(abs, need);
+        }
+        for k in 0..count {
+            let (off, a) = pdf_int(buf.get(p..)?)?;
+            let (_, b) = pdf_int(buf.get(p + a..)?)?;
+            p += a + b;
+            let s = buf.get(p..)?.iter().take_while(|c| c.is_ascii_whitespace()).count();
+            p += s;
+            let t = *buf.get(p)?;
+            p += 1;
+            if t == b'n' && off > 0 {
+                out.push((start + k, off));
+            } else if t != b'f' {
+                return None;
+            }
+        }
+    }
+    let tr = &buf[p..buf.len().min(p + 4096)];
+    let more = [pdf_key_int(tr, b"/Prev"), pdf_key_int(tr, b"/XRefStm")].into_iter().flatten().collect();
+    Some(PdfSection { entries: out, more })
+}
+
+/// PNG predictors (PDF /Predictor 10 to 15), one byte per pixel.
+fn pdf_unpredict(d: &[u8], cols: usize) -> Option<Vec<u8>> {
+    if cols == 0 || cols > 1 << 16 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(d.len());
+    let mut prev = vec![0u8; cols];
+    for r in d.chunks_exact(cols + 1) {
+        let mut cur = r[1..].to_vec();
+        for i in 0..cols {
+            let a = if i > 0 { cur[i - 1] } else { 0 };
+            let (b, c) = (prev[i], if i > 0 { prev[i - 1] } else { 0 });
+            let add = match r[0] {
+                0 => 0,
+                1 => a,
+                2 => b,
+                3 => ((a as u16 + b as u16) / 2) as u8,
+                4 => {
+                    let p = a as i16 + b as i16 - c as i16;
+                    let (pa, pb, pc) = ((p - a as i16).abs(), (p - b as i16).abs(), (p - c as i16).abs());
+                    if pa <= pb && pa <= pc {
+                        a
+                    } else if pb <= pc {
+                        b
+                    } else {
+                        c
+                    }
+                }
+                _ => return None,
+            };
+            cur[i] = cur[i].wrapping_add(add);
+        }
+        out.extend_from_slice(&cur);
+        prev = cur;
+    }
+    Some(out)
+}
+
+fn pdf_xref_stream(src: &mut dyn Bytes, abs: u64) -> Option<PdfSection> {
+    let mut b = src.read(abs, 256 << 10);
+    let s = b.windows(6).position(|w| w == b"stream")?;
+    let dict = b[..s].to_vec();
+    let w = pdf_key_ints(&dict, b"/W")?;
+    if w.len() != 3 || w.iter().any(|&x| x > 8) || w.iter().sum::<u64>() == 0 {
+        return None;
+    }
+    let size = pdf_key_int(&dict, b"/Size").unwrap_or(0);
+    let index = pdf_key_ints(&dict, b"/Index").unwrap_or_else(|| vec![0, size]);
+    let mut d = s + 6;
+    if b[d..].starts_with(b"\r\n") {
+        d += 2;
+    } else if b[d..].starts_with(b"\n") {
+        d += 1;
+    }
+    let len = pdf_key_int(&dict, b"/Length").filter(|&l| l < 64 << 20)?;
+    if d as u64 + len > b.len() as u64 {
+        b = src.read(abs, d + len as usize);
+    }
+    let raw = b.get(d..d + len as usize)?;
+    let mut data = if dict.windows(12).any(|x| x == b"/FlateDecode") {
+        let mut out = vec![];
+        std::io::Read::read_to_end(&mut std::io::Read::take(flate2::read::ZlibDecoder::new(raw), 64 << 20), &mut out).ok()?;
+        out
+    } else {
+        raw.to_vec()
+    };
+    let width: u64 = w.iter().sum();
+    if let Some(p) = pdf_key_int(&dict, b"/Predictor").filter(|&p| p >= 10) {
+        let _ = p;
+        let cols = pdf_key_int(&dict, b"/Columns").unwrap_or(1) as usize;
+        data = pdf_unpredict(&data, cols)?;
+    }
+    let field = |e: &[u8], from: usize, n: u64| e[from..from + n as usize].iter().fold(0u64, |a, &x| (a << 8) | x as u64);
+    let mut entries = vec![];
+    let mut p = 0usize;
+    for pair in index.chunks_exact(2) {
+        let (first, count) = (pair[0], pair[1]);
+        if entries.len() as u64 + count > PDF_MAX_ENTRIES {
+            return None;
+        }
+        for k in 0..count {
+            let e = data.get(p..p + width as usize)?;
+            p += width as usize;
+            let t = if w[0] == 0 { 1 } else { field(e, 0, w[0]) };
+            if t == 1 {
+                let off = field(e, w[0] as usize, w[1]);
+                if off > 0 {
+                    entries.push((first + k, off));
+                }
+            }
+        }
+    }
+    let more = pdf_key_int(&dict, b"/Prev").into_iter().collect();
+    Some(PdfSection { entries, more })
+}
+
+/// Where a cross-reference section that is not where the file says is:
+/// a whole number of sectors further on, found by its keyword.
+fn pdf_find_section(src: &mut dyn Bytes, want: u64, end: u64) -> Option<u64> {
+    let stop = (want + MAX_GAP + 1024).min(end);
+    for pat in [&b"xref"[..], &b"/XRef"[..]] {
+        let mut q = want + 1;
+        while let Some(x) = src.find(q, stop, pat) {
+            q = x + 1;
+            // The section starts at the sector-aligned place at or before.
+            let c = if pat == b"xref" { x } else { want + (x - want) / SECTOR * SECTOR };
+            if c <= want || (c - want) % SECTOR != 0 || x - c > 1024 {
+                continue;
+            }
+            if pat == b"xref" && src.read(x.saturating_sub(5), 5) == b"start" {
+                continue;
+            }
+            if pdf_section_kind(src, c).is_some() {
+                return Some(c - want);
+            }
+        }
+    }
+    None
+}
+
+/// A PDF at `at` (the ordinary walk said `len` bytes) in two pieces: the
+/// pieces and its version. Every cross-reference section (tables and
+/// streams, through /Prev and /XRefStm) is read where it is, here or the gap
+/// further on; the gap is where a section or an object is found instead of
+/// where the file says.
 fn pdf_two(src: &mut dyn Bytes, at: u64, len: u64) -> Option<(Vec<(u64, u64)>, String)> {
     let end = at + len;
     let tail_from = end.saturating_sub(1024).max(at);
     let tail = src.read(tail_from, (end - tail_from) as usize);
     let k = tail.windows(9).rposition(|w| w == b"startxref")?;
     let (n, _) = pdf_int(&tail[k + 9..])?;
-    let sx = tail_from + k as u64;
-    if at + n >= sx || pdf_is_xref(src, at + n) {
+    if at.checked_add(n)? >= tail_from + k as u64 {
         return None;
     }
-    // Where the table is: a whole number of sectors further on.
-    let mut q = at + n;
-    let gap = loop {
-        let x = src.find(q, sx, b"xref")?;
-        q = x + 1;
-        if x >= at + n + 5 && src.read(x - 5, 5) == b"start" {
+    let mut gap: Option<u64> = None;
+    // Items with a place: objects (Some(number)) and tables (None).
+    let mut objs: std::collections::BTreeMap<u64, u64> = std::collections::BTreeMap::new();
+    let mut tables: Vec<u64> = vec![];
+    let mut todo = vec![n];
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(x) = todo.pop() {
+        if !seen.insert(x) || seen.len() > 16 || x >= len {
             continue;
         }
-        let g = x - (at + n);
-        if g > MAX_GAP {
-            return None;
+        let (abs, stream) = match pdf_section_kind(src, at + x) {
+            Some(s) => (at + x, s),
+            None => {
+                let g = match gap {
+                    Some(g) => g,
+                    None => pdf_find_section(src, at + x, end)?,
+                };
+                gap = Some(g);
+                (at + x + g, pdf_section_kind(src, at + x + g)?)
+            }
+        };
+        let sec = if stream { pdf_xref_stream(src, abs)? } else { pdf_xref_table(src, abs)? };
+        if !stream {
+            tables.push(x);
         }
-        if g > 0 && g % SECTOR == 0 && pdf_is_xref(src, x) {
-            break g;
-        }
-    };
-    // Every section, newest first; a newer entry wins.
-    let mut objs: std::collections::BTreeMap<u64, u64> = std::collections::BTreeMap::new();
-    let mut next = Some(n);
-    for _ in 0..16 {
-        let Some(x) = next else { break };
-        let abs = if pdf_is_xref(src, at + x) { at + x } else if pdf_is_xref(src, at + x + gap) { at + x + gap } else { return None };
-        let (entries, prev) = pdf_xref(src, abs)?;
-        for (num, off) in entries {
+        for (num, off) in sec.entries {
             objs.entry(num).or_insert(off);
         }
-        next = prev.filter(|&p| p != x);
+        todo.extend(sec.more);
     }
-    let mut list: Vec<(u64, u64)> = objs.into_iter().map(|(num, off)| (off, num)).filter(|&(off, _)| off < n).collect();
-    list.sort_unstable();
-    if list.is_empty() || list.len() > 200_000 {
+    #[derive(Clone, Copy, PartialEq)]
+    enum It {
+        Obj(u64),
+        Table,
+    }
+    let mut items: Vec<(u64, It)> = objs.into_iter().filter(|&(_, off)| off < len).map(|(num, off)| (off, It::Obj(num))).collect();
+    items.extend(tables.iter().map(|&t| (t, It::Table)));
+    items.sort_by_key(|x| x.0);
+    items.dedup_by_key(|x| x.0);
+    if items.is_empty() || items.len() > PDF_MAX_ENTRIES as usize {
         return None;
     }
-    let at_place = |src: &mut dyn Bytes, abs: u64, num: u64| pdf_obj_head(&src.read(abs, 32), num);
-    let k = list.iter().position(|&(off, num)| !at_place(src, at + off, num)).unwrap_or(list.len());
+    let at_place = |src: &mut dyn Bytes, abs: u64, it: It| match it {
+        It::Obj(num) => pdf_obj_head(&src.read(abs, 32), num),
+        It::Table => pdf_section_kind(src, abs) == Some(false),
+    };
+    let k = items.iter().position(|&(off, it)| !at_place(src, at + off, it))?;
     if k == 0 {
         return None;
     }
-    if !list[k..].iter().all(|&(off, num)| at_place(src, at + off + gap, num)) {
+    let gap = match gap {
+        Some(g) => g,
+        None => {
+            // Every section is in place: the first object that is not says.
+            let (off, It::Obj(num)) = items[k] else { return None };
+            let want = at + off;
+            let pat = format!("{} 0 obj", num);
+            let mut q = want + 1;
+            let stop = (want + MAX_GAP + 64).min(end);
+            loop {
+                let x = src.find(q, stop, pat.as_bytes())?;
+                q = x + 1;
+                if (x - want) % SECTOR == 0 && pdf_obj_head(&src.read(x, 32), num) {
+                    break x - want;
+                }
+            }
+        }
+    };
+    if gap == 0 || gap > MAX_GAP || gap >= len || !items[k..].iter().all(|&(off, it)| at_place(src, at + off + gap, it)) {
         return None;
     }
-    // The break is in object k-1, or between it and what follows.
-    let (ps, pnum) = list[k - 1];
-    let ne = if k < list.len() { list[k].0 } else { n };
+    // The break is in item k-1, or between it and the next.
+    let (ps, it) = items[k - 1];
+    let ne = items[k].0;
     if ne - ps > 64 << 20 {
         return None;
     }
@@ -1151,9 +1364,15 @@ fn pdf_two(src: &mut dyn Bytes, at: u64, len: u64) -> Option<(Vec<(u64, u64)>, S
     let mut unsure = vec![];
     let mut b = (at + ps + 1).div_ceil(SECTOR) * SECTOR;
     while b <= at + ne {
-        let mut obj = src.read(at + ps, (b - at - ps) as usize);
-        obj.extend(src.read(b + gap, (at + ne - b) as usize));
-        match pdf_obj_ok(&obj, pnum) {
+        let check = match it {
+            It::Obj(num) => {
+                let mut obj = src.read(at + ps, (b - at - ps) as usize);
+                obj.extend(src.read(b + gap, (at + ne - b) as usize));
+                pdf_obj_ok(&obj, num)
+            }
+            It::Table => None,
+        };
+        match check {
             Some(true) => fits.push(b),
             None => unsure.push(b),
             Some(false) => {}
@@ -2264,6 +2483,88 @@ pub(crate) mod tests {
         d
     }
 
+    /// The lab PDF with its table replaced: by a cross-reference stream
+    /// (PDF 1.5, compressed, PNG Up predictor), or laid out as a linearized
+    /// file does (a first table at the start, the main one at the end
+    /// through /Prev, startxref naming the first).
+    fn lab_pdf_variant(stream_xref: bool) -> Vec<u8> {
+        use std::io::Write;
+        let base = lab_pdf();
+        let sx = base.windows(10).rposition(|w| w == b"startxref\n").unwrap();
+        let (table, _) = pdf_int(&base[sx + 10..]).unwrap();
+        let body = &base[..table as usize];
+        let off = |d: &[u8], i: usize| d.windows(format!("{} 0 obj\n", i).len()).position(|w| w == format!("{} 0 obj\n", i).as_bytes()).unwrap();
+        if stream_xref {
+            let mut d = body.to_vec();
+            d[5..8].copy_from_slice(b"1.5");
+            let own = d.len();
+            let mut rows: Vec<[u8; 7]> = vec![[0, 0, 0, 0, 0, 0xFF, 0xFF]];
+            for i in 1..=6 {
+                let o = if i == 6 { own } else { off(&d, i) } as u32;
+                let b = o.to_be_bytes();
+                rows.push([1, b[0], b[1], b[2], b[3], 0, 0]);
+            }
+            let mut pred = vec![];
+            let mut prev = [0u8; 7];
+            for r in &rows {
+                pred.push(2);
+                pred.extend(r.iter().zip(prev.iter()).map(|(a, b)| a.wrapping_sub(*b)));
+                prev = *r;
+            }
+            let mut z = flate2::write::ZlibEncoder::new(vec![], flate2::Compression::default());
+            z.write_all(&pred).unwrap();
+            let zs = z.finish().unwrap();
+            d.extend(format!("6 0 obj\n<< /Type /XRef /Size 7 /W [1 4 2] /Root 1 0 R /Filter /FlateDecode /DecodeParms << /Columns 7 /Predictor 12 >> /Length {} >>\nstream\n", zs.len()).as_bytes());
+            d.extend(&zs);
+            d.extend(format!("\nendstream\nendobj\nstartxref\n{}\n%%EOF\n", own).as_bytes());
+            return d;
+        }
+        let head_len = body.iter().position(|&c| c == b'\n').unwrap() + 1;
+        let head_len = head_len + body[head_len..].iter().position(|&c| c == b'\n').unwrap() + 1;
+        let t1_len = format!("xref\n0 2\n0000000000 65535 f \n{:010} 00000 n \ntrailer\n<< /Size 6 /Prev {:010} >>\n", 0, 0).len();
+        let mut d = body[..head_len].to_vec();
+        let objs = &body[head_len..];
+        let shift = |o: usize| o - head_len + head_len + t1_len;
+        let t2 = head_len + t1_len + objs.len();
+        d.extend(format!("xref\n0 2\n0000000000 65535 f \n{:010} 00000 n \ntrailer\n<< /Size 6 /Prev {:010} >>\n", shift(off(body, 1)), t2).as_bytes());
+        d.extend(objs);
+        d.extend(b"xref\n2 4\n");
+        for i in 2..=5 {
+            d.extend(format!("{:010} 00000 n \n", shift(off(body, i))).as_bytes());
+        }
+        d.extend(format!("trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n", head_len).as_bytes());
+        d
+    }
+
+    #[test]
+    fn joins_pdfs_with_xref_streams_and_linearized() {
+        for stream_xref in [true, false] {
+            let pdf_file = lab_pdf_variant(stream_xref);
+            let at = 65_536usize;
+            let first = 1024usize;
+            let mut disk = vec![0u8; at];
+            disk.extend(&pdf_file[..first]);
+            disk.extend(vec![0u8; 1536]);
+            disk.extend(&pdf_file[first..]);
+            disk.extend(vec![0u8; 4096]);
+            let mut whole = vec![0u8; at];
+            whole.extend(&pdf_file);
+            whole.extend(vec![0u8; 4096]);
+            let mut src: &[u8] = &whole;
+            let h = identify(&mut src, at as u64).expect("a PDF");
+            assert_eq!(h.len, pdf_file.len() as u64, "stream_xref {}", stream_xref);
+            assert!(pdf_two(&mut src, at as u64, h.len).is_none(), "whole: nothing to join");
+            if stream_xref && std::env::var_os("KOKINO_WRITE_SEEDS").is_some() {
+                let seeds = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../kokino-fuzz/seeds/split");
+                std::fs::write(seeds.join("pdf-two-xrefstm.bin"), &disk[at..]).unwrap();
+            }
+            let mut src: &[u8] = &disk;
+            let h = identify(&mut src, at as u64).unwrap();
+            let (pieces, _) = pdf_two(&mut src, at as u64, h.len).unwrap_or_else(|| panic!("joined, stream_xref {}", stream_xref));
+            assert_eq!(pieces, vec![(at as u64, first as u64), ((at + first + 1536) as u64, (pdf_file.len() - first) as u64)]);
+        }
+    }
+
     /// Split inside its compressed page: the stream must inflate whole
     /// across the break, which leaves one place for it.
     #[test]
@@ -2330,7 +2631,8 @@ pub(crate) mod tests {
             let h = identify(&mut src, at as u64).unwrap();
             assert!(pdf_two(&mut src, at as u64, h.len).is_none(), "{}: whole", f);
             let (mut right, mut none) = (0, 0);
-            let step = (pdf_file.len() / 40).div_ceil(512).max(1) * 512;
+            let splits: usize = std::env::var("KOKINO_PDF_SPLITS").ok().and_then(|v| v.parse().ok()).unwrap_or(40);
+            let step = (pdf_file.len() / splits.max(1)).div_ceil(512).max(1) * 512;
             for first in (512..pdf_file.len() - 512).step_by(step) {
                 let mut d = vec![0u8; at];
                 d.extend(&pdf_file[..first]);

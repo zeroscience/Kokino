@@ -32,7 +32,8 @@ pub fn probe(head: &[u8], tail: &[u8], ext: &str) -> Option<(&'static str, bool)
         return (head.get(9..11) == Some(&[1, 0])).then_some(("E01", true));
     }
     if head.starts_with(b"EVF2\x0d\x0a\x81\x00") {
-        return Some(("Ex01", false));
+        // Only the first segment names the image.
+        return (head.get(12..16) == Some(&[1, 0, 0, 0])).then_some(("Ex01", true));
     }
     if head.starts_with(b"vhdxfile") {
         return Some(("VHDX", true));
@@ -95,6 +96,7 @@ pub fn parts(files: &[FileRow], first: usize, format: &str) -> Vec<u32> {
                 "E01" => gs == stem && ge.len() == 3 && ge.starts_with('e') && ge != "e01" && ge[1..].chars().all(|c| c.is_ascii_alphanumeric()),
                 "Raw disk" if ext_of(&f.e.name) == "001" => gs == stem && ge.len() == 3 && ge.chars().all(|c| c.is_ascii_digit()) && ge != "001",
                 "VMDK" => ge == "vmdk" && gs != stem && gs.starts_with(&format!("{}-", stem)),
+                "Ex01" => gs == stem && ge.len() == 4 && ge.starts_with('e') && ge != "ex01" && ge[1..].chars().all(|c| c.is_ascii_alphanumeric()),
                 "AD1" => gs == stem && ge.starts_with("ad") && ge != "ad1" && ge.len() > 2 && ge[2..].chars().all(|c| c.is_ascii_digit()),
                 _ => false,
             }

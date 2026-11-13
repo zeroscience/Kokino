@@ -12,7 +12,7 @@ checked against public test images with known answers where they exist
 
 1.5.0, 1.6.0 and 1.6.1 finished most of what could be built without new test data. What is
 left below mostly waits for samples: disks from real Macs, encrypted APFS
-volumes, Windows Search databases, XFS and Ex01 images. Security reports
+volumes, Windows Search databases and XFS images. Security reports
 ([SECURITY.md](SECURITY.md)) and wrong results (an artifact read
 incorrectly, a crash on real evidence) are always fixed first.
 
@@ -72,6 +72,9 @@ Kokino version and what the file system or artifact is.
 - [x] Carving: PDFs in two pieces, through the cross-reference table and the stream checksums (1.6.1)
 - [x] AFF4 disk images (maps, image streams, striped sets) and AFF4-L logical images (1.6.1)
 - [x] AccessData AD1 logical images, versions 3 and 4 (1.6.1)
+- [x] Ex01 (EWF version 2): zlib, uncompressed and pattern-filled chunks, stored hashes, error table (1.6.2)
+- [x] Carving: PDFs with cross-reference streams and linearized PDFs in two pieces (1.6.2)
+- [x] Hash sets: HashKeeper and hashdeep (1.6.2)
 - [x] `kokino plugin-test` and a guide for plugin authors (1.6.0)
 - [x] Dates day first (dd-mm-yyyy) in the GUI, reports and summaries; a website (1.5.0)
 - [x] Release SBOM (CycloneDX) and signed build provenance (1.3.1)
@@ -90,7 +93,7 @@ start or be trusted; most items are blocked on test data rather than code.
 - [ ] **APFS: FileVault, snapshots and free space.** Needs: an encrypted test image with a known password; the keybag format (documented by Apple and in libfsapfs).
 - [ ] **LZFSE** (APFS and HFS+ compression types 11 and 12). Needs: a small, fuzzed decoder; Apple's reference code is open source (BSD).
 - [ ] **BitLocker: TPM protectors** from a memory image, and Windows Vista volumes. Needs: a memory image and a Vista image.
-- [ ] **Ex01** (EWF version 2). Needs: sample files (libewf has some).
+- [ ] **Encrypted Ex01 and AD1, bzip2 Ex01 chunks.** Needs: images encrypted with a known password (EnCase, FTK Imager).
 
 ### 3. Deeper Windows
 - [ ] **Windows Search** (Windows.edb): file names, contents and times the indexer kept, also for deleted files. The ESE reader exists (SRUM and WebCache use it). Needs: a test database.
@@ -102,7 +105,7 @@ start or be trusted; most items are blocked on test data rather than code.
 - [ ] **ESXi snapshots from a real host**: VMFSSPARSE and SESPARSE are checked on images built to QEMU's reading of the formats. Needs: snapshots from an ESXi host.
 - [ ] **Written CDs and DVDs from real drives**: UDF sparable and virtual partitions are checked on images built from the specification. Needs: images of real CD-R, DVD-R and DVD-RW discs.
 - [ ] **macOS unified logs** (tracev3).
-- [ ] **Carving of other fragmented files** (PNG in three pieces, ZIP, Office and PDF documents in three or more, linearized PDFs and PDFs with cross-reference streams), and JPEGs in four or more pieces or progressive JPEGs.
+- [ ] **Carving of other fragmented files** (PNG in three pieces, ZIP, Office and PDF documents in three or more, encrypted PDFs), and JPEGs in four or more pieces or progressive JPEGs.
 
 ### 5. Workflow
 - [ ] **Code-signed Windows and macOS packages.** Needs: a code-signing certificate and an Apple Developer ID; no code.

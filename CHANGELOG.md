@@ -5,6 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Ex01 (EWF version 2, EnCase 7 and later): every segment's sections read back to front from the descriptor at its end, each descriptor's checksum checked; device information and case data (case and evidence number, examiner, notes, acquisition software and OS, dates, write-blocker) shown as for E01; zlib, uncompressed and pattern-filled chunks; the MD5 and SHA-1 the imager stored checked by Re-hash and `kokino hash`; the error table as unreadable sectors; segments `.Ex01` .. `.Ex99`, `.ExAA` ... found automatically (an Ex01 named `.E01` by mistake opens too). Encrypted Ex01 and bzip2-compressed chunks are reported, not read. Checked on two Ex01 files libewf made and on Ex01 written from Kokino's test disks by an independent writer (ewf-image, which checks its output against libewf): every image reads byte for byte as the raw disk it came from, and the stored MD5 matches. Ex01 files on evidence are listed under Images inside evidence and can be extracted and added.
+- Carving: PDFs split in two pieces with cross-reference streams (PDF 1.5 and later, PNG predictors undone), hybrid files (/XRefStm) and linearized PDFs are joined too: every section is followed through /Prev and read where it is, and the gap is where a section, or else the first object, is found instead. A JPEG picture in a PDF (/DCTDecode) counts as whole when it decodes exactly. On the public 5.4 MB PDF split at 149 places, 104 joins (76 before), none wrong; encrypted PDFs are mostly left alone, since their streams cannot be checked.
+- Fuzzed: `ewf` with Ex01 seeds (57,238 inputs) and `carve` with the new PDF joins (9.9 million), nothing found; 952 million inputs in all.
+- Hash sets: HashKeeper hash sets (MD5 from the "hash" column only, so a file name of 32 hex digits is not taken as a hash) and hashdeep / md5deep output (the columns its header names) are recognized by format.
+
 ## [1.6.1] - 12-11-2026
 
 AFF4 disk images and AFF4-L and AD1 logical images; deleted Outlook messages from the PST's free space; carving joins ZIP-based files (Office, OpenDocument) and PDFs split in two pieces; the server's cases folder is shown to administrators only.
