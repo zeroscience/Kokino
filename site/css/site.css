@@ -105,7 +105,9 @@ section { padding: 56px 0 24px; }
 .card { background: var(--panel); border: 1px solid var(--line2); border-radius: var(--radius); padding: 18px 20px; box-shadow: var(--shadow); }
 .card p:last-child { margin-bottom: 0; }
 .card.note { margin-top: 16px; }
-.dl .row { margin-top: 12px; }
+/* Buttons at the bottom of each card, on one line across the three. */
+.card.dl { display: flex; flex-direction: column; }
+.dl .row { margin-top: auto; padding-top: 12px; }
 .links { margin: 0; padding-left: 18px; }
 .links li { margin: 4px 0; }
 .steps { padding-left: 22px; margin: 0 0 24px; }
