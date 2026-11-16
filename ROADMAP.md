@@ -8,9 +8,9 @@ Every new parser is fuzzed before it ships ([SECURITY.md](SECURITY.md)) and
 checked against public test images with known answers where they exist
 ([VALIDATION.md](VALIDATION.md)).
 
-## Status: 1.6
+## Status: 1.7
 
-1.5.0 and 1.6.0 to 1.6.2 finished most of what could be built without new test data. What is
+1.5.0 to 1.7.0 finished most of what could be built without new test data. What is
 left below mostly waits for samples: disks from real Macs, encrypted APFS
 volumes, Windows Search databases and XFS images. Security reports
 ([SECURITY.md](SECURITY.md)) and wrong results (an artifact read
@@ -75,6 +75,7 @@ Kokino version and what the file system or artifact is.
 - [x] Ex01 (EWF version 2): zlib, uncompressed and pattern-filled chunks, stored hashes, error table (1.6.2)
 - [x] Carving: PDFs with cross-reference streams and linearized PDFs in two pieces (1.6.2)
 - [x] Hash sets: HashKeeper and hashdeep (1.6.2)
+- [x] NTFS $LogFile in full: files created, deleted and renamed, timestamps before and after, sizes, streams, small files' content before and after (1.7.0)
 - [x] `kokino plugin-test` and a guide for plugin authors (1.6.0)
 - [x] Dates day first (dd-mm-yyyy) in the GUI, reports and summaries; a website (1.5.0)
 - [x] Release SBOM (CycloneDX) and signed build provenance (1.3.1)
@@ -97,7 +98,6 @@ start or be trusted; most items are blocked on test data rather than code.
 
 ### 3. Deeper Windows
 - [ ] **Windows Search** (Windows.edb): file names, contents and times the indexer kept, also for deleted files. The ESE reader exists (SRUM and WebCache use it). Needs: a test database.
-- [ ] **$LogFile in full**: redo and undo of MFT changes (what a file looked like before it changed). Needs: a large but well-documented effort (NTFS internals, libfsntfs notes).
 - [ ] **SRUM on a real computer's database**: the app timeline, push, battery and energy tables are checked on databases written by Windows' own engine. Needs: a SRUM database copied from a real computer (admin rights and a shadow copy).
 
 ### 4. More formats

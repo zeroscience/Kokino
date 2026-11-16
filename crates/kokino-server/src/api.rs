@@ -91,6 +91,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/web", get(web))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/windows", get(windows))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/journal", get(journal))
+        .route("/cases/{cid}/evidence/{eid}/fs/{fi}/logfile", get(logfile))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/srum", get(srum))
         .route("/cases/{cid}/evidence/{eid}/fs/{fi}/indicator/{id}", get(indicator_files))
         .route("/cases/{cid}/evidence/{eid}/binmap", get(image_binmap))
@@ -851,6 +852,15 @@ async fn file_detail(State(st): St, Path((cid, eid, fi, idx)): Path<(String, Str
         .take(500)
         .map(|c| json!({"t": filetime_to_iso(c.c.t), "first": if c.c.first > 0 { filetime_to_iso(c.c.first) } else { String::new() }, "what": c.what, "path": c.path, "old_path": c.old_path, "usn": c.c.usn}))
         .collect();
+    // What $LogFile holds for this file, newest first.
+    let logfile: Vec<Value> = f
+        .windows
+        .logfile
+        .iter()
+        .flat_map(|lg| lg.events.iter().rev().filter(|e| e.file == Some(idx as u32)))
+        .take(500)
+        .map(|e| json!({"t": if e.time == 0 { String::new() } else { filetime_to_iso(e.time) }, "lsn": e.lsn, "what": e.what, "path": e.path, "old_path": e.old_path, "detail": e.detail, "before": e.before, "after": e.after, "backdated": e.backdated}))
+        .collect();
     let streams: Vec<Value> = r
         .e
         .streams
@@ -866,7 +876,7 @@ async fn file_detail(State(st): St, Path((cid, eid, fi, idx)): Path<(String, Str
         "reparse": r.e.has_reparse, "uniform": r.uniform, "ads_sig": r.ads_sig, "error": r.e.error,
         "si": times_json(r.e.si), "fn": times_json(r.e.fname),
         "record_image_offset": if shadow || (r.e.name_only.is_some() && r.e.record_offset == 0) { None } else { Some(r.e.record_offset + vol) },
-        "name_only": r.e.name_only, "journal": journal,
+        "name_only": r.e.name_only, "journal": journal, "logfile": logfile,
         "data_image_offset": r.e.data_offset().filter(|_| !shadow).map(|o| o + vol),
         "streams": streams, "indicators": indicators, "events": events, "hashes": hashes,
         "unix": r.e.unix.as_ref().map(|u| json!({
@@ -1343,6 +1353,7 @@ fn list_count(l: &Loaded, fi: usize, carved: Option<&kokino_analysis::carve::Car
         "access" => w.access.len(),
         "shellbags" => w.shellbags.len(),
         "journal" => w.journal.as_ref().map(|j| j.changes.len()).unwrap_or(0),
+        "logfile" => w.logfile.as_ref().map(|l| l.events.len()).unwrap_or(0),
         "autoruns" => w.autoruns.len(),
         "tasks" => w.tasks.len(),
         "programs" => w.programs.len(),
@@ -1668,8 +1679,14 @@ async fn windows(State(st): St, Path((cid, eid, fi)): Path<(String, String, usiz
             "first": j.first, "last": j.last, "records": j.records, "dropped": j.dropped, "error": j.error, "changes": j.changes.len(),
             "created_files": count(kokino_artifacts::usn::FILE_CREATE), "deleted_files": count(kokino_artifacts::usn::FILE_DELETE), "renamed_files": count(kokino_artifacts::usn::RENAME_NEW_NAME)})
     });
+    let logfile = f.windows.logfile.as_ref().map(|lg| {
+        let n = |w: &str| lg.events.iter().filter(|e| e.what == w).count();
+        json!({"file": lg.file, "path": path(Some(lg.file)), "size": lg.size, "version": lg.version, "page_size": lg.page_size, "records": lg.records,
+            "pages": lg.pages, "damaged_pages": lg.damaged_pages, "dirty": lg.dirty, "dropped": lg.dropped, "error": lg.error, "events": lg.events.len(),
+            "created": n("created"), "deleted": n("deleted"), "renamed": n("renamed"), "times": n("times changed"), "backdated": lg.events.iter().filter(|e| e.backdated).count()})
+    });
     let srum_rows = f.windows.srum_rows().map(|(n, u)| json!({"network": n.len(), "usage": u.len(), "focus": f.windows.srum_focus().len()}));
-    Ok(Json(json!({"schema": l.analysis.schema, "fs": f.volume.fs_label, "windows": f.windows.without_journal(), "journal": journal, "srum_rows": srum_rows, "linux": linux, "files": files})))
+    Ok(Json(json!({"schema": l.analysis.schema, "fs": f.volume.fs_label, "windows": f.windows.without_journal(), "journal": journal, "logfile": logfile, "srum_rows": srum_rows, "linux": linux, "files": files})))
 }
 
 #[derive(Deserialize)]
@@ -1749,6 +1766,52 @@ async fn journal(State(st): St, Path((cid, eid, fi)): Path<(String, String, usiz
         hits.iter().skip(off).take(lim).map(|c| item(c)).collect()
     } else {
         hits.iter().rev().skip(off).take(lim).map(|c| item(c)).collect()
+    };
+    Ok(Json(json!({"total": hits.len(), "offset": off, "items": items})))
+}
+
+#[derive(Deserialize)]
+struct LogQ {
+    q: Option<String>,
+    /// created, deleted, renamed, times, other; "backdated" for creation
+    /// times set back.
+    kind: Option<String>,
+    file: Option<u32>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    order: Option<String>,
+}
+
+/// What $LogFile holds for a volume, filtered and paged (log order).
+async fn logfile(State(st): St, Path((cid, eid, fi)): Path<(String, String, usize)>, Query(q): Query<LogQ>) -> R {
+    let l = st.loaded(&cid, &eid)?;
+    let f = fs_of(&l, fi)?;
+    let Some(lg) = f.windows.logfile.as_ref() else { return Ok(Json(json!({"total": 0, "offset": 0, "items": []}))) };
+    let needle = q.q.unwrap_or_default().to_lowercase();
+    let kind = q.kind.unwrap_or_default();
+    let ok = |e: &kokino_analysis::ntfslog::LogEvent| {
+        let k = match kind.as_str() {
+            "created" | "deleted" | "renamed" => e.what == kind,
+            "times" => e.what == "times changed",
+            "backdated" => e.backdated,
+            "other" => !matches!(e.what.as_str(), "created" | "deleted" | "renamed" | "times changed"),
+            _ => true,
+        };
+        k && q.file.is_none_or(|x| e.file == Some(x)) && (needle.is_empty() || e.path.to_lowercase().contains(&needle) || e.old_path.to_lowercase().contains(&needle) || e.detail.to_lowercase().contains(&needle))
+    };
+    let off = q.offset.unwrap_or(0);
+    let lim = q.limit.unwrap_or(300).min(3000);
+    let item = |e: &kokino_analysis::ntfslog::LogEvent| {
+        let mut v = json!(e);
+        v["t"] = json!(if e.time == 0 { String::new() } else { filetime_to_iso(e.time) });
+        v["file_path"] = json!(e.file.and_then(|i| f.files.get(i as usize)).map(|r| r.e.path.clone()));
+        v
+    };
+    let hits: Vec<&kokino_analysis::ntfslog::LogEvent> = lg.events.iter().filter(|e| ok(e)).collect();
+    let items: Vec<Value> = if q.order.as_deref() == Some("asc") {
+        hits.iter().skip(off).take(lim).map(|e| item(e)).collect()
+    } else {
+        hits.iter().rev().skip(off).take(lim).map(|e| item(e)).collect()
     };
     Ok(Json(json!({"total": hits.len(), "offset": off, "items": items})))
 }
@@ -2638,6 +2701,25 @@ fn report_windows(h: &mut String, w: &kokino_analysis::windows::WindowsArtifacts
             h.push_str("<table><tr><th>Wiped file (original name)</th><th>Renamed to</th><th>Time (UTC)</th></tr>");
             for c in wiped.iter().take(500) {
                 h.push_str(&format!("<tr><td class=bad><code>{}</code></td><td><code>{}</code></td><td>{}</td></tr>", esc(&c.old_path), esc(&c.path), t(c.c.t)));
+            }
+            h.push_str("</table>");
+        }
+    }
+    if let Some(lg) = w.logfile.as_ref().filter(|lg| lg.records > 0) {
+        let n = |x: &str| lg.events.iter().filter(|e| e.what == x).count();
+        h.push_str(&format!(
+            "<h4>Transaction log ($LogFile)</h4><p>{} operations: {} files created, {} deleted, {} renamed, {} timestamp changes. The log is circular: it covers the last minutes to hours of activity before the image was made.</p>",
+            lg.records,
+            n("created"),
+            n("deleted"),
+            n("renamed"),
+            n("times changed")
+        ));
+        let back: Vec<&kokino_analysis::ntfslog::LogEvent> = lg.events.iter().filter(|e| e.backdated).collect();
+        if !back.is_empty() {
+            h.push_str("<table><tr><th>File</th><th>Times changed (UTC)</th></tr>");
+            for e in back.iter().take(500) {
+                h.push_str(&format!("<tr><td class=bad><code>{}</code></td><td>{}</td></tr>", esc(&e.path), esc(&e.detail)));
             }
             h.push_str("</table>");
         }

@@ -1171,6 +1171,10 @@ async function fileDrawer(ctx, idx, startOffset) {
       )),
       f.streams.length > 1 ? h("div.card.flat", h("h3", "Data streams"), h("table.ts", h("tr", h("th", "Name"), h("th", "Size"), h("th", "")),
         f.streams.map((s) => h("tr", h("td.mono", s.name || "(unnamed $DATA)"), h("td", bytes(s.size)), h("td", h("button.sm", { onclick: () => { stream = s.name; page = 0; loadHex(); } }, "View"), " ", canWrite() ? h("a.btn.sm", { href: apiUrl(`${base}/export?stream=${encodeURIComponent(s.name)}`) }, "Export") : null))))) : null,
+      f.logfile && f.logfile.length ? h("div.card.flat", h("h3", "Transaction log ($LogFile)"), h("p.muted", { style: { margin: "4px 0 8px" } }, "What NTFS's transaction log holds for this file, newest first, with values before and after the change."),
+        h("table.ts", f.logfile.map((e) => h("tr", h("td.mono", e.t ? ts(e.t, 19) : ""), h("td", h("b", { class: e.backdated ? "bad-text" : null }, e.what)),
+          h("td", { style: { wordBreak: "break-word" } }, e.old_path ? `${e.old_path} -> ${e.path}` : "", e.detail ? h("div.muted", e.detail) : null,
+            e.before || e.after ? h("div.mono", { style: { fontSize: "12px" } }, h("div", `before: ${e.before}`), h("div", `after: ${e.after}`)) : null))))) : null,
       f.journal && f.journal.length ? h("div.card.flat", h("h3", "Change journal"), h("p.muted", { style: { margin: "4px 0 8px" } }, "What the NTFS change journal recorded for this file, newest first."),
         h("table.ts", f.journal.map((c) => h("tr", h("td.mono", ts(c.t, 19)), h("td", h("b", c.what)), h("td.mono", { style: { wordBreak: "break-all" } }, c.old_path ? `${c.old_path} -> ${c.path}` : c.path))))) : null,
       nameOnly && !r.is_dir ? h("div.card.flat", h("h3", "Content"), h("p.muted", { style: { margin: 0 } }, "None: only the name, times and size survive. Carving may still find the content in free space.")) : null,
@@ -1591,7 +1595,7 @@ async function searchTab(ctx) {
 }
 
 // ---------------------------------------------------------------- Windows system summary
-const SYS_SECTIONS = [["overview", "Overview"], ["exec", "Programs run"], ["files", "Files and folders"], ["folders", "Folders (ShellBags)"], ["journal", "Change journal"], ["srum", "Network use (SRUM)"], ["devices", "USB and networks"], ["logons", "Accounts and logons"], ["events", "Events"], ["software", "Software and autostart"], ["registry", "Deleted registry"], ["sources", "Sources"]];
+const SYS_SECTIONS = [["overview", "Overview"], ["exec", "Programs run"], ["files", "Files and folders"], ["folders", "Folders (ShellBags)"], ["journal", "Change journal"], ["logfile", "Transaction log"], ["srum", "Network use (SRUM)"], ["devices", "USB and networks"], ["logons", "Accounts and logons"], ["events", "Events"], ["software", "Software and autostart"], ["registry", "Deleted registry"], ["sources", "Sources"]];
 // The Windows artifacts API sends raw FILETIMEs (100 ns since 1601); minute
 // precision survives the conversion to a JavaScript number.
 const ftIso = (t) => (t ? new Date(t / 10000 - 11644473600000).toISOString().replace(/\.\d+Z$/, "Z") : "");
@@ -1736,7 +1740,7 @@ async function systemTab(ctx) {
   }
   if (r.linux && r.linux.sources && r.linux.sources.length) return linuxSystem(ctx, r);
   const w = r.windows;
-  if (!w.sources.length && !r.journal) {
+  if (!w.sources.length && !r.journal && !r.logfile) {
     return render(h("div.stack", intro, h("div.card.empty", isExt(r.fs) ? "No Linux system files (passwd, logs, shell histories, package databases) on this volume." : "No Windows registry hives, event logs, Prefetch files, shortcuts or Jump Lists on this volume.")));
   }
   const fileOf = (i) => (i == null ? "" : r.files[i] || "");
@@ -1877,6 +1881,47 @@ async function systemTab(ctx) {
         (s.energy_lt || []).length ? card("Power over time (long-term)", h("p.muted", { style: { margin: 0 } }, "Per period, how long the computer was active and in standby, on mains power (AC) and on battery (DC), and the energy used, as SRUM's long-term energy table stores them (Windows does not document the units): when it was in use, and whether away from a power socket."),
           table([`Period ending (${zoneName()})`, "Active on AC", "Standby on AC", "Active on battery", "Standby on battery", "Energy (active)", "Energy (standby)"], s.energy_lt.slice().reverse().slice(0, 2000).map((x) => h("tr", h("td.mono", t16(x.t)), h("td.num", num(x.active_ac)), h("td.num", num(x.standby_ac)), h("td.num", { class: x.active_dc ? "bad-text" : null }, num(x.active_dc)), h("td.num", num(x.standby_dc)), h("td.num", num(x.active_energy)), h("td.num", num(x.standby_energy)))))) : null,
       ];
+    },
+    logfile: () => {
+      const L = r.logfile;
+      if (!L) return [h("div.card.empty", r.schema < 11 ? "The transaction log was not read: this evidence was analyzed by an earlier Kokino version. Re-analyze it to read $LogFile." : "No transaction log on this volume (not NTFS, or $LogFile is not readable).")];
+      const kinds = [["", "All"], ["created", "Created"], ["deleted", "Deleted"], ["renamed", "Renamed"], ["times", "Times changed"], ["backdated", "Created set back"], ["other", "Other changes"]];
+      let kind = "", q = "", order = "", shown = 0, total = 0;
+      const out = h("tbody");
+      const status = h("div.muted");
+      const more = h("button", { onclick: () => load(false) }, "Show more");
+      const pill = (e) => h("span.pill" + (e.backdated || e.what === "deleted" ? ".bad" : e.what === "created" ? ".ok" : e.what === "renamed" ? ".warn" : ""), e.what);
+      const detail = (e) => webDetail(e.path, [["What", e.what], ["Earlier name", e.old_path], ["Detail", e.detail], ["Before", e.before], ["After", e.after], [`Time in the record (${zoneName()})`, e.t ? ts(e.t) : ""], ["MFT record", e.record != null ? String(e.record) : ""], ["LSN", String(e.lsn)], ["Transaction", String(e.transaction)],
+        ["File", e.file != null ? h("a", { href: "#", onclick: (ev) => { ev.preventDefault(); closeModal(); open(e.file); } }, e.file_path || "open") : ""]]);
+      const load = async (reset) => {
+        if (reset) { out.replaceChildren(); shown = 0; }
+        const p = new URLSearchParams({ q, kind, order, offset: shown, limit: 500 });
+        const res = await api(`/cases/${ctx.cid}/evidence/${ctx.eid}/fs/${ctx.fi}/logfile?${p}`);
+        total = res.total;
+        for (const e of res.items) {
+          out.append(h("tr", { class: e.what === "deleted" ? "deleted" : null, onclick: () => detail(e), title: e.file_path || "" },
+            h("td.mono", String(e.lsn)), h("td.nm", h("b", e.path), e.old_path ? h("div.muted", `was ${e.old_path}`) : null, e.detail ? h("div.muted", e.detail) : null),
+            h("td", pill(e)), h("td.mono", e.t ? ts(e.t, 19) : ""), h("td", e.file != null ? h("span.pill.info", { title: e.file_path }, "on this volume") : null)));
+        }
+        shown += res.items.length;
+        status.textContent = `${num(shown)} of ${num(total)} event(s)`;
+        more.style.display = shown < total ? "" : "none";
+      };
+      const s2 = h("div.seg");
+      const drawK = () => s2.replaceChildren(...kinds.map(([k, l]) => h("button", { class: kind === k ? "on" : null, onclick: () => { kind = k; drawK(); load(true); } }, l)));
+      const ord = h("select", { onchange: () => { order = ord.value; load(true); } }, h("option", { value: "" }, "Newest first"), h("option", { value: "asc" }, "Oldest first"));
+      drawK();
+      load(true);
+      const kvs = (rows) => h("div.kv", rows.filter(([, v]) => v).map(([k, v]) => [h("span", k), h("span", v)]));
+      return [card("Transaction log ($LogFile)", h("div.stack",
+          kvs([["Operations", num(L.records)], ["Events", `${num(L.events)}: ${num(L.created)} created, ${num(L.deleted)} deleted, ${num(L.renamed)} renamed, ${num(L.times)} timestamp changes${L.dropped ? ` (the oldest ${num(L.dropped)} not kept)` : ""}`],
+            ["Creation time set back", L.backdated ? h("b.bad-text", num(L.backdated)) : ""], ["Log", `version ${L.version}, ${bytes(L.size)}, ${num(L.pages)} pages of ${bytes(L.page_size)}${L.damaged_pages ? `, ${num(L.damaged_pages)} damaged` : ""}`],
+            ["Closed cleanly", L.dirty ? "no: the log holds changes not yet written to the MFT" : "yes"], ["File", L.path]]),
+          L.error ? h("p.bad-text", L.error) : null)),
+        h("div.row.wrap", s2, filterBox("Filter by path or detail...", (v) => { q = v; load(true); }), ord),
+        h("p.muted", { style: { fontSize: "12.5px" } }, "NTFS writes every change to its metadata to the transaction log first, with what was there before, so the log shows earlier states the MFT no longer has: names a file had, timestamps before they were changed, sizes, named streams, and the content of small files before and after. The log is circular (usually 64 MiB): it covers the last minutes to hours before the image was made. Its records carry no time of their own; they are in log order (LSN), with the times found inside them. A creation time set back is what timestomping tools do; copies keep the modified time but get a new creation time."),
+        h("table.tbl.sys", h("thead", h("tr", ["LSN", "File", "What happened", `Time in the record (${zoneName()})`, ""].map((c) => h("th", c)))), out),
+        h("div.row", status, more)];
     },
     journal: () => {
       const kinds = [["", "All"], ["created", "Created"], ["deleted", "Deleted"], ["renamed", "Renamed"], ["changed", "Other changes"]];
@@ -2046,12 +2091,13 @@ async function systemTab(ctx) {
   drawSeg();
   draw();
   // Analyzed before 1.2.8: the newer Windows artifacts are missing, not absent.
-  const stale = isNtfs(r.fs) && r.schema < 10
+  const stale = isNtfs(r.fs) && r.schema < 11
     ? h("div.card.flat.stack", h("p", { style: { margin: 0, color: "var(--warn)" } }, r.schema < 6
       ? "This evidence was analyzed by an earlier Kokino version, before deleted registry keys, scheduled tasks, the change journal, ShellBags, BAM/DAM, SRUM and the names of deleted files from folder indexes and $LogFile were read. Those parts are empty until it is analyzed again."
       : r.schema < 7 ? "This evidence was analyzed by an earlier Kokino version, before scheduled tasks and deleted registry keys were read. They are missing until it is analyzed again."
       : r.schema < 9 ? "This evidence was analyzed by an earlier Kokino version, before deleted registry keys were looked for and registry transaction logs applied. They are missing until it is analyzed again."
-      : "This evidence was analyzed by an earlier Kokino version, before registry transaction logs were applied and Windows XP event logs (.evt) were read. They are missing until it is analyzed again."),
+      : r.schema < 10 ? "This evidence was analyzed by an earlier Kokino version, before registry transaction logs were applied and Windows XP event logs (.evt) were read. They are missing until it is analyzed again."
+      : "This evidence was analyzed by an earlier Kokino version, before the NTFS transaction log ($LogFile) was read. Its history of created, deleted and renamed files and changed timestamps is missing until it is analyzed again."),
       canWrite() ? h("div", h("button.primary", { onclick: () => reingest(ctx.cid, ctx.eid, false) }, "Re-analyze now")) : h("p.muted", { style: { margin: 0 } }, "Ask an examiner on this case to re-analyze it."))
     : null;
   render(h("div.stack", intro, stale, seg, body));

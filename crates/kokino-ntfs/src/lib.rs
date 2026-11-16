@@ -14,6 +14,7 @@ pub use ntfs::Ntfs;
 use ntfs::{NtfsAttribute, NtfsAttributeFlags, NtfsAttributeType, NtfsFile, NtfsFileFlags, NtfsReadSeek};
 
 pub mod indx;
+pub mod logfile;
 pub mod lznt1;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

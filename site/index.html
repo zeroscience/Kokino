@@ -8,8 +8,8 @@
 <title>Kokino Forensic Toolkit</title>
 <meta name="description" content="Kokino Forensic Toolkit (Kokino FTK): open-source disk forensics by Zero Science Lab. One portable binary with a browser GUI for Windows, Linux and macOS. Every finding, traceable to the byte.">
 <link rel="icon" href="img/favicon.png" type="image/png">
-<link rel="stylesheet" href="css/site.css?v=1.6.2-1">
-<script src="js/site.js?v=1.6.2" defer></script>
+<link rel="stylesheet" href="css/site.css?v=1.7.0">
+<script src="js/site.js?v=1.7.0" defer></script>
 </head>
 <body>
 <div class="ambient" id="ambient" aria-hidden="true"></div>
@@ -55,7 +55,7 @@
   <div class="grid">
     <div class="card"><h3>Images and volumes</h3><p>E01 and Ex01 (with their stored hashes checked), AFF4 (striped and sparse images too, with the case notes and read errors they recorded), raw and split raw, VHD, VHDX and VMDK with snapshot chains (ESXi snapshots too), ISO and UDF discs, including CD-R and DVD-RW written in sessions. BitLocker volumes unlocked with a password, recovery password or startup key; every Volume Shadow Copy as a volume of its own.</p></div>
     <div class="card"><h3>File systems</h3><p>NTFS, FAT12/16/32, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF: every record, live and deleted, with deleted names recovered from slack, journals and old tree nodes.</p></div>
-    <div class="card"><h3>Windows</h3><p>Registry (deleted keys too), event logs, Prefetch, LNK, Jump Lists, ShellBags, ShimCache, Amcache, BAM, scheduled tasks, the NTFS change journal, and SRUM: network use, time each program was in the foreground and in use, and the battery.</p></div>
+    <div class="card"><h3>Windows</h3><p>Registry (deleted keys too), event logs, Prefetch, LNK, Jump Lists, ShellBags, ShimCache, Amcache, BAM, scheduled tasks, the NTFS change journal and transaction log (earlier names, timestamps before they were changed, small files before and after), and SRUM: network use, time each program was in the foreground and in use, and the battery.</p></div>
     <div class="card"><h3>Linux and macOS</h3><p>Accounts, logons, auth and system logs, journald, cron, systemd, shell histories and SSH keys; macOS accounts, launchd persistence, quarantine events, KnowledgeC, FSEvents and Safari.</p></div>
     <div class="card"><h3>Web and email</h3><p>Chrome, Edge, Firefox, Safari and Internet Explorer history, downloads and cookies, records carved from free space; Outlook PST and OST (deleted messages recovered from the index and the file's free space too), Apple Mail, mbox and .eml.</p></div>
     <div class="card"><h3>Collections</h3><p>Velociraptor, KAPE and UAC triage collections, FTK Imager AD1 and AFF4-L logical images, and plain folders, read as file systems with every artifact found where it was on the collected system.</p></div>

@@ -245,7 +245,13 @@ Ex01 and more PDF carving (1.6.2):
 | `ewf` | again, with Ex01 (EWF2): sections read back to front, serialized case and device objects, 16-byte chunk tables, pattern-filled chunks; Ex01 seeds | 10 min | 57,238 | none |
 | `carve` | again, with PDF cross-reference streams (predictors), /Prev and /XRefStm chains, gaps found from sections or objects, DCT pictures checked | 10 min | 9,896,461 | none |
 
-In all: 951,747,137 inputs over 43 targets, and 43 distinct problems
+The NTFS transaction log (1.7.0):
+
+| Target | What it covers | Rounds | Inputs in all | Distinct problems found |
+|---|---|---|--:|---|
+| `logfile` | $LogFile: restart pages, record pages and fixups, records across pages, NTFS operations and their redo and undo data, and the events made of them | 30 s, 1 min, 10 min | 16,640,053 | 1 (overflow) |
+
+In all: 968,387,190 inputs over 44 targets, and 44 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed
@@ -295,6 +301,7 @@ found by fuzzing, all fixed.
 | 41 | AD1 | Runaway memory | Fuzzing | The chunk size from the image header (up to 4 GB) and a chunk count sized buffers before anything was read | Chunk size limited to 16 MiB, the chunk table to what the image holds, reads grow with the data |
 | 42 | AFF4 | Runaway memory | Fuzzing | Member sizes claimed by a damaged ZIP directory sized the read buffers | Reads grow with the bytes really there |
 | 43 | AFF4 | Hang | Fuzzing | A map run ending at the top of the 64-bit range left a gap of length 0 that was read for ever; a map naming itself was read again at every level | The read stops there (zeros); every stream is known before it is read, so a map naming itself reads as missing |
+| 44 | NTFS $LogFile | Integer overflow | Fuzzing | A restart area claiming 1 or 2 sequence-number bits made the LSN-to-offset shift subtract below zero | Fewer than 3 bits refused (real logs use 40 or more) |
 
 Before the fixes, every one of these could stop or slow an ingest, a carving
 job or a picture scan, or exhaust the examiner's memory, on purpose-made

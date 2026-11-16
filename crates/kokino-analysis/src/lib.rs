@@ -11,6 +11,7 @@ pub mod plugins;
 pub mod ad1fs;
 pub mod aff4lfs;
 pub mod antiforensics;
+pub mod ntfslog;
 pub mod binview;
 pub mod signatures;
 pub mod carve;
@@ -51,7 +52,8 @@ use stats::Stats;
 /// 9: deleted registry keys and values (`WindowsArtifacts::reg_deleted_keys`).
 /// 10: email (`FsAnalysis::mail`), Internet Explorer cookies, legacy .evt logs,
 ///     registry transaction logs applied.
-pub const SCHEMA_VERSION: u32 = 10;
+/// 11: the NTFS transaction log (`WindowsArtifacts::logfile`).
+pub const SCHEMA_VERSION: u32 = 11;
 
 /// Bytes read from the start of every file for signature and entropy.
 const HEAD: usize = 8 * 1024;

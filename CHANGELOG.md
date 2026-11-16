@@ -5,6 +5,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.7.0] - 16-11-2026
+
+The NTFS transaction log ($LogFile) read in full: what happened to files in the last minutes to hours before the image was made, with what was there before every change.
+
+### Added
+- NTFS transaction log ($LogFile): the restart area and every log record still in the log (record pages with their fixups, records running on across pages; a record is taken only where its LSN says it was written, so stale copies fall out), with the NTFS operation each carries and its redo and undo data. From them, per volume: files created, deleted and renamed (old and new path), timestamps changed (each with the old and the new value), sizes changed, named streams added and removed (Zone.Identifier and other alternate data streams), and the content of small (resident) files before and after a change. A record set up or freed with a file's creation or deletion is part of that one line; records set up one after another (a format) are one line. Paths use folders as they are now, or as the log names them. Shown on a new Transaction log page of the System summary (filter by kind, path or detail; a creation time set back has its own filter), on each file's details, in the HTML report and in the Summary. Checked on the Digital Corpora nps-2009-ntfs1 image: every creation time the log holds and every modified time it shows a copy setting match the image's published DFXML to the second; also read on dfvfs's Windows 7 image and the Digital Detective practice image (Windows XP to 7 logs, version 1.1).
+- Anti-forensics: a new indicator, the transaction log showing a file's creation time set back (what timestomping tools do; a copy keeps the modified time but gets a new creation time), with the old and new times; 27 indicators in all.
+- Fuzzed: a new target, `logfile` (16,640,053 inputs), which found one problem in its first minute (a damaged restart area could make a subtraction overflow), fixed; 968 million inputs in all.
+
+### Changed
+- Analysis schema 11: evidence analyzed before 1.7.0 shows a note to re-analyze it for the transaction log.
+
 ## [1.6.2] - 13-11-2026
 
 Ex01 (EnCase 7 and later) images; PDF carving that also joins PDFs with cross-reference streams and linearized PDFs; HashKeeper and hashdeep hash sets.

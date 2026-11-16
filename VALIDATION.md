@@ -43,6 +43,7 @@ Run on Windows 10.
 | yarp test hives (dirty hives with their transaction logs, 1.3.0) | Hives after log replay against the hives Windows 10 and Windows 7 recovered | New format identical; old format identical apart from two fields Windows rewrites on load; damaged logs refused |
 | Digital Detective practice files: SOFTWARE and SYSTEM hives (1.2.9) | Deleted keys and values in the hives' free space | 181 deleted keys (176 with full paths) and 627 values without a key recovered: Windows Installer and servicing entries removed at setup, a removed shadow copy device |
 | Digital Detective practice files: Internet Explorer 9 index.dat files and the formatted E01 (1.2.9) | History, cache and downloads read live; records carved from free space against the live counts | All 16 files read; all 15 index.dat files and all 5,920 records recovered from the formatted volume, the same counts as live, after two fixes (below) |
+| Digital Corpora nps-2009-ntfs1, dfvfs vss.raw: the NTFS transaction log (1.7.0) | Creation and modified times the log holds against the published DFXML | Every time matches to the second |
 | AFF4 reference images and an FTK Imager AD1 image (1.6.1) | Image streams against their recorded hashes; files against their recorded MD5 | All match; the same device imaged three ways reads the same |
 | NIST CFReDS DFR, 61 images (FAT12/16/32, exFAT, NTFS) | Every deleted file Kokino lists, block by block, against the files' own tags; counts against NIST's layout | 3,048 of 3,323 deleted test files complete, 1,367,020 of 1,370,338 blocks right (99.8%); exFAT 100%, NTFS 100% of blocks; wrong content without a warning in 4 files |
 
@@ -455,6 +456,37 @@ the AD1 image of pyad1 (Apache-2.0), made with FTK Imager 3.4.3.3.
 The unit tests build their own AFF4 containers (a map over a snappy stream
 with a stored chunk, a gap and a read error; a logical container) and AD1
 images, so CI checks the readers without these files.
+
+## NTFS transaction log (1.7.0)
+
+$LogFile was read on three public images: the Digital Corpora
+nps-2009-ntfs1 images (Windows XP), dfvfs's `vss.raw` (Windows 7) and the
+Digital Detective practice image. Every log uses version 1.1 and 4 KiB
+pages; no page was damaged.
+
+On nps-2009-ntfs1 gen1 the log holds the copying of the test files into
+the Compressed, Encrypted and RAW folders. Each file's creation, the
+modified time the copy gave it (the source's), and its size growing as it
+was written are read from the log; the published DFXML of the same disk
+is the reference:
+
+| File | Created (log) | Created (DFXML) | Modified set to (log) | Modified (DFXML) |
+|---|---|---|---|---|
+| /Compressed/report02-3.pdf | 31-12-2008 23:09:31 | 23:09:31 | 23:08:33 | 23:08:33 |
+| /Encrypted/report02-3.pdf | 23:09:35 | 23:09:35 | 23:08:33 | 23:08:33 |
+| /RAW/report02-3.pdf | 23:09:38 | 23:09:38 | 23:08:33 | 23:08:33 |
+| /Compressed/20076517123273.pdf | 23:16:20 | 23:16:20 | 23:15:30 | 23:15:30 |
+| /RAW/NIST_logo.jpg | 23:03:36 | 23:03:36 | 22:46:47 | 22:46:47 |
+
+All times UTC, 31-12-2008. The sizes the log ends with (1,421,998 and
+1,001,647 bytes) are the files' sizes. The MFT record numbers the log's
+targets give agree with the record images the log carries. On `vss.raw`
+the log holds the volume being set up (the $Extend files created, $Quota
+renamed to $Secure) and the files written after; on the Digital Detective
+image, which was formatted, a format's records set up one after another.
+None of the public images has a timestamp set back; that, a rename, a
+deletion, a named stream and a small file's content before and after are
+checked on a log built in the tests.
 
 ## Ex01 (1.6.2)
 

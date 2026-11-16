@@ -54,6 +54,9 @@ pub struct WindowsArtifacts {
     /// The NTFS change journal ($UsnJrnl) of this volume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub journal: Option<Journal>,
+    /// What the NTFS transaction log ($LogFile) of this volume holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logfile: Option<crate::ntfslog::LogHistory>,
     /// System Resource Usage Monitor (SRUDB.dat).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub srum: Option<Srum>,
@@ -299,7 +302,7 @@ pub struct JournalChange {
 
 impl WindowsArtifacts {
     pub fn is_empty(&self) -> bool {
-        self.sources.is_empty() && self.journal.is_none()
+        self.sources.is_empty() && self.journal.is_none() && self.logfile.is_none()
     }
 
     /// The hourly SRUM rows, which `without_journal` leaves out.
@@ -332,6 +335,7 @@ impl WindowsArtifacts {
             timeline: vec![],
             shellbags: self.shellbags.clone(),
             journal: None,
+            logfile: None,
             // Hourly rows are served page by page too.
             srum: self.srum.as_ref().map(|s| Srum { network: vec![], usage: vec![], focus: vec![], ..s.clone() }),
             tasks: self.tasks.clone(),
@@ -832,6 +836,7 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
     }
     if fs.is_ntfs() {
         journal(&mut w, fs, r, files, &mut *progress);
+        w.logfile = crate::ntfslog::build(fs, r, files, &mut *progress);
     }
     finish(&mut w);
     w
@@ -2525,6 +2530,22 @@ pub fn impact(w: &WindowsArtifacts) -> Vec<String> {
         }
         if let Some(e) = &j.error {
             out.push(format!("Change journal: {}.", e));
+        }
+    }
+    if let Some(l) = &w.logfile {
+        if l.records > 0 {
+            let n = |w: &str| l.events.iter().filter(|e| e.what == w).count();
+            let back = l.events.iter().filter(|e| e.backdated).count();
+            out.push(format!(
+                "The transaction log ($LogFile) holds {} operations: {} files created, {} deleted, {} renamed, {} timestamp changes{}{}.",
+                l.records,
+                n("created"),
+                n("deleted"),
+                n("renamed"),
+                n("times changed"),
+                if back > 0 { format!(" ({} with the creation time set back)", back) } else { String::new() },
+                if l.dirty { "; the volume was not closed cleanly, so the log holds changes not yet in the MFT" } else { "" }
+            ));
         }
     }
     if let Some(s) = &w.srum {

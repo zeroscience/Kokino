@@ -259,6 +259,15 @@ const RULES: &[Rule] = &[
         caveat: "Rarely produced by anything else. Each count is one file.",
     },
     Rule {
+        id: "logfile_backdated",
+        title: "Transaction log shows creation times set back",
+        category: "Timestamp manipulation",
+        weight: 0.6,
+        k: 2.0,
+        explanation: "NTFS's transaction log ($LogFile) recorded a file's $STANDARD_INFORMATION creation time being changed to a time earlier than it was, with both the old and the new value. Changing a file's creation time to an earlier one is what timestomping tools do; copying a file does not (a copy gets a new creation time).",
+        caveat: "Installers, archive extractors and synchronization tools that restore original times do the same. Each count is one change; see the transaction log page for the file and the values.",
+    },
+    Rule {
         id: "usn_journal_recreated",
         title: "Change journal created long after the volume",
         category: "Log tampering",
@@ -435,6 +444,11 @@ pub fn evaluate(files: &mut [FileRow], now: u64, web: &WebActivity, win: &Window
     // Whole user-activity keys deleted; one hit per key, on its hive file.
     for k in win.reg_deleted_keys.iter().filter(|k| crate::windows::user_activity_trace(&k.notable)) {
         hits.entry("registry_traces_deleted").or_default().push(k.file as usize);
+    }
+    if let Some(l) = &win.logfile {
+        for e in l.events.iter().filter(|e| e.backdated) {
+            hits.entry("logfile_backdated").or_default().push(e.file.unwrap_or(l.file) as usize);
+        }
     }
     if let Some(j) = &win.journal {
         let mut wiped: Vec<u64> = j.changes.iter().filter(|c| c.c.reasons & kokino_artifacts::usn::RENAME_NEW_NAME != 0 && sdelete_like(&c.c.name)).map(|c| c.c.record).collect();

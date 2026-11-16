@@ -35,6 +35,7 @@ pub const TARGETS: &[Target] = &[
     Target { name: "vss", run: vss, seeds: &["crates/kokino-fuzz/seeds/vss"] },
     Target { name: "tar", run: tarfs, seeds: &["crates/kokino-fuzz/seeds/tar"] },
     Target { name: "ad1", run: ad1, seeds: &["crates/kokino-fuzz/seeds/ad1"] },
+    Target { name: "logfile", run: logfile, seeds: &["crates/kokino-fuzz/seeds/logfile"] },
     Target { name: "aff4", run: aff4, seeds: &["crates/kokino-fuzz/seeds/aff4"] },
     Target { name: "pst", run: pst, seeds: &["crates/kokino-fuzz/seeds/pst"] },
     Target { name: "plist", run: plist, seeds: &["crates/kokino-fuzz/seeds/plist"] },
@@ -378,6 +379,12 @@ fn vss(d: &[u8]) {
 
 /// A tar or tar.gz read as a file system (UAC collections): headers, GNU
 /// long names, PAX records, hard links, reads.
+/// $LogFile: restart pages, record pages and fixups, records across pages,
+/// NTFS operations, and the events made of them.
+fn logfile(d: &[u8]) {
+    kokino_analysis::ntfslog::fuzz(d);
+}
+
 /// AD1 logical images: the item tree, metadata, chunk tables and zlib
 /// chunks of every file.
 fn ad1(d: &[u8]) {
