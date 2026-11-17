@@ -5,6 +5,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- The Kokino website moved to https://kokino.zeroscience.mk/ (the About page, the wiki's contact page, Getting started, the README, the Windows installer's support link and the Linux package's homepage); zeroscience.github.io/kokino-ftk stays as a copy.
+
 ## [1.7.0] - 16-11-2026
 
 The NTFS transaction log ($LogFile) read in full: what happened to files in the last minutes to hours before the image was made, with what was there before every change.

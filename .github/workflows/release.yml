@@ -110,7 +110,7 @@ jobs:
           Depends: libc6 (>= 2.35)
           Installed-Size: $size
           Maintainer: Zero Science Lab <lab@zeroscience.mk>
-          Homepage: https://github.com/zeroscience/Kokino
+          Homepage: https://kokino.zeroscience.mk/
           Description: Kokino Forensic Toolkit: disk forensics with a browser GUI
            Examines disk images (E01, raw, split raw, VHD): every NTFS MFT record and
            FAT/exFAT directory entry, live and deleted, timestamps, signatures, browser

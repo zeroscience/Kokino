@@ -4,7 +4,7 @@
 import { h, icon, debounce, api, ts } from "./lib.js";
 
 export const CONTACT = {
-  site: "https://zeroscience.github.io/kokino-ftk/",
+  site: "https://kokino.zeroscience.mk/",
   web: "https://www.zeroscience.mk",
   email: "lab@zeroscience.mk",
   github: "https://github.com/zeroscience",
@@ -101,14 +101,14 @@ export function aboutPage(info) {
     h("div.card.stack",
       h("h3", "What's next"),
       p("1.5 to 1.7 finished most of what could be built without new test data. What comes next mostly waits for samples: disks from real Macs, encrypted APFS volumes and LZFSE compression, Windows Search databases and XFS images; then carving files in more than two pieces. Security reports and wrong results (an artifact read incorrectly, a crash on real evidence) are always fixed first."),
-      p("The full list, with what each item needs, is in ", link("https://github.com/zeroscience/Kokino/blob/main/ROADMAP.md", "ROADMAP.md"), "; if one matters to a case you work on, say so: that moves it up. The website: ", link("https://zeroscience.github.io/kokino-ftk/", "zeroscience.github.io/kokino-ftk"), "."),
+      p("The full list, with what each item needs, is in ", link("https://github.com/zeroscience/Kokino/blob/main/ROADMAP.md", "ROADMAP.md"), "; if one matters to a case you work on, say so: that moves it up. The website: ", link(CONTACT.site, "kokino.zeroscience.mk"), "."),
     ),
     updateCard(info),
     h("div.grid.g2",
       h("div.card.stack",
         h("h3", "Contact"),
         kv([
-          ["Kokino website", link(CONTACT.site, "zeroscience.github.io/kokino-ftk")],
+          ["Kokino website", link(CONTACT.site, "kokino.zeroscience.mk")],
           ["Developer", h("span", "Zero Science Lab, ", link(CONTACT.web, "www.zeroscience.mk"))],
           ["Email", mail(CONTACT.email)],
           ["GitHub", link(CONTACT.github)],
@@ -150,7 +150,7 @@ const WIKI = [
     id: "start", title: "Getting started", icon: "chev",
     body: [
       p("Installed from a release package (Windows MSI, Linux .deb, macOS DMG): start \"Kokino Forensic Toolkit\" from the Start menu, the desktop's application menu or the DMG's \"Start Kokino\", or run ", code("kokino serve"), ". It opens your browser on this machine. To see whether a newer release exists, use Check for updates on the About page (nothing is checked on its own)."),
-      p("Downloads, release notes and an overview are on the Kokino website, ", link(CONTACT.site, "zeroscience.github.io/kokino-ftk"), "."),
+      p("Downloads, release notes and an overview are on the Kokino website, ", link(CONTACT.site, "kokino.zeroscience.mk"), "."),
       p("From source: build once, then start the server."),
       pre("cargo build --release", "./target/release/kokino serve"),
       p("On the very first start there are no accounts yet. The terminal prints a one-time setup link; open it to create the first administrator. Without that link nobody can claim the server. You can also create the first admin on the console:"),
@@ -753,7 +753,7 @@ const WIKI = [
     id: "contact", title: "Contact and support", icon: "user",
     body: [
       kv([
-        ["Kokino website", link(CONTACT.site, "zeroscience.github.io/kokino-ftk")],
+        ["Kokino website", link(CONTACT.site, "kokino.zeroscience.mk")],
         ["Developer", h("span", "Zero Science Lab, ", link(CONTACT.web, "www.zeroscience.mk"))],
         ["Email", mail(CONTACT.email)],
         ["GitHub", link(CONTACT.github)],

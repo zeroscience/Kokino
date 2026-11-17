@@ -1,7 +1,7 @@
 # Website
 
 The Kokino Forensic Toolkit website, served at
-https://zeroscience.github.io/kokino-ftk/
+https://kokino.zeroscience.mk/ (also served at https://zeroscience.github.io/kokino-ftk/)
 
 Plain static files (no build step). To publish a change, copy this folder's
 files into the `kokino-ftk/` folder of the

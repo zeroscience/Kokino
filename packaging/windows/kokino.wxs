@@ -25,7 +25,7 @@
 
     <Icon Id="KokinoIcon" SourceFile="$(var.Root)\packaging\windows\kokino.ico" />
     <Property Id="ARPPRODUCTICON" Value="KokinoIcon" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/zeroscience/Kokino" />
+    <Property Id="ARPURLINFOABOUT" Value="https://kokino.zeroscience.mk/" />
     <Property Id="ARPHELPLINK" Value="https://github.com/zeroscience/Kokino#readme" />
     <Property Id="ARPCONTACT" Value="lab@zeroscience.mk" />
 
