@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.7.1] - 17-11-2026
+
+The website moved to kokino.zeroscience.mk.
+
 ### Changed
 - The Kokino website moved to https://kokino.zeroscience.mk/ (the About page, the wiki's contact page, Getting started, the README, the Windows installer's support link and the Linux package's homepage); zeroscience.github.io/kokino-ftk stays as a copy.
 

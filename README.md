@@ -22,7 +22,7 @@
   <img src="https://img.shields.io/badge/rust-1.80%2B-orange?logo=rust&logoColor=white" alt="Rust 1.80+">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey" alt="Platforms: Windows, Linux, macOS">
   <img src="https://img.shields.io/badge/GUI-browser-1f6feb" alt="Browser GUI">
-  <img src="https://img.shields.io/badge/version-1.7.0-00bcd4" alt="Version 1.7.0">
+  <img src="https://img.shields.io/badge/version-1.7.1-00bcd4" alt="Version 1.7.1">
   <img src="https://img.shields.io/badge/evidence-read--only-2ea44f" alt="Evidence read-only">
   <img src="https://img.shields.io/badge/audit%20log-hash--chained-2ea44f" alt="Hash-chained audit log">
   <a href="SECURITY.md#fuzzing-the-parsers"><img src="https://img.shields.io/badge/parsers%20fuzzed-968M%20inputs-2ea44f" alt="Parsers fuzzed: 952 million inputs"></a>
@@ -70,7 +70,7 @@ Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workben
 
 Every finding links to the exact bytes it came from, every indicator of anti-forensic activity explains itself, and every examiner action lands in a hash-chained audit log, so the results hold up in a report and in court.
 
-> Status: 1.7.0 reads the NTFS transaction log ($LogFile) in full: files created, deleted and renamed in the last minutes to hours before the image was made, timestamps before and after every change (a creation time set back is flagged), sizes, named streams and the content of small files before and after. 1.6 brought Ex01, AFF4, AD1 and AFF4-L images, deleted Outlook messages from the PST's free space, plugins on the timelines and more carving; 1.5 STIX and MISP watchlists, plugins, written CDs and DVDs and ESXi snapshots. Reads E01, Ex01, AFF4, raw and virtual disks, and NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF; BitLocker, shadow copies, triage collections and logical images. Validated against NIST CFReDS, Digital Corpora, dfvfs and AFF4 reference images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed with 968 million inputs ([SECURITY.md](SECURITY.md)). See [What's next](#whats-next).
+> Status: 1.7.1 points the application to the new website, kokino.zeroscience.mk. 1.7 reads the NTFS transaction log ($LogFile) in full: files created, deleted and renamed in the last minutes to hours before the image was made, timestamps before and after every change (a creation time set back is flagged), sizes, named streams and the content of small files before and after. 1.6 brought Ex01, AFF4, AD1 and AFF4-L images, deleted Outlook messages from the PST's free space, plugins on the timelines and more carving; 1.5 STIX and MISP watchlists, plugins, written CDs and DVDs and ESXi snapshots. Reads E01, Ex01, AFF4, raw and virtual disks, and NTFS, FAT, exFAT, ext2/3/4, HFS+, APFS, ISO 9660 and UDF; BitLocker, shadow copies, triage collections and logical images. Validated against NIST CFReDS, Digital Corpora, dfvfs and AFF4 reference images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed with 968 million inputs ([SECURITY.md](SECURITY.md)). See [What's next](#whats-next).
 
 ## Features
 
