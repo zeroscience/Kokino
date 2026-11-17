@@ -23,6 +23,8 @@ pub enum FsKind {
     Fat32,
     ExFat,
     Ext,
+    /// XFS (Red Hat and its derivatives default to it).
+    Xfs,
     Apfs,
     HfsPlus,
     BitLocker,
@@ -50,6 +52,7 @@ impl FsKind {
             FsKind::Fat32 => "FAT32",
             FsKind::ExFat => "exFAT",
             FsKind::Ext => "ext2/3/4",
+            FsKind::Xfs => "XFS",
             FsKind::Apfs => "APFS",
             FsKind::HfsPlus => "HFS+",
             FsKind::BitLocker => "BitLocker (encrypted)",
@@ -154,6 +157,9 @@ pub fn detect_fs<R: Read + Seek>(r: &mut R, start: u64) -> FsKind {
     if &b[54..59] == b"FAT12" {
         return FsKind::Fat12;
     }
+    if b.starts_with(b"XFSB") {
+        return FsKind::Xfs;
+    }
     if &b[32..36] == b"NXSB" {
         return FsKind::Apfs;
     }
@@ -207,7 +213,7 @@ pub(crate) fn mk(index: usize, kind: VolumeKind, start: u64, length: u64, descri
         description,
         fs,
         fs_label: fs.label().to_string(),
-        supported: matches!(fs, FsKind::Ntfs | FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat | FsKind::Ext | FsKind::Iso9660 | FsKind::Udf | FsKind::HfsPlus | FsKind::Apfs),
+        supported: matches!(fs, FsKind::Ntfs | FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat | FsKind::Ext | FsKind::Xfs | FsKind::Iso9660 | FsKind::Udf | FsKind::HfsPlus | FsKind::Apfs),
         shadow: None,
         bitlocker: None,
     }

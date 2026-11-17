@@ -5,6 +5,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.8.0] - 17-11-2026
+
+XFS, the default file system of Red Hat Enterprise Linux and its derivatives, read like ext: live and deleted files, folders, owners, modes and times.
+
+### Added
+- XFS (format versions 4 and 5): every allocation group, folders kept in the inode (short form) and in directory blocks (block, leaf and node folders), files mapped by extent lists and extent B+trees, unwritten (preallocated) extents read as zeros, symbolic links in the inode and in blocks, hard links, owner, mode, inode number and times to the nanosecond (version 5: the creation time; the bigtime feature: dates to 2486; 64-bit extent counts). Free space comes from the free-space B+trees, so carving and the free-space views work. The Linux system summary (accounts, logons, logs, shell histories, packages, persistence) reads XFS volumes as it reads ext.
+- XFS deleted files: names from the free regions of directory blocks (XFS overwrites only the first four bytes of a removed entry, the high half of its inode number; the name, file type and low half stay, and on version 5 the inode's own number confirms the match) and the last name removed from a short-form folder; content through the extent records XFS leaves in a freed inode (what xfs_undelete relies on), with the inode change time as the deletion time. XFS clears the size, so such content runs to the end of the file's last block, and the file says so. Freed inodes no name leads to are listed under $OrphanFiles; blocks in use again are flagged.
+- `scripts/make-xfs-samples.sh`: makes XFS test images on any Linux machine (version 5 with one and four allocation groups, bigtime and 64-bit extent counts, sparse inodes, 1 KiB blocks, version 4), with every folder form, fragmented, sparse and preallocated files, links, extended attributes, timestamps set back, and files and a folder deleted, plus a manifest of every file's inode, times and SHA-256 before and after.
+- Fuzzed: a new target, `xfs` (2,708,418 inputs), which found one problem in its first 30 seconds (a superblock claiming more than 256 inodes per block made a shift overflow), fixed; 971 million inputs in all.
+
+### Changed
+- Analysis schema 12 (XFS volumes).
+
 ## [1.7.1] - 17-11-2026
 
 The website moved to kokino.zeroscience.mk.

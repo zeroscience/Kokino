@@ -89,3 +89,4 @@ ad1 1 3271 oom
 aff4 1 104457 oom
 aff4 1 139365 hang
 logfile 1 17830 panic
+xfs 1 24266 panic

@@ -19,6 +19,7 @@ pub const TARGETS: &[Target] = &[
     Target { name: "ntfs", run: ntfs, seeds: &["tests/fixtures/testfs1", "tests/fixtures/testfs1-af", "tests/fixtures/testfs1-win"] },
     Target { name: "fat", run: fat, seeds: &["tests/fixtures/fat12.img", "tests/fixtures/fat16.img", "tests/fixtures/fat32.img", "tests/fixtures/exfat.img"] },
     Target { name: "ext", run: ext, seeds: &["tests/fixtures/ext2.img", "tests/fixtures/ext3.img", "tests/fixtures/ext4.img"] },
+    Target { name: "xfs", run: xfs, seeds: &["crates/kokino-fuzz/seeds/xfs"] },
     Target { name: "linuxlogs", run: linuxlogs, seeds: &["crates/kokino-fuzz/seeds/linux"] },
     Target { name: "journalz", run: journalz, seeds: &["crates/kokino-fuzz/seeds/linux/compressed.journal"] },
     Target { name: "vdisk", run: vdisk, seeds: &["tests/fixtures/vd-dynamic.vhd", "tests/fixtures/vd-dynamic.vhdx", "tests/fixtures/vd-sparse.vmdk", "tests/fixtures/vd-stream.vmdk", "crates/kokino-fuzz/seeds/vdisk", "tests/fixtures/vd-esx-vmfssparse-delta.vmdk", "tests/fixtures/vd-esx-sesparse-sesparse.vmdk"] },
@@ -142,6 +143,18 @@ fn ext(d: &[u8]) {
     let mut c = Cursor::new(d);
     let Ok(v) = kokino_ext::open(&mut c, d.len() as u64) else { return };
     if let Ok(scan) = kokino_ext::scan(&v, &mut c, |_, _| true) {
+        for e in scan.entries.iter().take(64) {
+            let _ = v.read(&mut c, e, 0, READ_CAP);
+            let _ = v.extents(&mut c, e);
+        }
+    }
+    v.free_runs(&mut c);
+}
+
+fn xfs(d: &[u8]) {
+    let mut c = Cursor::new(d);
+    let Ok(v) = kokino_xfs::open(&mut c, d.len() as u64) else { return };
+    if let Ok(scan) = kokino_xfs::scan(&v, &mut c, |_, _| true) {
         for e in scan.entries.iter().take(64) {
             let _ = v.read(&mut c, e, 0, READ_CAP);
             let _ = v.extents(&mut c, e);

@@ -43,6 +43,7 @@ Run on Windows 10.
 | yarp test hives (dirty hives with their transaction logs, 1.3.0) | Hives after log replay against the hives Windows 10 and Windows 7 recovered | New format identical; old format identical apart from two fields Windows rewrites on load; damaged logs refused |
 | Digital Detective practice files: SOFTWARE and SYSTEM hives (1.2.9) | Deleted keys and values in the hives' free space | 181 deleted keys (176 with full paths) and 627 values without a key recovered: Windows Installer and servicing entries removed at setup, a removed shadow copy device |
 | Digital Detective practice files: Internet Explorer 9 index.dat files and the formatted E01 (1.2.9) | History, cache and downloads read live; records carved from free space against the live counts | All 16 files read; all 15 index.dat files and all 5,920 records recovered from the formatted volume, the same counts as live, after two fixes (below) |
+| dfvfs xfs.raw and xfs-bigtime.raw: XFS (1.8.0) | Paths, inode numbers, content and link target against dfvfs's tests | All match |
 | Digital Corpora nps-2009-ntfs1, dfvfs vss.raw: the NTFS transaction log (1.7.0) | Creation and modified times the log holds against the published DFXML | Every time matches to the second |
 | AFF4 reference images and an FTK Imager AD1 image (1.6.1) | Image streams against their recorded hashes; files against their recorded MD5 | All match; the same device imaged three ways reads the same |
 | NIST CFReDS DFR, 61 images (FAT12/16/32, exFAT, NTFS) | Every deleted file Kokino lists, block by block, against the files' own tags; counts against NIST's layout | 3,048 of 3,323 deleted test files complete, 1,367,020 of 1,370,338 blocks right (99.8%); exFAT 100%, NTFS 100% of blocks; wrong content without a warning in 4 files |
@@ -456,6 +457,25 @@ the AD1 image of pyad1 (Apache-2.0), made with FTK Imager 3.4.3.3.
 The unit tests build their own AFF4 containers (a map over a snappy stream
 with a stored chunk, a gap and a read error; a logical container) and AD1
 images, so CI checks the readers without these files.
+
+## XFS: dfvfs test images (1.8.0)
+
+The dfvfs project publishes two XFS images made with `mkfs.xfs` on Linux
+(`xfs.raw`, and `xfs-bigtime.raw` with the bigtime and 64-bit extent count
+features), and its tests give each file's path and inode number. Kokino
+lists the same files at the same inode numbers (`/a_directory` 11075 and
+16131, `/a_directory/a_file` 11076 and 16132, `/a_directory/another_file`
+11078 and 16134, `/a_link` 11079 and 16135), reads their content as dfvfs
+does, and the link target (`a_directory/another_file`). Both are version 5
+volumes with short-form folders and extent lists, and no deleted files.
+
+Folders in directory blocks, extent B+trees, deleted names and freed
+inodes, inode numbers in a second allocation group and the free-space
+trees are checked on a volume built in the tests to the on-disk format
+(libfsxfs's documentation and the kernel's), including the way the kernel
+overwrites a removed entry. Images made by the kernel with all of these
+(`scripts/make-xfs-samples.sh`, with the kernel's own listing of every file
+before and after the deletions) are the next check.
 
 ## NTFS transaction log (1.7.0)
 

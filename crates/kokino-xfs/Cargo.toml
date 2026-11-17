@@ -1,0 +1,12 @@
+[package]
+name = "kokino-xfs"
+description = "XFS reader: live and deleted entries, extent lists and B+trees, deleted inodes through the extents XFS leaves in them"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+kokino-core.workspace = true
+kokino-ntfs.workspace = true
+anyhow.workspace = true

@@ -1,4 +1,4 @@
-//! Linux system artifacts found on an ext2/3/4 volume.
+//! Linux system artifacts found on an ext2/3/4 or XFS volume.
 //!
 //! Finds the files an incident responder reads first by their Linux paths,
 //! deleted copies included, and turns them into the System summary:
@@ -907,7 +907,7 @@ pub fn collect<R: Read + Seek>(fs: &crate::fs::Fs, r: &mut R, files: &[FileRow],
     let mut a = LinuxArtifacts::default();
     // An ext volume, or a collection (tar, ZIP) that may hold a Linux system.
     // FAT and exFAT too: USB drives can carry FSEvents from a Mac.
-    if !fs.is_ext() && !fs.is_collection() && !fs.is_mac() && !fs.is_fat() {
+    if !fs.is_linux() && !fs.is_collection() && !fs.is_mac() && !fs.is_fat() {
         return a;
     }
     if let crate::fs::Fs::Ext(v) = fs {

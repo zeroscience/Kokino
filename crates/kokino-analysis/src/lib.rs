@@ -53,7 +53,8 @@ use stats::Stats;
 /// 10: email (`FsAnalysis::mail`), Internet Explorer cookies, legacy .evt logs,
 ///     registry transaction logs applied.
 /// 11: the NTFS transaction log (`WindowsArtifacts::logfile`).
-pub const SCHEMA_VERSION: u32 = 11;
+/// 12: XFS volumes.
+pub const SCHEMA_VERSION: u32 = 12;
 
 /// Bytes read from the start of every file for signature and entropy.
 const HEAD: usize = 8 * 1024;

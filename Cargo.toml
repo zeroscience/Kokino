@@ -6,6 +6,7 @@ members = [
     "crates/kokino-ntfs",
     "crates/kokino-fat",
     "crates/kokino-ext",
+    "crates/kokino-xfs",
     "crates/kokino-iso",
     "crates/kokino-mac",
     "crates/kokino-analysis",
@@ -16,7 +17,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.7.1"
+version = "1.8.0"
 edition = "2021"
 authors = ["Zero Science Lab"]
 license = "Apache-2.0"
@@ -29,6 +30,7 @@ kokino-image = { path = "crates/kokino-image" }
 kokino-ntfs = { path = "crates/kokino-ntfs" }
 kokino-fat = { path = "crates/kokino-fat" }
 kokino-ext = { path = "crates/kokino-ext" }
+kokino-xfs = { path = "crates/kokino-xfs" }
 kokino-iso = { path = "crates/kokino-iso" }
 kokino-mac = { path = "crates/kokino-mac" }
 kokino-analysis = { path = "crates/kokino-analysis" }

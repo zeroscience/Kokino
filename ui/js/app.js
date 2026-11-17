@@ -272,7 +272,7 @@ async function home() {
   render(
     h("div.hero",
       h("h1", "Every finding, ", h("em", "traceable to the byte.")),
-      h("p", "Open an image, and Kokino walks every NTFS MFT record, FAT/exFAT directory entry, ext2/3/4 inode, HFS+/APFS catalog record and ISO 9660/UDF directory record, live and deleted, compares $SI against $FN timestamps, checks signatures and scores the evidence for anti-forensic activity, with an explanation behind every number."),
+      h("p", "Open an image, and Kokino walks every NTFS MFT record, FAT/exFAT directory entry, ext2/3/4 and XFS inode, HFS+/APFS catalog record and ISO 9660/UDF directory record, live and deleted, compares $SI against $FN timestamps, checks signatures and scores the evidence for anti-forensic activity, with an explanation behind every number."),
     ),
     h("div.grid.g3",
       canCreate()
@@ -743,7 +743,7 @@ async function workspace(cid, eid, tab, q) {
   if (tab === "hashes") return hashesTab(ctx);
   if (tab === "plugins") return pluginsTab(ctx);
   if (!ctx.fs) {
-    return render(h("div.card.stack", h("h2", "No supported filesystem found"), h("p.muted", "Kokino parses NTFS, FAT12/16/32, exFAT, ext2/3/4, ISO 9660, UDF, HFS+ and APFS. Detected volumes:"), volumeMap(s), ...s.errors.map((e) => h("p", e)), bitlockerCard(ctx), h("a.btn", { href: `#/c/${cid}/e/${eid}/hex` }, "Open in hex")));
+    return render(h("div.card.stack", h("h2", "No supported filesystem found"), h("p.muted", "Kokino parses NTFS, FAT12/16/32, exFAT, ext2/3/4, XFS, ISO 9660, UDF, HFS+ and APFS. Detected volumes:"), volumeMap(s), ...s.errors.map((e) => h("p", e)), bitlockerCard(ctx), h("a.btn", { href: `#/c/${cid}/e/${eid}/hex` }, "Open in hex")));
   }
   if (tab === "explorer") return explorerTab(ctx);
   if (tab === "timeline") return timelineTab(ctx);
@@ -761,7 +761,8 @@ function fsPicker(ctx, tab) {
 
 /** FAT12/16/32 and exFAT: one timestamp set, no MFT, no named streams. */
 const isFat = (label) => /fat/i.test(label || "");
-const isExt = (label) => /^ext/i.test(label || "");
+// A Linux file system (ext2/3/4 or XFS): inodes, owners and modes.
+const isExt = (label) => /^(ext|xfs)/i.test(label || "");
 /** A triage collection read as a file system (ZIP, tar). */
 const isCollection = (label) => /^(zip|tar)$/i.test(label || "");
 const isOptical = (label) => /iso 9660|udf/i.test(label || "");
@@ -1149,7 +1150,7 @@ async function fileDrawer(ctx, idx, startOffset) {
       f.indicators.length ? h("div.stack", f.indicators.map((i) => h("div.card.flat.ind.hot", h("b", i.title), h("p", { style: { margin: "6px 0 0" } }, i.explanation), h("div.cav", i.caveat)))) : null,
       f.hashes && f.hashes.sets.some((s) => s.kind === "notable") ? h("div.card.flat.ind.hot", h("b", "In a known-bad hash set"), h("p", { style: { margin: "6px 0 0" } }, f.hashes.sets.filter((s) => s.kind === "notable").map((s) => `${s.name} (${ALGO[s.algo]})`).join(", ")),
         h("div.cav", "A hash match means identical content, not how the file got here or whether anyone opened it.")) : null,
-      h("div.card.flat", h("h3", fat ? (f.fs === "exFAT" ? `Timestamps (${zoneName()}, from the stored UTC offset, 10 ms precision)` : "Timestamps (the device's local clock as stored, 2 s precision)") : mac ? `Timestamps (${zoneName()}, stored in UTC; APFS to the nanosecond, HFS+ to the second)` : ext ? `Timestamps (${zoneName()}, stored in UTC; ext4 to the nanosecond, ext2/ext3 to the second)` : optical ? `Timestamps (${zoneName()}, recorded as local time with its UTC offset, 1 s precision; born, accessed and changed only with Rock Ridge)` : `Timestamps (${zoneName()}, 100 ns precision)`), tsTable),
+      h("div.card.flat", h("h3", fat ? (f.fs === "exFAT" ? `Timestamps (${zoneName()}, from the stored UTC offset, 10 ms precision)` : "Timestamps (the device's local clock as stored, 2 s precision)") : mac ? `Timestamps (${zoneName()}, stored in UTC; APFS to the nanosecond, HFS+ to the second)` : ext ? (/^xfs/i.test(f.fs) ? `Timestamps (${zoneName()}, stored in UTC to the nanosecond)` : `Timestamps (${zoneName()}, stored in UTC; ext4 to the nanosecond, ext2/ext3 to the second)`) : optical ? `Timestamps (${zoneName()}, recorded as local time with its UTC offset, 1 s precision; born, accessed and changed only with Rock Ridge)` : `Timestamps (${zoneName()}, 100 ns precision)`), tsTable),
       h("div.card.flat", h("h3", "Identity"), h("div.kv", { style: { marginTop: "8px" } },
         fat || optical ? [h("span", "Entry id / parent"), h("span.mono", { title: "Assigned by Kokino in directory order; this file system has no record numbers" }, `${r.record} / ${f.parent}`)]
           : ext ? [h("span", "Inode / entry id"), h("span.mono", { title: "Entry ids are assigned by Kokino; hard links share one inode" }, `${u ? u.inode : ""} / ${r.record}`)]
@@ -1258,7 +1259,7 @@ ${e.detail}` : e.path }, e.flags.length ? h("span.flag", { title: e.flags.join("
   render(h("div.stack",
     h("div.hd", h("h1", "Timeline"), h("span.sp"), exportButtons(ctx, ctx.fi, "timeline"), fsPicker(ctx, "timeline")),
     h("p.muted", ntfs ? "MACB events from $STANDARD_INFORMATION and $FILE_NAME, interleaved with browser visits (VISIT), downloads (DL) and searches (SEARCH). $FN times are set by the kernel and are much harder to forge, so compare the two sources when something looks off."
-      : isExt(ctx.fs && ctx.fs.volume.fs_label) ? "MACB events from each inode (M modified, A accessed, C inode changed, B born; born times exist on ext4 only), deletion times (DEL), interleaved with browser visits (VISIT), downloads (DL) and searches (SEARCH). touch can set M and A to anything, but not C: the kernel sets C to the time of the change."
+      : isExt(ctx.fs && ctx.fs.volume.fs_label) ? "MACB events from each inode (M modified, A accessed, C inode changed, B born; born times exist on ext4 and XFS version 5 only), deletion times (DEL), interleaved with browser visits (VISIT), downloads (DL) and searches (SEARCH). touch can set M and A to anything, but not C: the kernel sets C to the time of the change."
       : "MACB events from the directory entries, interleaved with browser visits (VISIT), downloads (DL) and searches (SEARCH)."),
     h("div.row.wrap", q, h("label", "From", from), h("label", "To", to), seg, count),
     h("div.scroll", { style: { maxHeight: "calc(100vh - 290px)" } }, h("table.tbl", h("thead", h("tr", h("th", { title: raw ? "FAT stores the device's local clock with no zone: times are shown as stored" : null }, raw ? "Time (device clock)" : `Time (${zoneName()})`), h("th", "MACB"), h("th", "Src"), h("th", "Path"), h("th", { style: { textAlign: "right" } }, "Size"))), tbody)),

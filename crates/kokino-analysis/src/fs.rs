@@ -1,5 +1,5 @@
 //! One interface over the file systems Kokino parses: NTFS, FAT12/16/32,
-//! exFAT, ext2/3/4, ISO 9660, UDF, HFS+ and APFS. Callers hold a volume reader (see `volume_reader`) and an `Fs`
+//! exFAT, ext2/3/4, XFS, ISO 9660, UDF, HFS+ and APFS. Callers hold a volume reader (see `volume_reader`) and an `Fs`
 //! opened on it, and read files by their `FsEntry`.
 
 use kokino_image::{FsKind, Volume};
@@ -10,6 +10,7 @@ pub enum Fs {
     Ntfs(kokino_ntfs::Ntfs),
     Fat(kokino_fat::FatVolume),
     Ext(kokino_ext::ExtVolume),
+    Xfs(kokino_xfs::XfsVolume),
     Iso(kokino_iso::IsoVolume),
     Udf(kokino_iso::udf::UdfVolume),
     Hfs(kokino_mac::hfs::HfsVolume),
@@ -31,7 +32,7 @@ pub struct FsScan {
 
 /// File systems with a parser.
 pub fn supported(k: FsKind) -> bool {
-    matches!(k, FsKind::Ntfs | FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat | FsKind::Ext | FsKind::Iso9660 | FsKind::Udf | FsKind::HfsPlus | FsKind::Apfs | FsKind::Zip | FsKind::Tar | FsKind::Ad1 | FsKind::Aff4L)
+    matches!(k, FsKind::Ntfs | FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat | FsKind::Ext | FsKind::Xfs | FsKind::Iso9660 | FsKind::Udf | FsKind::HfsPlus | FsKind::Apfs | FsKind::Zip | FsKind::Tar | FsKind::Ad1 | FsKind::Aff4L)
 }
 
 impl Fs {
@@ -40,6 +41,7 @@ impl Fs {
             FsKind::Ntfs => Ok(Fs::Ntfs(kokino_ntfs::open_ntfs(r)?)),
             FsKind::Fat12 | FsKind::Fat16 | FsKind::Fat32 | FsKind::ExFat => Ok(Fs::Fat(kokino_fat::open(r, v.length)?)),
             FsKind::Ext => Ok(Fs::Ext(kokino_ext::open(r, v.length)?)),
+            FsKind::Xfs => Ok(Fs::Xfs(kokino_xfs::open(r, v.length)?)),
             FsKind::Iso9660 => {
                 // A bridge disc also carries UDF, which keeps full names,
                 // owners, permissions, creation times and deleted entries.
@@ -81,6 +83,11 @@ impl Fs {
         matches!(self, Fs::Ext(_))
     }
 
+    /// A Linux file system: ext2/3/4 or XFS.
+    pub fn is_linux(&self) -> bool {
+        matches!(self, Fs::Ext(_) | Fs::Xfs(_))
+    }
+
     /// A triage collection or logical image read as a file system (ZIP,
     /// tar, AD1, AFF4-L).
     pub fn is_collection(&self) -> bool {
@@ -104,6 +111,10 @@ impl Fs {
             }
             Fs::Ext(v) => {
                 let s = kokino_ext::scan(v, r, progress)?;
+                Ok(FsScan { info: s.info, entries: s.entries, unreadable: vec![], notes: s.notes })
+            }
+            Fs::Xfs(v) => {
+                let s = kokino_xfs::scan(v, r, progress)?;
                 Ok(FsScan { info: s.info, entries: s.entries, unreadable: vec![], notes: s.notes })
             }
             Fs::Iso(v) => {
@@ -165,6 +176,8 @@ impl Fs {
             Fs::Fat(v) => v.read(r, e, offset, len),
             Fs::Ext(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
             Fs::Ext(v) => v.read(r, e, offset, len),
+            Fs::Xfs(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
+            Fs::Xfs(v) => v.read(r, e, offset, len),
             Fs::Iso(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
             Fs::Iso(v) => v.read(r, e, offset, len),
             Fs::Udf(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
@@ -195,6 +208,8 @@ impl Fs {
             Fs::Fat(v) => Ok(v.extents(e)),
             Fs::Ext(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
             Fs::Ext(v) => v.extents(r, e),
+            Fs::Xfs(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
+            Fs::Xfs(v) => v.extents(r, e),
             Fs::Iso(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
             Fs::Iso(v) => Ok(v.extents(r, e)),
             Fs::Udf(_) if !stream.is_empty() => anyhow::bail!("no such stream"),
@@ -218,6 +233,7 @@ impl Fs {
             Fs::Ntfs(n) => kokino_ntfs::free_runs(n, r),
             Fs::Fat(v) => Ok(v.free_runs()),
             Fs::Ext(v) => Ok(v.free_runs(r)),
+            Fs::Xfs(v) => Ok(v.free_runs(r)),
             // A pressed or recorded disc has no free space to carve.
             Fs::Iso(_) | Fs::Udf(_) => Ok(vec![]),
             Fs::Hfs(v) => Ok(v.free_runs(r)),
