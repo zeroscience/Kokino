@@ -17,11 +17,13 @@
 //!   region. Only the first four bytes (the high half of the inode number)
 //!   are overwritten; the low half, the name and the file type stay until
 //!   the space is reused. In a short-form folder the entries after it move
-//!   down, so only the last one removed may be left past the end.
-//! - Inodes: XFS sets the mode, size and extent count to zero, but leaves
-//!   the extent records in the inode (what xfs_undelete relies on). The
-//!   size is lost: content runs to the end of the file's last block. The
-//!   inode change time is the time of deletion.
+//!   down; older kernels may leave the last one removed past the end.
+//! - Inodes: older kernels set the mode, size and extent count to zero but
+//!   leave the extent records in the inode (what xfs_undelete relies on);
+//!   the size is lost, so content runs to the end of the file's last block.
+//!   Recent kernels (6.19 checked) clear the whole freed inode, and the
+//!   leftovers of short-form folders. The inode change time is the time of
+//!   deletion.
 //! - Inodes no name points to are listed under $OrphanFiles.
 //!
 //! Times are UTC with nanoseconds, the creation time from version 5 on and
@@ -812,7 +814,7 @@ pub fn scan<R: Read + Seek>(v: &XfsVolume, r: &mut R, mut progress: impl FnMut(u
         ));
     }
     if w.no_content > 0 {
-        notes.push(format!("{} deleted file(s) have no recoverable content: their inode no longer holds extent records. File carving over free space may still find them.", w.no_content));
+        notes.push(format!("{} deleted file(s) have no recoverable content: their inode no longer holds extent records (recent kernels clear a freed inode). File carving over free space may still find them.", w.no_content));
     }
     if v.realtime {
         notes.push("This XFS volume has a realtime section on a separate device; files kept there cannot be read from this image.".into());

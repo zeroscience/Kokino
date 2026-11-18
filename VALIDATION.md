@@ -43,7 +43,7 @@ Run on Windows 10.
 | yarp test hives (dirty hives with their transaction logs, 1.3.0) | Hives after log replay against the hives Windows 10 and Windows 7 recovered | New format identical; old format identical apart from two fields Windows rewrites on load; damaged logs refused |
 | Digital Detective practice files: SOFTWARE and SYSTEM hives (1.2.9) | Deleted keys and values in the hives' free space | 181 deleted keys (176 with full paths) and 627 values without a key recovered: Windows Installer and servicing entries removed at setup, a removed shadow copy device |
 | Digital Detective practice files: Internet Explorer 9 index.dat files and the formatted E01 (1.2.9) | History, cache and downloads read live; records carved from free space against the live counts | All 16 files read; all 15 index.dat files and all 5,920 records recovered from the formatted volume, the same counts as live, after two fixes (below) |
-| dfvfs xfs.raw and xfs-bigtime.raw: XFS (1.8.0) | Paths, inode numbers, content and link target against dfvfs's tests | All match |
+| Five XFS images made by the Linux 6.19 kernel, and dfvfs xfs.raw and xfs-bigtime.raw (1.8.0) | Every file's inode, mode, size, times, SHA-256 and link target against the kernel's listing; dfvfs's tests | All 6,453 files on each kernel image match; deleted names in directory blocks all found; dfvfs all match |
 | Digital Corpora nps-2009-ntfs1, dfvfs vss.raw: the NTFS transaction log (1.7.0) | Creation and modified times the log holds against the published DFXML | Every time matches to the second |
 | AFF4 reference images and an FTK Imager AD1 image (1.6.1) | Image streams against their recorded hashes; files against their recorded MD5 | All match; the same device imaged three ways reads the same |
 | NIST CFReDS DFR, 61 images (FAT12/16/32, exFAT, NTFS) | Every deleted file Kokino lists, block by block, against the files' own tags; counts against NIST's layout | 3,048 of 3,323 deleted test files complete, 1,367,020 of 1,370,338 blocks right (99.8%); exFAT 100%, NTFS 100% of blocks; wrong content without a warning in 4 files |
@@ -473,9 +473,31 @@ Folders in directory blocks, extent B+trees, deleted names and freed
 inodes, inode numbers in a second allocation group and the free-space
 trees are checked on a volume built in the tests to the on-disk format
 (libfsxfs's documentation and the kernel's), including the way the kernel
-overwrites a removed entry. Images made by the kernel with all of these
-(`scripts/make-xfs-samples.sh`, with the kernel's own listing of every file
-before and after the deletions) are the next check.
+overwrites a removed entry.
+
+Then on five images made by the Linux 6.19 kernel (xfsprogs 6.19) with
+`scripts/make-xfs-samples.sh`: defaults (four allocation groups, reflink,
+reverse mapping, bigtime, 64-bit extent counts), 1 KiB blocks with 8 KiB
+directory blocks, 1 KiB inodes, and the same with other options. Each holds
+6,453 files and folders: short-form, block, leaf and node folders (6,000
+names in one), a file of 120 interleaved extents (an extent B+tree), a
+sparse and a preallocated file, an empty file, short and long symbolic
+links, a hard link, a name with accents, a time set back to 2001 and one
+set to 2100. The script lists every file with `stat` and `sha256sum` while
+the image is mounted.
+
+| Checked on each image | Result |
+|---|---|
+| Inode number, mode, size, modified, changed, accessed and born times (to 100 ns), SHA-256, link target | All 6,453 match on all five images |
+| Files Kokino lists that the kernel does not | None |
+| Names deleted from directory blocks (block and leaf folders) | All 5 found, at the right inode number |
+| Names deleted from short-form folders, and a deleted folder inside one | Not found: the kernel zeroes the leftovers |
+| Content of deleted files | Not recoverable from the inode: the 6.19 kernel zeroes a freed inode's extent records; the data blocks are free, for carving |
+
+The XFS log of these images still holds older copies of inodes with their
+extent records, as ext's journal does; reading deleted files' content from
+it is on the roadmap. Version 4 could not be checked on a kernel-made
+image: current kernels no longer mount it.
 
 ## NTFS transaction log (1.7.0)
 

@@ -76,7 +76,7 @@ Kokino version and what the file system or artifact is.
 - [x] Carving: PDFs with cross-reference streams and linearized PDFs in two pieces (1.6.2)
 - [x] Hash sets: HashKeeper and hashdeep (1.6.2)
 - [x] NTFS $LogFile in full: files created, deleted and renamed, timestamps before and after, sizes, streams, small files' content before and after (1.7.0)
-- [x] XFS: live and deleted files, every folder form, extent lists and B+trees (1.8.0); to be checked on more images made with `scripts/make-xfs-samples.sh`
+- [x] XFS: live and deleted files, every folder form, extent lists and B+trees, checked against images made by the Linux 6.19 kernel (1.8.0)
 - [x] `kokino plugin-test` and a guide for plugin authors (1.6.0)
 - [x] Dates day first (dd-mm-yyyy) in the GUI, reports and summaries; a website (1.5.0)
 - [x] Release SBOM (CycloneDX) and signed build provenance (1.3.1)
@@ -102,6 +102,7 @@ start or be trusted; most items are blocked on test data rather than code.
 - [ ] **SRUM on a real computer's database**: the app timeline, push, battery and energy tables are checked on databases written by Windows' own engine. Needs: a SRUM database copied from a real computer (admin rights and a shadow copy).
 
 ### 4. More formats
+- [ ] **XFS: deleted files' content from the log.** Recent kernels clear a freed inode; the XFS log still holds older copies of inodes with their extents (as ext's journal does). Needs: a log reader (record headers, split items, sector stamps); test images exist.
 - [ ] **ESXi snapshots from a real host**: VMFSSPARSE and SESPARSE are checked on images built to QEMU's reading of the formats. Needs: snapshots from an ESXi host.
 - [ ] **Written CDs and DVDs from real drives**: UDF sparable and virtual partitions are checked on images built from the specification. Needs: images of real CD-R, DVD-R and DVD-RW discs.
 - [ ] **macOS unified logs** (tracev3).

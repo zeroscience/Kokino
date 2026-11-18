@@ -1,5 +1,6 @@
 use super::*;
 use kokino_core::time::filetime_to_iso;
+use std::collections::HashMap;
 
 const BS: usize = 4096;
 const AGB: u64 = 1024;
@@ -392,4 +393,117 @@ fn write_fuzz_seed() {
     if val.is_dir() {
         std::fs::write(val.join("synthetic-v5.xfs"), build()).unwrap();
     }
+}
+
+/// Images made by the kernel with scripts/make-xfs-samples.sh, compared
+/// with the kernel's own listing of every file (inode, mode, size, times,
+/// SHA-256, link target), and the deleted files with the listing taken
+/// before they were deleted. Runs when the images are in
+/// target/validation/xfs-samples.
+#[test]
+fn kernel_made_images() {
+    use sha2::{Digest, Sha256};
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/validation/xfs-samples");
+    if !dir.is_dir() {
+        return;
+    }
+    let sha = |d: &[u8]| -> String { Sha256::digest(d).iter().map(|b| format!("{:02x}", b)).collect() };
+    // path -> (inode, mode, size, [mtime, ctime, atime, birth] as FILETIME, sha, link)
+    type Row = (u64, u32, u64, [u64; 4], String, Option<String>);
+    let parse = |p: &std::path::Path| -> HashMap<String, Row> {
+        let mut m = HashMap::new();
+        for line in std::fs::read_to_string(p).unwrap().lines() {
+            let (main, link) = match line.split_once(" -> ") {
+                Some((a, b)) => (a, Some(b.to_string())),
+                None => (line, None),
+            };
+            let f: Vec<&str> = main.rsplitn(12, ' ').collect();
+            let ft = |s: &str| {
+                let (a, b) = s.split_once('.').unwrap();
+                unix_ft(a.parse().unwrap(), b.parse().unwrap())
+            };
+            let path = f[11].trim_start_matches('.').to_string();
+            m.insert(path, (f[10].parse().unwrap(), u32::from_str_radix(f[9], 16).unwrap(), f[5].parse().unwrap(), [ft(f[4]), ft(f[3]), ft(f[2]), ft(f[1])], f[0].to_string(), link));
+        }
+        m
+    };
+    let mut names: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.ends_with(".img")).collect();
+    names.sort();
+    let mut problems = vec![];
+    for name in names {
+        let base = name.trim_end_matches(".img");
+        let after = parse(&dir.join(format!("{}.after.txt", base)));
+        let before = parse(&dir.join(format!("{}.before.txt", base)));
+        let mut f = std::fs::File::open(dir.join(&name)).unwrap();
+        let size = f.metadata().unwrap().len();
+        let v = open(&mut f, size).unwrap();
+        let s = scan(&v, &mut f, |_, _| true).unwrap();
+        let live: HashMap<&str, &FsEntry> = s.entries.iter().filter(|e| !e.deleted).map(|e| (e.path.as_str(), e)).collect();
+        let (mut ok, mut bad) = (0, 0);
+        for (path, (ino, mode, sz, times, want_sha, link)) in &after {
+            let Some(e) = live.get(path.as_str()) else {
+                problems.push(format!("{}: {} missing", base, path));
+                bad += 1;
+                continue;
+            };
+            let u = e.unix.as_ref().unwrap();
+            let t = e.si.unwrap();
+            let mut why = vec![];
+            if u.inode != *ino {
+                why.push(format!("inode {} not {}", u.inode, ino));
+            }
+            if u.mode != *mode {
+                why.push(format!("mode {:o} not {:o}", u.mode, mode));
+            }
+            if [t.modified, t.mft_modified, t.accessed, t.created] != *times {
+                why.push(format!("times {:?} not {:?}", [t.modified, t.mft_modified, t.accessed, t.created], times));
+            }
+            if mode & 0o170000 == 0o100000 {
+                if e.size != *sz {
+                    why.push(format!("size {} not {}", e.size, sz));
+                }
+                let d = v.read(&mut f, e, 0, e.size as usize).unwrap();
+                if sha(&d) != *want_sha {
+                    why.push("content differs".into());
+                }
+            }
+            if link.is_some() && u.link_target != *link {
+                why.push(format!("link {:?} not {:?}", u.link_target, link));
+            }
+            if why.is_empty() {
+                ok += 1;
+            } else {
+                bad += 1;
+                problems.push(format!("{}: {}: {}", base, path, why.join("; ")));
+            }
+        }
+        let extra: Vec<_> = live.keys().filter(|p| **p != "/" && !after.contains_key(**p) && !p.starts_with("$Orphan")).collect();
+        for p in &extra {
+            problems.push(format!("{}: {} listed but not in the image", base, p));
+        }
+        // Deleted: name found, and for files, content as it was.
+        let mut report = vec![];
+        let mut gone: Vec<_> = before.keys().filter(|p| !after.contains_key(*p)).collect();
+        gone.sort();
+        for p in gone {
+            let (_, mode, sz, _, want_sha, _) = &before[p];
+            let e = s.entries.iter().find(|e| e.deleted && &e.path == p);
+            let state = match e {
+                None => "name not found".to_string(),
+                Some(_) if mode & 0o170000 != 0o100000 => "folder found".to_string(),
+                Some(e) => {
+                    let d = v.read(&mut f, e, 0, (*sz as usize).min(e.size as usize)).unwrap();
+                    if d.len() as u64 == *sz && sha(&d) == *want_sha {
+                        "content matches".to_string()
+                    } else {
+                        format!("content differs ({} of {} bytes read, {:?})", d.len(), sz, e.error)
+                    }
+                }
+            };
+            report.push(format!("    {} -> {}", p, state));
+        }
+        let orphans: Vec<_> = s.entries.iter().filter(|e| e.orphan).map(|e| e.path.as_str()).collect();
+        eprintln!("{}: {} of {} live entries match, {} wrong, {} extra; orphans {:?}\n{}\n  notes: {:?}", base, ok, after.len(), bad, extra.len(), orphans, report.join("\n"), s.notes);
+    }
+    assert!(problems.is_empty(), "{}", problems.iter().take(40).cloned().collect::<Vec<_>>().join("\n"));
 }

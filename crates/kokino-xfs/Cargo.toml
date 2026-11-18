@@ -10,3 +10,6 @@ license.workspace = true
 kokino-core.workspace = true
 kokino-ntfs.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true
