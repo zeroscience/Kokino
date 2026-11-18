@@ -257,7 +257,19 @@ XFS (1.8.0):
 |---|---|---|--:|---|
 | `xfs` | XFS: superblock, free-space and inode B+trees of every allocation group, inodes (versions 1 to 3, bigtime, 64-bit extent counts), extent lists and extent B+trees, short-form and block folders and their free regions, freed inodes' extent records | 30 s, 1 min, 10 min | 2,708,418 | 1 (overflow) |
 
-In all: 971,095,608 inputs over 45 targets, and 45 distinct problems
+LZFSE (1.8.1):
+
+| Target | What it covers | Rounds | Inputs in all | Distinct problems found |
+|---|---|---|--:|---|
+| `lzfse` | LZFSE streams (version 1 and 2 blocks, packed frequency tables, FSE tables and backward bit streams, LZVN and stored blocks), alone and as decmpfs methods 11 and 12; seeds from Apple's reference encoder | 1 min, 30 s, 10 min | 2,335,967 | none |
+
+The XFS log reader (1.8.1), on seeds that carry a log:
+
+| Target | What it covers | Rounds | Inputs in all | Distinct problems found |
+|---|---|---|--:|---|
+| `xfs` | as above, plus the log: record headers and sector stamps, operations and continued regions, inode items (cores in either byte order, B+tree roots in memory form) and buffer items | 1 min, 10 min | 4,220,741 | none |
+
+In all: 977,652,316 inputs over 46 targets, and 45 distinct problems
 found by fuzzing, all fixed.
 
 ### What was found and fixed

@@ -54,6 +54,7 @@ pub const TARGETS: &[Target] = &[
     Target { name: "prefetch", run: prefetch, seeds: &["tests/fixtures/win/CMD.EXE-4A81B364.pf", "tests/fixtures/win/SDELETE64.EXE-1A2B3C4D.pf", "tests/fixtures/win/Windows_Prefetch_POWERSHELL.EXE-022A3C66.pf", "tests/fixtures/win/Windows_Prefetch_VERACRYPT.EXE-7E3A5C21.pf"] },
     Target { name: "jumplist", run: jumplist, seeds: &["tests/fixtures/win/Users_alice_AppData_Roaming_Microsoft_Windows_Recent_AutomaticDestinations_9b9cdc69c1c24e2b.automaticDestinations-ms", "tests/fixtures/win/Users_alice_AppData_Roaming_Microsoft_Windows_Recent_CustomDestinations_5d696d521de238c3.customDestinations-ms"] },
     Target { name: "xpress", run: xpress, seeds: &["crates/kokino-fuzz/seeds/xpress"] },
+    Target { name: "lzfse", run: lzfse, seeds: &["crates/kokino-fuzz/seeds/lzfse", "tests/fixtures/lzfse"] },
     Target { name: "lznt1", run: lznt1, seeds: &["tests/fixtures/win/lznt1-text.lznt", "tests/fixtures/win/lznt1-long.lznt", "tests/fixtures/win/lznt1-mixed.lznt"] },
     Target { name: "doc", run: doc, seeds: &["crates/kokino-fuzz/seeds/doc"] },
     Target { name: "photo", run: photo, seeds: &["crates/kokino-fuzz/seeds/photo"] },
@@ -645,6 +646,22 @@ fn xpress(d: &[u8]) {
 }
 
 /// NTFS compression units are 64 KiB.
+/// LZFSE streams, alone and as decmpfs methods 11 (in the attribute) and
+/// 12 (in the resource fork).
+fn lzfse(d: &[u8]) {
+    let _ = kokino_mac::lzfse::decode(d, 1 << 20);
+    let mut attr = b"fpmc   ".to_vec();
+    attr.extend_from_slice(&(1u64 << 20).to_le_bytes());
+    attr.extend_from_slice(d);
+    let _ = kokino_mac::decmpfs::decompress(&attr, None);
+    attr[4] = 12;
+    attr.truncate(16);
+    let mut rsrc = vec![8u8, 0, 0, 0];
+    rsrc.extend_from_slice(&(8 + d.len() as u32).to_le_bytes());
+    rsrc.extend_from_slice(d);
+    let _ = kokino_mac::decmpfs::decompress(&attr, Some(&rsrc));
+}
+
 fn lznt1(d: &[u8]) {
     let _ = kokino_ntfs::lznt1::decompress(d, 64 << 10);
     let _ = kokino_ntfs::lznt1::decompress(d, usize::MAX);

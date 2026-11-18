@@ -5,6 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.8.1] - 18-11-2026
+
+Deleted XFS files come back through the XFS log on recent kernels, and files macOS compressed with LZFSE are decoded.
+
+### Added
+- XFS deleted files through the log: the XFS log keeps older copies of inodes (with their extent lists or the entries of small folders) and of metadata blocks. Recent kernels clear a deleted file's inode, so Kokino now reads the log (record headers and their sector stamps, operations, regions running across records, inode and buffer items) and takes the newest copy that still held the file: its content comes back with its real size, folders deleted with their files are walked through their copies, names removed from small folders come back from older copies of the folder, and files mapped by an extent B+tree are followed through the B+tree blocks as the log last left them. Shown as "Recovered from the XFS log" with the copy's place in the image. On five images made by the Linux 6.19 kernel, every deleted file (9), folder (3) and name (12) comes back, each file to its SHA-256.
+- LZFSE, Apple's compression, decoded in safe Rust (decmpfs methods 11 and 12, on APFS and HFS+): files macOS stores compressed with it now show their real content, as zlib and LZVN files already did. All block kinds are read: LZFSE version 1 and 2, LZVN and stored blocks, streams of any number of blocks. Checked byte for byte against Apple's reference encoder (github.com/lzfse/lzfse) on text, binary, random, long-run and multi-block data, and as a Mac stores it (in the attribute, and as 64 KiB chunks in the resource fork); those streams are now test fixtures.
+- Fuzzed: the `xfs` target again with the log reader (4,220,741 inputs, nothing found); a new target, `lzfse` (2,335,967 inputs, nothing found); 978 million inputs in all.
+
 ## [1.8.0] - 17-11-2026
 
 XFS, the default file system of Red Hat Enterprise Linux and its derivatives, read like ext: live and deleted files, folders, owners, modes and times.

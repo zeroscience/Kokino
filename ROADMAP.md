@@ -76,6 +76,8 @@ Kokino version and what the file system or artifact is.
 - [x] Carving: PDFs with cross-reference streams and linearized PDFs in two pieces (1.6.2)
 - [x] Hash sets: HashKeeper and hashdeep (1.6.2)
 - [x] NTFS $LogFile in full: files created, deleted and renamed, timestamps before and after, sizes, streams, small files' content before and after (1.7.0)
+- [x] XFS deleted files through the log: content with its real size, deleted folders and names from older copies (1.8.1)
+- [x] LZFSE compression on APFS and HFS+, checked against Apple's reference encoder (1.8.1)
 - [x] XFS: live and deleted files, every folder form, extent lists and B+trees, checked against images made by the Linux 6.19 kernel (1.8.0)
 - [x] `kokino plugin-test` and a guide for plugin authors (1.6.0)
 - [x] Dates day first (dd-mm-yyyy) in the GUI, reports and summaries; a website (1.5.0)
@@ -93,7 +95,6 @@ start or be trusted; most items are blocked on test data rather than code.
 
 ### 2. Encrypted and compressed data
 - [ ] **APFS: FileVault, snapshots and free space.** Needs: an encrypted test image with a known password; the keybag format (documented by Apple and in libfsapfs).
-- [ ] **LZFSE** (APFS and HFS+ compression types 11 and 12). Needs: a small, fuzzed decoder; Apple's reference code is open source (BSD).
 - [ ] **BitLocker: TPM protectors** from a memory image, and Windows Vista volumes. Needs: a memory image and a Vista image.
 - [ ] **Encrypted Ex01 and AD1, bzip2 Ex01 chunks.** Needs: images encrypted with a known password (EnCase, FTK Imager).
 
@@ -102,7 +103,6 @@ start or be trusted; most items are blocked on test data rather than code.
 - [ ] **SRUM on a real computer's database**: the app timeline, push, battery and energy tables are checked on databases written by Windows' own engine. Needs: a SRUM database copied from a real computer (admin rights and a shadow copy).
 
 ### 4. More formats
-- [ ] **XFS: deleted files' content from the log.** Recent kernels clear a freed inode; the XFS log still holds older copies of inodes with their extents (as ext's journal does). Needs: a log reader (record headers, split items, sector stamps); test images exist.
 - [ ] **ESXi snapshots from a real host**: VMFSSPARSE and SESPARSE are checked on images built to QEMU's reading of the formats. Needs: snapshots from an ESXi host.
 - [ ] **Written CDs and DVDs from real drives**: UDF sparable and virtual partitions are checked on images built from the specification. Needs: images of real CD-R, DVD-R and DVD-RW discs.
 - [ ] **macOS unified logs** (tracev3).

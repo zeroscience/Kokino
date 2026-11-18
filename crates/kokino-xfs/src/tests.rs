@@ -129,6 +129,9 @@ fn build() -> Vec<u8> {
         put64(sb, 128, 128);
         put32(sb, 200, 0x18a);
         put32(sb, 216, 0x1 | 0x8);
+        // Internal log: 4 blocks at AG 0 block 44.
+        put64(sb, 48, fsb(0, 44));
+        put32(sb, 96, 4);
     }
     // AGF, AGI, free-space and inode B+tree leaves for both AGs.
     let free_ag: [Vec<(u64, u64)>; 2] = [vec![(31, 2), (40, 2), (100, 924)], vec![(200, 824)]];
@@ -202,6 +205,8 @@ fn build() -> Vec<u8> {
         p += dent(b, p, 8256, "far.txt", 1);
         let count = 9;
         let end = BS - 8 - count * 8;
+        // Removed: its inode is cleared, only the log still has it.
+        dent(b, p, 75, "logged.txt", 1);
         free(b, p, end - p);
         put32(b, BS - 8, count as u64);
     }
@@ -261,7 +266,82 @@ fn build() -> Vec<u8> {
     m.mk_inode(8256, 0o100644, FMT_EXTENTS, 12, 1, 1, false, T_MOD);
     m.extents(8256, &[pack(0, fsb(1, 20), 1)]);
     m.data(1, 20, b"far away AG\n");
+    // The cleared inode 75 and one log record holding an older copy of it,
+    // as a little-endian machine writes it.
+    {
+        let i = m.inode(75);
+        i[2..4].fill(0);
+        let text = b"logged, then deleted: from the log\n";
+        m.data(0, 42, text);
+        let log = log_record(75, text.len() as u64, fsb(0, 42));
+        let at = 44 * BS;
+        m.0[at..at + log.len()].copy_from_slice(&log);
+    }
     m.0
+}
+
+/// One log record: a transaction with an inode item (format, core in
+/// little-endian, one extent), sector-stamped as the kernel writes it.
+fn log_record(ino: u64, size: u64, block: u64) -> Vec<u8> {
+    let mut ops: Vec<u8> = vec![];
+    let mut nops = 0;
+    let mut op = |ops: &mut Vec<u8>, flags: u8, body: &[u8]| {
+        ops.extend_from_slice(&7u32.to_be_bytes());
+        ops.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        ops.extend_from_slice(&[0x69, flags, 0, 0]);
+        ops.extend_from_slice(body);
+        nops += 1;
+    };
+    op(&mut ops, 0x01, &[]);
+    let mut th = vec![];
+    for v in [0x5452_414Eu32, 1, 7, 1] {
+        th.extend_from_slice(&v.to_le_bytes());
+    }
+    op(&mut ops, 0, &th);
+    let mut ilf = vec![0u8; 56];
+    ilf[0..2].copy_from_slice(&0x123bu16.to_le_bytes());
+    ilf[2..4].copy_from_slice(&3u16.to_le_bytes());
+    ilf[4..8].copy_from_slice(&5u32.to_le_bytes());
+    ilf[10..12].copy_from_slice(&16u16.to_le_bytes());
+    ilf[16..24].copy_from_slice(&ino.to_le_bytes());
+    op(&mut ops, 0, &ilf);
+    let mut d = vec![0u8; 176];
+    d[0..2].copy_from_slice(&0x494eu16.to_le_bytes());
+    d[2..4].copy_from_slice(&0o100644u16.to_le_bytes());
+    d[4] = 3;
+    d[5] = 2;
+    d[8..12].copy_from_slice(&1000u32.to_le_bytes());
+    d[12..16].copy_from_slice(&1000u32.to_le_bytes());
+    d[16..20].copy_from_slice(&1u32.to_le_bytes());
+    for o in [32, 40, 48, 144] {
+        d[o..o + 4].copy_from_slice(&(T_MOD as u32).to_le_bytes());
+    }
+    d[56..64].copy_from_slice(&size.to_le_bytes());
+    d[64..72].copy_from_slice(&1u64.to_le_bytes());
+    d[76..80].copy_from_slice(&1u32.to_le_bytes());
+    d[83] = 2;
+    d[152..160].copy_from_slice(&ino.to_le_bytes());
+    op(&mut ops, 0, &d);
+    op(&mut ops, 0, &pack(0, block, 1));
+    op(&mut ops, 0x02, &[]);
+    // Header sector, then the data with each sector's first word stamped
+    // with the cycle (1) and kept in the header.
+    let sectors = ops.len().div_ceil(512);
+    ops.resize(sectors * 512, 0);
+    let mut h = vec![0u8; 512];
+    put32(&mut h, 0, 0xFEED_BABE);
+    put32(&mut h, 4, 1);
+    put32(&mut h, 8, 2);
+    put32(&mut h, 12, ops.len() as u64);
+    put64(&mut h, 16, 1 << 32);
+    put32(&mut h, 40, nops);
+    for k in 0..sectors {
+        h[44 + 4 * k..48 + 4 * k].copy_from_slice(&ops[k * 512..k * 512 + 4]);
+        put32(&mut ops, k * 512, 1);
+    }
+    put32(&mut h, 300, 1);
+    put32(&mut h, 320, 32768);
+    [h, ops].concat()
 }
 
 fn check_synth(img: Vec<u8>) {
@@ -304,7 +384,7 @@ fn check_synth(img: Vec<u8>) {
     assert!(read(&mut f, by("/gone2.txt")).starts_with(b"second deleted file\n"));
     // A name whose inode was never used: listed, no content.
     let x = by("/x.tmp");
-    assert!(x.deleted && x.size == 0 && x.unix.is_none());
+    assert!(x.deleted && x.size == 0 && x.unix.as_ref().is_none_or(|u| u.journal_seq.is_none()));
     // Short form: the removed entry left past the end.
     let old = by("/docs/old.txt");
     assert!(old.deleted);
@@ -316,6 +396,11 @@ fn check_synth(img: Vec<u8>) {
     assert_eq!(s.entries.iter().filter(|e| e.orphan).count(), 1, "{:?}", paths);
     assert_eq!(s.entries.iter().filter(|e| !e.deleted && !e.is_dir).count(), 5, "{:?}", paths);
     assert!(s.notes.iter().any(|n| n.starts_with("4 deleted file(s) were recovered")), "{:?}", s.notes);
+    // Cleared inode, older copy in the log: content with its real size.
+    let logged = by("/logged.txt");
+    assert!(logged.deleted && logged.unix.as_ref().unwrap().journal_seq.is_some(), "{:?}", logged);
+    assert_eq!(read(&mut f, logged), b"logged, then deleted: from the log\n");
+    assert!(s.notes.iter().any(|n| n.starts_with("1 deleted file(s) were recovered through older copies")), "{:?}", s.notes);
 
     // Free space from both AGs' trees; the deleted files' blocks are in it.
     let free = v.free_runs(&mut f);
@@ -500,6 +585,9 @@ fn kernel_made_images() {
                     }
                 }
             };
+            if state != "content matches" && state != "folder found" {
+                problems.push(format!("{}: deleted {}: {}", base, p, state));
+            }
             report.push(format!("    {} -> {}", p, state));
         }
         let orphans: Vec<_> = s.entries.iter().filter(|e| e.orphan).map(|e| e.path.as_str()).collect();
@@ -507,3 +595,4 @@ fn kernel_made_images() {
     }
     assert!(problems.is_empty(), "{}", problems.iter().take(40).cloned().collect::<Vec<_>>().join("\n"));
 }
+

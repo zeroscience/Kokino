@@ -1140,7 +1140,9 @@ async function fileDrawer(ctx, idx, startOffset) {
         r.orphan ? h("span.pill.warn", "Orphan") : null,
         r.is_dir ? h("span.pill", "Directory") : null,
         f.resident ? h("span.pill.info", ext ? "Stored in the inode" : "Resident in MFT") : null,
-        u && u.journal_seq != null ? h("span.pill.info", { title: "ext3/ext4 clear a deleted file's block map; this content was read through an older copy of its inode kept in the file-system journal" }, `Recovered from the journal (transaction ${u.journal_seq})`) : null,
+        u && u.journal_seq != null ? (/^xfs/i.test(f.fs)
+          ? h("span.pill.info", { title: "Recent kernels clear a deleted file's inode on XFS; this content was read through an older copy of its inode kept in the XFS log" }, `Recovered from the XFS log (record at log block ${u.journal_seq})`)
+          : h("span.pill.info", { title: "ext3/ext4 clear a deleted file's block map; this content was read through an older copy of its inode kept in the file-system journal" }, `Recovered from the journal (transaction ${u.journal_seq})`)) : null,
         nameOnly ? h("span.pill.warn", { title: "No MFT record holds this name any more. It was found in a folder index ($I30) or the NTFS log ($LogFile), with its $FILE_NAME times and size, but without content." }, `Name only, from ${nameOnly.source}`) : null,
         fat && r.deleted && !r.is_dir ? h("span.pill.warn", { title: "The FAT chain is cleared on delete, so the clusters after the first are assumed to follow it" }, "Recovered as contiguous") : null,
         f.attribute_names.map((a) => h("span.pill", a)),
@@ -1166,7 +1168,7 @@ async function fileDrawer(ctx, idx, startOffset) {
         fat ? null : [h("span", "Hard links"), h("span", f.hard_links)],
         ntfs ? [h("span", "USN"), h("span.mono", f.usn ?? "")] : null,
         f.record_image_offset != null ? [h("span", fat ? "Directory entry at" : ext ? "Inode at" : optical ? "Directory record at" : nameOnly ? (nameOnly.source === "$LogFile" ? "Log record at" : "Index entry at") : "MFT record at"), h("a.mono", { href: "#", onclick: (e) => { e.preventDefault(); jump(f.record_image_offset); } }, `image offset ${num(f.record_image_offset)} -> hex`)] : null,
-        u && u.journal_seq != null ? [h("span", "Inode copy in journal"), h("a.mono", { href: "#", onclick: (e) => { e.preventDefault(); jump(u.inode_image_offset); } }, `image offset ${num(u.inode_image_offset)} -> hex`)] : null,
+        u && u.journal_seq != null ? [h("span", /^xfs/i.test(f.fs) ? "Inode copy in log" : "Inode copy in journal"), h("a.mono", { href: "#", onclick: (e) => { e.preventDefault(); jump(u.inode_image_offset); } }, `image offset ${num(u.inode_image_offset)} -> hex`)] : null,
         f.data_image_offset != null ? [h("span", ext ? "First data block" : optical ? "First data sector" : "First data cluster"), h("a.mono", { href: "#", onclick: (e) => { e.preventDefault(); jump(f.data_image_offset); } }, `image offset ${num(f.data_image_offset)} -> hex`)] : null,
         f.error ? [h("span", "Parser note"), h("span", { style: { color: "var(--warn)" } }, f.error)] : null,
       )),

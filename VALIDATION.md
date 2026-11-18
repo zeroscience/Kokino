@@ -43,6 +43,7 @@ Run on Windows 10.
 | yarp test hives (dirty hives with their transaction logs, 1.3.0) | Hives after log replay against the hives Windows 10 and Windows 7 recovered | New format identical; old format identical apart from two fields Windows rewrites on load; damaged logs refused |
 | Digital Detective practice files: SOFTWARE and SYSTEM hives (1.2.9) | Deleted keys and values in the hives' free space | 181 deleted keys (176 with full paths) and 627 values without a key recovered: Windows Installer and servicing entries removed at setup, a removed shadow copy device |
 | Digital Detective practice files: Internet Explorer 9 index.dat files and the formatted E01 (1.2.9) | History, cache and downloads read live; records carved from free space against the live counts | All 16 files read; all 15 index.dat files and all 5,920 records recovered from the formatted volume, the same counts as live, after two fixes (below) |
+| Apple's LZFSE reference encoder: six streams and two decmpfs chunks (1.8.1) | Decoded content against the originals' SHA-256 | All match |
 | Five XFS images made by the Linux 6.19 kernel, and dfvfs xfs.raw and xfs-bigtime.raw (1.8.0) | Every file's inode, mode, size, times, SHA-256 and link target against the kernel's listing; dfvfs's tests | All 6,453 files on each kernel image match; deleted names in directory blocks all found; dfvfs all match |
 | Digital Corpora nps-2009-ntfs1, dfvfs vss.raw: the NTFS transaction log (1.7.0) | Creation and modified times the log holds against the published DFXML | Every time matches to the second |
 | AFF4 reference images and an FTK Imager AD1 image (1.6.1) | Image streams against their recorded hashes; files against their recorded MD5 | All match; the same device imaged three ways reads the same |
@@ -458,6 +459,23 @@ The unit tests build their own AFF4 containers (a map over a snappy stream
 with a stored chunk, a gap and a read error; a logical container) and AD1
 images, so CI checks the readers without these files.
 
+## LZFSE: Apple's reference encoder (1.8.1)
+
+Apple publishes the reference LZFSE code (github.com/lzfse/lzfse, BSD).
+Built with Visual Studio, its `lzfse -encode` compressed six generated
+files: text (200 KB), binary with repeats (300 KB), random bytes (20 KB),
+long runs (256 KB), a 1.2 MB file that becomes eight blocks, and a 1 KB
+file the encoder writes as an LZVN block. Every stream round-trips through
+the reference decoder, and Kokino decodes every one to the original's
+exact size and SHA-256. Two 64 KiB chunks of the text, compressed
+separately, are read as a Mac stores a large file (decmpfs method 12, an
+offset table in the resource fork), and a small file as method 11 (in the
+attribute). The streams are in `tests/fixtures/lzfse`.
+
+The first run found a wrong entry in the table that unpacks version 2
+block headers (two codes gave 4 and 5 where the reference gives 6 and 7);
+blocks built by hand had not used them. Fixed before release.
+
 ## XFS: dfvfs test images (1.8.0)
 
 The dfvfs project publishes two XFS images made with `mkfs.xfs` on Linux
@@ -491,12 +509,14 @@ the image is mounted.
 | Inode number, mode, size, modified, changed, accessed and born times (to 100 ns), SHA-256, link target | All 6,453 match on all five images |
 | Files Kokino lists that the kernel does not | None |
 | Names deleted from directory blocks (block and leaf folders) | All 5 found, at the right inode number |
-| Names deleted from short-form folders, and a deleted folder inside one | Not found: the kernel zeroes the leftovers |
-| Content of deleted files | Not recoverable from the inode: the 6.19 kernel zeroes a freed inode's extent records; the data blocks are free, for carving |
+| Names deleted from short-form folders, and a deleted folder inside one | All found, through older copies of the folders in the XFS log (the kernel zeroes the leftovers on disk) |
+| Content of deleted files (9: small, in block, leaf and short-form folders, inside a deleted folder, and a 480 KiB file of 20 extents in an extent B+tree) | All 9 match the SHA-256 they had before deletion, with their real size, through older copies of their inodes in the XFS log (the 6.19 kernel zeroes a freed inode on disk) |
 
-The XFS log of these images still holds older copies of inodes with their
-extent records, as ext's journal does; reading deleted files' content from
-it is on the roadmap. Version 4 could not be checked on a kernel-made
+The B+tree-mapped file needed both halves of the log: its inode copy holds
+only the root of the extent B+tree (logged in the kernel's in-memory form,
+converted as log recovery does), and its leaf block was freed with the file
+and never written back, so it is read as the log's buffer items last left
+it. Version 4 could not be checked on a kernel-made
 image: current kernels no longer mount it.
 
 ## NTFS transaction log (1.7.0)

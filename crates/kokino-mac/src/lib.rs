@@ -4,5 +4,6 @@
 #![forbid(unsafe_code)]
 
 pub mod decmpfs;
+pub mod lzfse;
 pub mod apfs;
 pub mod hfs;

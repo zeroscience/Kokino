@@ -5,8 +5,8 @@
 //! followed by the data when it is small, or by nothing when the data is in
 //! the resource fork (`com.apple.ResourceFork` on APFS) in 64 KiB chunks.
 //!
-//! Methods read: 3 and 4 (zlib), 7 and 8 (LZVN), 9 and 10 (stored).
-//! LZFSE (11, 12) and LZBITMAP (13, 14) are reported, not decoded yet.
+//! Methods read: 3 and 4 (zlib), 7 and 8 (LZVN), 9 and 10 (stored), 11 and
+//! 12 (LZFSE). LZBITMAP (13, 14) is reported, not decoded yet.
 
 use std::io::Read;
 
@@ -54,6 +54,7 @@ pub fn decompress(attr: &[u8], rsrc: Option<&[u8]>) -> anyhow::Result<Vec<u8>> {
     let mut out = match method {
         3 => block(inline, size, Codec::Zlib)?,
         7 => block(inline, size, Codec::Lzvn)?,
+        11 => block(inline, size, Codec::Lzfse)?,
         9 => inline.to_vec(),
         4 => {
             // Resource fork: 256-byte header, then the data: length (BE),
@@ -72,7 +73,7 @@ pub fn decompress(attr: &[u8], rsrc: Option<&[u8]>) -> anyhow::Result<Vec<u8>> {
             }
             out
         }
-        8 | 10 => {
+        8 | 10 | 12 => {
             // Resource fork: a table of little-endian offsets, one per chunk
             // plus the end.
             let r = rsrc.ok_or_else(|| anyhow::anyhow!("resource fork missing"))?;
@@ -83,7 +84,11 @@ pub fn decompress(attr: &[u8], rsrc: Option<&[u8]>) -> anyhow::Result<Vec<u8>> {
                 let (a, b) = (le32(r, 4 * i) as usize, le32(r, 4 * i + 4) as usize);
                 let d = r.get(a..b).ok_or_else(|| anyhow::anyhow!("compressed chunk {} outside the resource fork", i))?;
                 let want = CHUNK.min(size - out.len().min(size));
-                out.extend(if method == 8 { block(d, want, Codec::Lzvn)? } else { d.to_vec() });
+                out.extend(match method {
+                    8 => block(d, want, Codec::Lzvn)?,
+                    12 => block(d, want, Codec::Lzfse)?,
+                    _ => d.to_vec(),
+                });
                 if out.len() >= size {
                     break;
                 }
@@ -100,10 +105,12 @@ pub fn decompress(attr: &[u8], rsrc: Option<&[u8]>) -> anyhow::Result<Vec<u8>> {
 enum Codec {
     Zlib,
     Lzvn,
+    Lzfse,
 }
 
 /// One compressed block. A first byte of 0xFF (zlib) or 0x06 (LZVN) means
-/// the rest is stored as is.
+/// the rest is stored as is; an LZFSE block that is not a stream ("bvx")
+/// is taken the same way.
 fn block(d: &[u8], want: usize, c: Codec) -> anyhow::Result<Vec<u8>> {
     match (c, d.first()) {
         (Codec::Zlib, Some(0xFF)) | (Codec::Lzvn, Some(0x06)) => Ok(d[1..d.len().min(want + 1)].to_vec()),
@@ -113,6 +120,9 @@ fn block(d: &[u8], want: usize, c: Codec) -> anyhow::Result<Vec<u8>> {
             Ok(out)
         }
         (Codec::Lzvn, _) => lzvn(d, want),
+        (Codec::Lzfse, _) if d.starts_with(b"bvx") => crate::lzfse::decode(d, want),
+        (Codec::Lzfse, Some(0xFF | 0x06)) => Ok(d[1..d.len().min(want + 1)].to_vec()),
+        (Codec::Lzfse, _) => anyhow::bail!("LZFSE block does not start with a stream"),
     }
 }
 
@@ -177,5 +187,37 @@ mod tests {
         assert_eq!(lzvn(&src, 9).unwrap(), b"abcabcabc");
         assert!(lzvn(&[0x70], 4).is_err());
         assert!(lzvn(&[0x00, 0x05], 4).is_err()); // distance past the output
+    }
+
+    /// LZFSE as a Mac stores it: method 11 in the attribute, method 12 as
+    /// 64 KiB chunks in the resource fork (offset table, then the chunks),
+    /// each chunk made by Apple's reference encoder.
+    #[test]
+    fn lzfse_methods() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/lzfse");
+        let rd = |n: &str| std::fs::read(dir.join(n)).unwrap();
+        let text = crate::lzfse::decode(&rd("text.txt.lzfse"), usize::MAX).unwrap();
+        let attr = |m: u8, size: usize, inline: &[u8]| {
+            let mut a = b"fpmc".to_vec();
+            a.extend_from_slice(&[m, 0, 0, 0]);
+            a.extend_from_slice(&(size as u64).to_le_bytes());
+            a.extend_from_slice(inline);
+            a
+        };
+        let small = rd("small.txt.lzfse");
+        assert_eq!(decompress(&attr(11, 1000, &small), None).unwrap().len(), 1000);
+        let (c0, c1) = (rd("text-chunk0.lzfse"), rd("text-chunk1.lzfse"));
+        let size = 65536 + 65536 - 5000;
+        let mut rsrc = vec![];
+        for o in [12, 12 + c0.len(), 12 + c0.len() + c1.len()] {
+            rsrc.extend_from_slice(&(o as u32).to_le_bytes());
+        }
+        rsrc.extend_from_slice(&c0);
+        rsrc.extend_from_slice(&c1);
+        assert_eq!(decompress(&attr(12, size, &[]), Some(&rsrc)).unwrap(), text[..size]);
+        // A chunk stored as is: a marker byte, then the bytes.
+        let mut stored = vec![0x06];
+        stored.extend_from_slice(b"plain");
+        assert_eq!(decompress(&attr(11, 5, &stored), None).unwrap(), b"plain");
     }
 }

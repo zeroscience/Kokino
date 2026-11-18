@@ -32,6 +32,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod log;
+
 use kokino_ntfs::{Extent, FsEntry, NtfsVolumeInfo, Stream, Times, UnixMeta, ORPHAN_ROOT};
 use std::collections::{HashSet, VecDeque};
 use std::io::{Read, Seek, SeekFrom};
@@ -153,6 +155,10 @@ pub struct XfsVolume {
     /// Metadata inodes (quota files, realtime bitmap and summary): not orphans.
     meta_inodes: Vec<u64>,
     free: OnceLock<Vec<(u64, u64)>>,
+    /// The internal log: volume byte offset and length.
+    pub log_start: Option<u64>,
+    pub log_bytes: u64,
+    log: OnceLock<log::LogContents>,
     /// Last file mapped: (inode offset, its extents).
     map_cache: Mutex<Option<(u64, Vec<Extent>)>>,
 }
@@ -346,6 +352,13 @@ pub fn open<R: Read + Seek>(r: &mut R, size: u64) -> anyhow::Result<XfsVolume> {
         realtime: rblocks > 0,
         meta_inodes,
         free: OnceLock::new(),
+        log_start: {
+            let l = be64(&sb, 48);
+            let (ag, agbno) = (l >> agblklog, l & ((1 << agblklog) - 1));
+            (l != 0 && ag < agcount && agbno < agblocks).then(|| (ag * agblocks + agbno) * block)
+        },
+        log_bytes: be32(&sb, 96) * block,
+        log: OnceLock::new(),
         map_cache: Mutex::new(None),
     })
 }
@@ -405,7 +418,7 @@ impl XfsVolume {
     }
 
     /// Extent records of a B+tree-mapped fork whose root sits in `root`.
-    fn btree_records<R: Read + Seek>(&self, r: &mut R, root: &[u8]) -> Vec<(u64, u64, u64, bool)> {
+    fn btree_records<R: Read + Seek>(&self, r: &mut R, root: &[u8], logged: Option<u64>) -> Vec<(u64, u64, u64, bool)> {
         let level = be16(root, 0);
         let numrecs = be16(root, 2) as usize;
         let maxrecs = root.len().saturating_sub(4) / 16;
@@ -425,9 +438,19 @@ impl XfsVolume {
                 break;
             }
             let Some(at) = self.fsb_byte(fsb) else { continue };
-            let Ok(b) = rd(r, at, bs) else { continue };
+            let b = match logged {
+                Some(_) => self.logged_block(r, at, bs),
+                None => rd(r, at, bs),
+            };
+            let Ok(b) = b else { continue };
             if b.len() < bs || &b[0..4] != magic || be16(&b, 4) != want_level {
                 continue;
+            }
+            // Version 5 blocks name their inode: a reused block is not ours.
+            if let (Some(ino), 5) = (logged, self.version) {
+                if be64(&b, 56) != ino {
+                    continue;
+                }
             }
             let n = be16(&b, 6) as usize;
             let maxr = (bs - hdr) / 16;
@@ -450,6 +473,12 @@ impl XfsVolume {
 
     /// Where a live inode's bytes live, as volume extents.
     pub fn map<R: Read + Seek>(&self, r: &mut R, ino: &Inode, inode_off: u64) -> Vec<Extent> {
+        self.map_with(r, ino, inode_off, None)
+    }
+
+    /// `map`, for an inode copy from the log: B+tree blocks are read as the
+    /// log last left them, and must name inode `logged`.
+    fn map_with<R: Read + Seek>(&self, r: &mut R, ino: &Inode, inode_off: u64, logged: Option<u64>) -> Vec<Extent> {
         if ino.flags & DIFLAG_REALTIME != 0 {
             return vec![];
         }
@@ -461,7 +490,7 @@ impl XfsVolume {
                 self.to_extents((0..n).map(|i| unpack(&fork[i * 16..i * 16 + 16])).collect())
             }
             FMT_BTREE => {
-                let recs = self.btree_records(r, fork);
+                let recs = self.btree_records(r, fork, logged);
                 self.to_extents(recs)
             }
             _ => vec![],
@@ -512,6 +541,35 @@ impl XfsVolume {
         }
     }
 
+    /// Older copies of inodes in the internal log, oldest first (read once).
+    pub fn log_copies<R: Read + Seek>(&self, r: &mut R) -> &Vec<log::LogInode> {
+        &self.log_contents(r).inodes
+    }
+
+    fn log_contents<R: Read + Seek>(&self, r: &mut R) -> &log::LogContents {
+        self.log.get_or_init(|| log::contents(self, r).unwrap_or_default())
+    }
+
+    /// A block as the log last left it: the bytes on disk, with every piece
+    /// the log holds for it laid over them, oldest first. XFS does not
+    /// write a freed block back, so for a deleted file's extent B+tree the
+    /// log is newer than the disk.
+    fn logged_block<R: Read + Seek>(&self, r: &mut R, at: u64, len: usize) -> std::io::Result<Vec<u8>> {
+        let mut b = rd(r, at, len)?;
+        if let Some(list) = self.log_contents(r).blocks.get(&at) {
+            let mut list: Vec<_> = list.iter().collect();
+            list.sort_by_key(|x| x.0);
+            for (_, pieces) in list {
+                for (o, d) in pieces {
+                    if o + d.len() <= b.len() {
+                        b[*o..o + d.len()].copy_from_slice(d);
+                    }
+                }
+            }
+        }
+        Ok(b)
+    }
+
     /// The inode an entry's content is read through.
     fn content_inode<R: Read + Seek>(&self, r: &mut R, e: &FsEntry) -> anyhow::Result<(Inode, u64)> {
         let u = e.unix.as_ref().ok_or_else(|| anyhow::anyhow!("not an XFS entry"))?;
@@ -531,8 +589,22 @@ impl XfsVolume {
                 }
             }
         }
-        let (ino, off) = self.content_inode(r, e)?;
-        let x = if ino.live() { self.map(r, &ino, off) } else { self.deleted_map(&ino) };
+        let x = if u.journal_seq.is_some() {
+            // An older copy of the inode in the log, at this volume offset.
+            let copy = self.log_copies(r).iter().rev().find(|c| c.at == u.inode_offset).map(|c| c.raw.clone());
+            match copy.and_then(Inode::parse) {
+                Some(ino) if ino.format != FMT_LOCAL => self.map_with(r, &ino, u.inode_offset, Some(u.inode)),
+                _ => vec![],
+            }
+        } else {
+            let (ino, off) = self.content_inode(r, e)?;
+            if ino.live() {
+                self.map(r, &ino, off)
+            } else {
+                self.deleted_map(&ino)
+            }
+        };
+        let off = u.inode_offset;
         if let Ok(mut c) = self.map_cache.lock() {
             *c = Some((off, x.clone()));
         }
@@ -734,6 +806,11 @@ struct Walker<'a, R: Read + Seek> {
     recovered: u64,
     no_content: u64,
     reused: u64,
+    /// Older inode copies in the log, and by inode number (indexes, oldest first).
+    copies: &'a [log::LogInode],
+    by_ino: std::collections::HashMap<u64, Vec<usize>>,
+    from_log: u64,
+    log_names: u64,
 }
 
 /// A directory still to walk: (record, path, inode number, inode offset, deleted).
@@ -750,8 +827,13 @@ pub fn scan<R: Read + Seek>(v: &XfsVolume, r: &mut R, mut progress: impl FnMut(u
     }
     let mut named = HashSet::from([v.root_ino]);
     named.extend(v.meta_inodes.iter().copied());
-    let mut w = Walker { v, r, out: vec![], next: FIRST_RECORD, seen_dirs: HashSet::new(), named, recovered: 0, no_content: 0, reused: 0 };
-    let root = w.entry(ROOT_RECORD, ROOT_RECORD, "/".into(), ".".into(), v.root_ino, root_off, &root_ino, false, Some((root_ino.clone(), root_off)), 0, None);
+    let copies = v.log_copies(r);
+    let mut by_ino: std::collections::HashMap<u64, Vec<usize>> = std::collections::HashMap::new();
+    for (i, c) in copies.iter().enumerate() {
+        by_ino.entry(c.ino).or_default().push(i);
+    }
+    let mut w = Walker { v, r, out: vec![], next: FIRST_RECORD, seen_dirs: HashSet::new(), named, recovered: 0, no_content: 0, reused: 0, copies, by_ino, from_log: 0, log_names: 0 };
+    let root = w.entry(ROOT_RECORD, ROOT_RECORD, "/".into(), ".".into(), v.root_ino, root_off, &root_ino, false, Some((root_ino.clone(), root_off)), 0, None, None);
     w.out.push(root);
     let mut queue: VecDeque<DirWork> = VecDeque::from([(ROOT_RECORD, String::new(), v.root_ino, root_off, false)]);
     w.seen_dirs.insert(v.root_ino);
@@ -813,6 +895,12 @@ pub fn scan<R: Read + Seek>(v: &XfsVolume, r: &mut R, mut progress: impl FnMut(u
             w.recovered
         ));
     }
+    if w.from_log > 0 {
+        notes.push(format!("{} deleted file(s) were recovered through older copies of their inodes kept in the XFS log, with their real size.", w.from_log));
+    }
+    if w.log_names > 0 {
+        notes.push(format!("{} name(s) of deleted files and folders were found only in older copies of their folders kept in the XFS log.", w.log_names));
+    }
     if w.no_content > 0 {
         notes.push(format!("{} deleted file(s) have no recoverable content: their inode no longer holds extent records (recent kernels clear a freed inode). File carving over free space may still find them.", w.no_content));
     }
@@ -825,12 +913,16 @@ pub fn scan<R: Read + Seek>(v: &XfsVolume, r: &mut R, mut progress: impl FnMut(u
 
 impl<'a, R: Read + Seek> Walker<'a, R> {
     #[allow(clippy::too_many_arguments)]
-    fn entry(&mut self, record: u64, parent: u64, path: String, name: String, n: u64, off: u64, ino: &Inode, deleted: bool, content: Option<(Inode, u64)>, ftype: u8, error: Option<String>) -> FsEntry {
+    fn entry(&mut self, record: u64, parent: u64, path: String, name: String, n: u64, off: u64, ino: &Inode, deleted: bool, content: Option<(Inode, u64)>, ftype: u8, error: Option<String>, log_rec: Option<u32>) -> FsEntry {
+        // A cleared inode says nothing; a copy from the log does.
+        let logged = content.as_ref().filter(|c| log_rec.is_some() && c.0.live()).map(|c| c.0.clone());
+        let ino = logged.as_ref().unwrap_or(ino);
         let mode = if ino.mode != 0 { ino.mode } else { ftype_mode(ftype) };
         let is_dir = mode & S_IFMT == S_IFDIR;
         let (size, map, resident) = match &content {
+            Some((c, _)) if log_rec.is_some() && c.format == FMT_LOCAL => (0, vec![], false),
             Some((c, c_off)) if c.live() => {
-                let map = if is_dir { vec![] } else { self.v.map(self.r, c, *c_off) };
+                let map = if is_dir { vec![] } else { self.v.map_with(self.r, c, *c_off, log_rec.map(|_| n)) };
                 (if is_dir { 0 } else { c.size }, map, c.format == FMT_LOCAL)
             }
             Some((c, _)) => {
@@ -875,7 +967,7 @@ impl<'a, R: Read + Seek> Walker<'a, R> {
                 // A freed inode's change time is the time it was freed.
                 deleted_time: if ino.freed() { ino.times.mft_modified } else { 0 },
                 inode_offset: c_off,
-                journal_seq: None,
+                journal_seq: log_rec,
                 link_target,
             }),
         }
@@ -890,7 +982,7 @@ impl<'a, R: Read + Seek> Walker<'a, R> {
         // A deleted name kept only the low half of its inode number: taken
         // when the inode there was freed and (version 5) names itself.
         let ino = match (ino, deleted_name && !complete) {
-            (Some(i), true) if !(i.freed() && (i.version < 3 || i.number == n)) => None,
+            (Some(i), true) if !(i.mode == 0 && (i.version < 3 || i.number == n || i.number == 0)) => None,
             (i, _) => i,
         };
         let (Some(off), Some(ino)) = (off, ino) else {
@@ -902,7 +994,7 @@ impl<'a, R: Read + Seek> Walker<'a, R> {
             self.next += 1;
             let blank = Inode::parse([b"IN".as_slice(), &[0, 0, 3], &[0; 171]].concat()).expect("blank inode");
             let msg = "the folder entry no longer leads to its inode (the inode was reused, or the high half of its number was overwritten)".to_string();
-            let mut e = self.entry(rec, parent, path, name, n, 0, &blank, true, None, ftype, Some(msg));
+            let mut e = self.entry(rec, parent, path, name, n, 0, &blank, true, None, ftype, Some(msg), None);
             e.unix = None;
             e.si = None;
             self.out.push(e);
@@ -910,8 +1002,9 @@ impl<'a, R: Read + Seek> Walker<'a, R> {
         };
         let rec = self.next;
         let mut error = None;
+        let mut log_rec = None;
         let deleted = deleted_name || parent_deleted || !ino.live();
-        let content = if !deleted {
+        let mut content = if !deleted {
             Some((ino.clone(), off))
         } else if ino.live() {
             error = Some(format!("inode {} is in use again (the file was renamed, or the inode reused by another file); content not attributed to this name", n));
@@ -924,18 +1017,33 @@ impl<'a, R: Read + Seek> Walker<'a, R> {
         } else {
             None
         };
+        // The inode is cleared: an older copy in the log.
+        if content.is_none() && error.is_none() && !ino.live() {
+            if let Some((c, at, record)) = self.log_inode(n, ftype) {
+                if !c.is_dir() {
+                    self.from_log += 1;
+                    error = Some(format!("content read through an older copy of its inode kept in the XFS log (record at log block {})", record));
+                }
+                content = Some((c, at));
+                log_rec = Some(record);
+            }
+        }
         if deleted && content.is_none() && error.is_none() && ftype != 2 {
             self.no_content += 1;
         }
-        if deleted && content.as_ref().is_some_and(|c| !c.0.live()) && ftype != 2 {
+        if deleted && log_rec.is_none() && content.as_ref().is_some_and(|c| !c.0.live()) && ftype != 2 {
             error = Some("size not kept (XFS clears it on delete): content read to the end of the file's last block".into());
         }
         self.next += 1;
         self.named.insert(n);
-        let e = self.entry(rec, parent, path.clone(), name, n, off, &ino, deleted, content.clone(), ftype, error);
+        let deleted_time = self.deleted_time(n, &ino);
+        let mut e = self.entry(rec, parent, path.clone(), name, n, off, &ino, deleted, content.clone(), ftype, error, log_rec);
+        if let Some(u) = e.unix.as_mut() {
+            u.deleted_time = deleted_time;
+        }
         let is_dir = e.is_dir;
         self.out.push(e);
-        (is_dir && (content.is_some() || ino.freed()) && self.seen_dirs.insert(n)).then_some((rec, path, n, off, deleted))
+        (is_dir && (content.is_some() || ino.freed() || self.by_ino.contains_key(&n)) && self.seen_dirs.insert(n)).then_some((rec, path, n, off, deleted))
     }
 
     fn dir(&mut self, (rec, path, n, off, deleted): DirWork) -> Vec<DirWork> {
@@ -946,12 +1054,21 @@ impl<'a, R: Read + Seek> Walker<'a, R> {
         } else if ino.live() {
             let map = self.v.map(self.r, &ino, off);
             self.dir_blocks(&map, n, &mut found);
-        } else if ino.freed() {
-            // A deleted folder: its blocks, if the extents survived, else the
-            // short-form entries left in the inode (checked against the parent).
-            let map = self.v.deleted_map(&ino);
+        } else {
+            // A deleted folder: its blocks, if the extents survived or the log
+            // has them, else the short-form entries left in the inode
+            // (checked against the parent).
+            let mut map = self.v.deleted_map(&ino);
+            if map.is_empty() {
+                if let Some((c, at, _)) = self.log_inode(n, 2).filter(|c| c.0.format != FMT_LOCAL) {
+                    map = self.v.map_with(self.r, &c, at, Some(n));
+                }
+            }
             if !map.is_empty() {
                 self.dir_blocks(&map, n, &mut found);
+                for f in found.iter_mut() {
+                    f.3 = true;
+                }
             }
             if found.is_empty() {
                 let parent_rec = self.out.iter().find(|e| e.record == rec).map(|e| e.parent).unwrap_or(ROOT_RECORD);
@@ -961,6 +1078,14 @@ impl<'a, R: Read + Seek> Walker<'a, R> {
                 for f in found.iter_mut() {
                     f.3 = true;
                 }
+            }
+        }
+        // Names in older copies of this folder kept in the log (short form).
+        let known: HashSet<(String, u64)> = found.iter().map(|x| (x.0.clone(), x.1)).collect();
+        let mut from_log: HashSet<(String, u64)> = HashSet::new();
+        for f in self.log_names(n) {
+            if !known.contains(&(f.0.clone(), f.1)) && from_log.insert((f.0.clone(), f.1)) {
+                found.push(f);
             }
         }
         let live: HashSet<(String, u64)> = found.iter().filter(|x| !x.3).map(|x| (x.0.clone(), x.1)).collect();
@@ -976,14 +1101,80 @@ impl<'a, R: Read + Seek> Walker<'a, R> {
             if f.3 && (live.contains(&(f.0.clone(), f.1)) || (live_names.contains(&f.0) && !f.4) || !seen.insert((f.0.clone(), f.1))) {
                 continue;
             }
+            let logged = from_log.contains(&(f.0.clone(), f.1));
+            let before = self.out.len();
             if let Some(d) = self.name(rec, &path, f, deleted) {
                 sub.push(d);
+            }
+            if logged && self.out.len() > before {
+                self.log_names += 1;
+                let e = self.out.last_mut().unwrap();
+                let msg = "name found only in an older copy of the folder kept in the XFS log".to_string();
+                e.error = Some(match e.error.take() {
+                    Some(m) => format!("{}; {}", msg, m),
+                    None => msg,
+                });
             }
             if self.out.len() > MAX_ENTRIES {
                 break;
             }
         }
         sub
+    }
+
+    /// The newest copy of inode `n` in the log that still held the file:
+    /// in use, naming itself, of the type the folder entry gives, and for a
+    /// file, with a size and extents. Returns (inode, volume offset of the
+    /// copy, log block of its record).
+    fn log_inode(&self, n: u64, ftype: u8) -> Option<(Inode, u64, u32)> {
+        let want = ftype_mode(ftype);
+        for &i in self.by_ino.get(&n)?.iter().rev() {
+            let c = &self.copies[i];
+            let Some(ino) = Inode::parse(c.raw.clone()) else { continue };
+            if !ino.live() || (ino.version == 3 && ino.number != n) || (want != 0 && ino.kind() != want) {
+                continue;
+            }
+            let has_data = match ino.format {
+                FMT_EXTENTS => ino.nextents > 0,
+                FMT_BTREE => true,
+                FMT_LOCAL => ino.is_dir(),
+                _ => false,
+            };
+            if (ino.is_dir() || ino.size > 0) && has_data {
+                return Some((ino, c.at, c.record));
+            }
+        }
+        None
+    }
+
+    /// Every name the log's copies of short-form folder `n` held, marked deleted.
+    fn log_names(&self, n: u64) -> Vec<Found> {
+        let mut out = vec![];
+        let Some(list) = self.by_ino.get(&n) else { return out };
+        for &i in list {
+            let Some(ino) = Inode::parse(self.copies[i].raw.clone()) else { continue };
+            if ino.is_dir() && ino.format == FMT_LOCAL && (ino.version < 3 || ino.number == n) {
+                let mut f = vec![];
+                self.short_form(ino.fork(), ino.size as usize, None, &mut f);
+                out.extend(f.into_iter().filter(|x| x.1 != n && !x.3).map(|mut x| {
+                    x.3 = true;
+                    x
+                }));
+            }
+        }
+        out
+    }
+
+    /// When inode `n` was freed: its change time, or the newest log copy's
+    /// (the kernel logs the inode as it frees it).
+    fn deleted_time(&self, n: u64, ino: &Inode) -> u64 {
+        if ino.live() {
+            return 0;
+        }
+        if ino.freed() {
+            return ino.times.mft_modified;
+        }
+        self.by_ino.get(&n).and_then(|l| l.last()).and_then(|&i| Inode::parse(self.copies[i].raw.clone())).filter(|c| !c.live()).map(|c| c.times.mft_modified).unwrap_or(0)
     }
 
     /// A short-form folder: header (count, count of 8-byte numbers, parent),
@@ -1186,25 +1377,59 @@ impl<'a, R: Read + Seek> Walker<'a, R> {
                 k += take;
             }
         }
+        // Inodes now cleared whose older copies the log still holds.
+        let listed: HashSet<u64> = candidates.iter().map(|c| c.0).collect();
+        let mut logged: Vec<u64> = self.by_ino.keys().copied().filter(|n| !self.named.contains(n) && !listed.contains(n)).collect();
+        logged.sort_unstable();
+        let mut from_log: HashSet<u64> = HashSet::new();
+        for n in logged {
+            let Some(off) = v.inode_offset(n) else { continue };
+            if v.inode_at(self.r, off).is_ok_and(|i| i.live()) {
+                continue;
+            }
+            if let Some((c, _, _)) = self.log_inode(n, 0) {
+                candidates.push((n, off, c.is_dir()));
+                from_log.insert(n);
+            }
+        }
         // Directories first, lowest inode first (a parent is usually older).
         candidates.sort_by_key(|&(n, _, d)| (!d, n));
         for (n, off, _) in candidates {
             if self.named.contains(&n) {
                 continue;
             }
-            let Ok(ino) = v.inode_at(self.r, off) else { continue };
+            let ino = match v.inode_at(self.r, off) {
+                Ok(i) => i,
+                Err(_) => Inode::parse([b"IN".as_slice(), &[0, 0, 3], &[0; 171]].concat()).expect("blank inode"),
+            };
             let deleted = !ino.live();
-            if deleted && !ino.is_dir() {
-                self.recovered += 1;
-            }
+            let (content, error, log_rec) = match self.log_inode(n, 0).filter(|_| from_log.contains(&n)) {
+                Some((c, at, record)) => {
+                    if !c.is_dir() {
+                        self.from_log += 1;
+                    }
+                    let msg = format!("content read through an older copy of its inode kept in the XFS log (record at log block {})", record);
+                    (Some((c, at)), Some(msg), Some(record))
+                }
+                None => {
+                    if deleted && !ino.is_dir() {
+                        self.recovered += 1;
+                    }
+                    let error = deleted.then(|| "size not kept (XFS clears it on delete): content read to the end of the file's last block".to_string());
+                    (Some((ino.clone(), off)), error, None)
+                }
+            };
             let name = format!("inode-{}", n);
             let path = format!("{}/{}", ORPHAN_ROOT, name);
             let rec = self.next;
             self.next += 1;
             self.named.insert(n);
-            let error = deleted.then(|| "size not kept (XFS clears it on delete): content read to the end of the file's last block".to_string());
-            let mut e = self.entry(rec, ROOT_RECORD, path.clone(), name, n, off, &ino, deleted, Some((ino.clone(), off)), 0, error);
+            let deleted_time = self.deleted_time(n, &ino);
+            let mut e = self.entry(rec, ROOT_RECORD, path.clone(), name, n, off, &ino, deleted, content, 0, error, log_rec);
             e.orphan = true;
+            if let Some(u) = e.unix.as_mut() {
+                u.deleted_time = deleted_time;
+            }
             let walk = (e.is_dir && self.seen_dirs.insert(n)).then_some((rec, path, n, off, deleted));
             self.out.push(e);
             if let Some(d) = walk {
