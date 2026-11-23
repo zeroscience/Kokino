@@ -5,6 +5,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.8.2] - 23-11-2026
+
+A start-up banner in the colours of the Kokino painting.
+
+### Changed
+- `kokino serve` and `kokino version` open with a banner in the colours of the Kokino painting (ochre, gold and brown brush strokes, the sky-blue face and green eyes), in plain ASCII, with the website and the date and time it started, and the start-up lines' labels and addresses coloured. Shown only in a terminal: piped and redirected output stays plain, `NO_COLOR` turns the colours off, and terminals without 24-bit colour get the nearest of the 256 standard colours.
+
 ## [1.8.1] - 18-11-2026
 
 Deleted XFS files come back through the XFS log on recent kernels, and files macOS compressed with LZFSE are decoded.

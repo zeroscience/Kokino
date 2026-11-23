@@ -22,7 +22,7 @@
   <img src="https://img.shields.io/badge/rust-1.80%2B-orange?logo=rust&logoColor=white" alt="Rust 1.80+">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey" alt="Platforms: Windows, Linux, macOS">
   <img src="https://img.shields.io/badge/GUI-browser-1f6feb" alt="Browser GUI">
-  <img src="https://img.shields.io/badge/version-1.8.1-00bcd4" alt="Version 1.8.1">
+  <img src="https://img.shields.io/badge/version-1.8.2-00bcd4" alt="Version 1.8.2">
   <img src="https://img.shields.io/badge/evidence-read--only-2ea44f" alt="Evidence read-only">
   <img src="https://img.shields.io/badge/audit%20log-hash--chained-2ea44f" alt="Hash-chained audit log">
   <a href="SECURITY.md#fuzzing-the-parsers"><img src="https://img.shields.io/badge/parsers%20fuzzed-978M%20inputs-2ea44f" alt="Parsers fuzzed: 978 million inputs"></a>
@@ -70,7 +70,7 @@ Kokino Forensic Toolkit (Kokino FTK) is an open-source digital forensics workben
 
 Every finding links to the exact bytes it came from, every indicator of anti-forensic activity explains itself, and every examiner action lands in a hash-chained audit log, so the results hold up in a report and in court.
 
-> Status: 1.8.1 brings back deleted XFS files through the XFS log (recent kernels clear a deleted file's inode) and decodes LZFSE, the compression macOS uses most. 1.8 reads XFS, the default file system of Red Hat Enterprise Linux and its derivatives: live and deleted files, every folder form, extent lists and B+trees, and the Linux system summary on it. 1.7 brought the NTFS transaction log ($LogFile) in full; 1.6 Ex01, AFF4, AD1 and AFF4-L images, deleted Outlook messages from the PST's free space and more carving; 1.5 STIX and MISP watchlists, plugins, written CDs and DVDs and ESXi snapshots. Reads E01, Ex01, AFF4, raw and virtual disks, and NTFS, FAT, exFAT, ext2/3/4, XFS, HFS+, APFS, ISO 9660 and UDF; BitLocker, shadow copies, triage collections and logical images. Validated against NIST CFReDS, Digital Corpora, dfvfs and AFF4 reference images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed with 978 million inputs ([SECURITY.md](SECURITY.md)). See [What's next](#whats-next).
+> Status: 1.8.2 greets you in the console with a banner in the colours of the Kokino painting. 1.8.1 brings back deleted XFS files through the XFS log (recent kernels clear a deleted file's inode) and decodes LZFSE, the compression macOS uses most. 1.8 reads XFS, the default file system of Red Hat Enterprise Linux and its derivatives: live and deleted files, every folder form, extent lists and B+trees, and the Linux system summary on it. 1.7 brought the NTFS transaction log ($LogFile) in full; 1.6 Ex01, AFF4, AD1 and AFF4-L images, deleted Outlook messages from the PST's free space and more carving; 1.5 STIX and MISP watchlists, plugins, written CDs and DVDs and ESXi snapshots. Reads E01, Ex01, AFF4, raw and virtual disks, and NTFS, FAT, exFAT, ext2/3/4, XFS, HFS+, APFS, ISO 9660 and UDF; BitLocker, shadow copies, triage collections and logical images. Validated against NIST CFReDS, Digital Corpora, dfvfs and AFF4 reference images ([VALIDATION.md](VALIDATION.md)); parsers fuzzed with 978 million inputs ([SECURITY.md](SECURITY.md)). See [What's next](#whats-next).
 
 ## Features
 

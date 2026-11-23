@@ -25,3 +25,5 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 open.workspace = true
 rpassword.workspace = true
+# Colours of the start-up banner (already in the build through clap).
+anstream = "1"

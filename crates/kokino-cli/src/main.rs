@@ -3,6 +3,8 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+mod banner;
+
 #[derive(Parser)]
 #[command(name = "kokino", version, about = "Kokino Forensic Toolkit by Zero Science Lab")]
 struct Cli {
@@ -580,34 +582,38 @@ async fn main() -> anyhow::Result<()> {
                 _ => kokino_server::Tls::Off,
             };
             let running = kokino_server::start(kokino_server::ServerConfig { cases_root: cases.clone(), listen, port, tls, hostnames, plugins: plugins.clone() }).await?;
-            println!("Kokino Forensic Toolkit {} by Zero Science Lab", kokino_core::TOOL_VERSION);
-            println!("Cases: {}", cases.display());
+            if banner::wanted() {
+                banner::print(kokino_core::TOOL_VERSION);
+            } else {
+                println!("Kokino Forensic Toolkit {} by Zero Science Lab", kokino_core::TOOL_VERSION);
+            }
+            banner::line("Cases:", &cases.display().to_string());
             if let Some(p) = &plugins {
                 let (ok, bad) = kokino_analysis::plugins::load(p);
-                println!("Plugins: {} ({} loaded{})", p.display(), ok.len(), if bad.is_empty() { String::new() } else { format!("; not loaded: {}", bad.join("; ")) });
+                banner::line("Plugins:", &format!("{} ({} loaded{})", p.display(), ok.len(), if bad.is_empty() { String::new() } else { format!("; not loaded: {}", bad.join("; ")) }));
             }
-            println!("Open:  {}   (on this machine)", running.url);
+            banner::line("Open:", &format!("{}   (on this machine)", running.url));
             for u in &running.lan_urls {
-                println!("       {}   (from other machines)", u);
+                banner::line("", &format!("{}   (from other machines)", u));
             }
             for u in &running.name_urls {
-                println!("       {}   (needs DNS or a hosts entry for this name)", u);
+                banner::line("", &format!("{}   (needs DNS or a hosts entry for this name)", u));
             }
             if let Some(fp) = &running.fingerprint {
-                println!("TLS:   self-signed certificate, SHA-256 fingerprint");
-                println!("       {}", fp);
-                println!("       Compare it with what the browser shows before accepting the warning.");
+                banner::line("TLS:", "self-signed certificate, SHA-256 fingerprint");
+                banner::line("", fp);
+                banner::line("", "Compare it with what the browser shows before accepting the warning.");
             }
             if !listen.is_loopback() {
-                println!("LAN:   listening on {}; examiners need an account to sign in.", listen);
+                banner::line("LAN:", &format!("listening on {}; examiners need an account to sign in.", listen));
             }
             if let Some(setup) = &running.setup_url {
                 println!();
                 println!("No accounts yet. Create the first admin with this one-time link:");
-                println!("       {}", setup);
+                banner::line("", setup);
                 println!("(or run: kokino user add <name> --role admin)");
             }
-            println!("Press Ctrl+C to stop.");
+            banner::note("Press Ctrl+C to stop.");
             if !no_browser && listen.is_loopback() {
                 let _ = open::that(running.setup_url.as_ref().unwrap_or(&running.url));
             }
@@ -931,6 +937,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Cmd::Version { check } => {
+            banner::print(kokino_core::TOOL_VERSION);
             println!("{} {}", kokino_core::TOOL_NAME, kokino_core::TOOL_VERSION);
             if check {
                 println!("asking {} ...", kokino_server::update::RELEASES_API);
